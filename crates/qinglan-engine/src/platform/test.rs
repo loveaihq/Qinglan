@@ -1,6 +1,8 @@
 //! The test platform (L1 task 8): every glyph is a 1em square, ascent 0.8em, descent 0.2em (like the
 //! WPT "Ahem" font), so layout snapshots do not depend on the fonts installed on the machine.
 
+use std::rc::Rc;
+
 use super::{FontId, FontMetrics, FontQuery, Glyph, GlyphMask, Platform};
 use crate::textclass::{is_cjk_break, is_closing_punct, is_opening_punct, is_space_like};
 
@@ -87,13 +89,13 @@ impl Platform for TestPlatform {
         out
     }
 
-    fn glyph_mask(&self, _font: FontId, glyph: u32, size_px: f32, _subpixel: u8) -> Option<GlyphMask> {
+    fn glyph_mask(&self, _font: FontId, glyph: u32, size_px: f32, _subpixel: u8) -> Option<Rc<GlyphMask>> {
         let c = char::from_u32(glyph)?;
         if zero_width(c) || is_space_like(c) || c == '\u{00A0}' {
             return None;
         }
         let side = size_px.round().clamp(1.0, 512.0) as u32;
         let ascent = (Self::ASCENT * size_px).round() as i32;
-        Some(GlyphMask { left: 0, top: -ascent, width: side, height: side, alpha: vec![255; (side * side) as usize] })
+        Some(Rc::new(GlyphMask { left: 0, top: -ascent, width: side, height: side, alpha: vec![255; (side * side) as usize] }))
     }
 }

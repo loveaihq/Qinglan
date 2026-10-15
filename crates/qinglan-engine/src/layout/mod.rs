@@ -63,11 +63,15 @@ pub struct LayoutOptions {
     pub dpr: f32,
     /// Work units allowed for this page.
     pub work_budget: u64,
+    /// First-screen-first (L1 task 17): stop normal-flow layout once it reaches this y (CSS px, page
+    /// coordinates; the caller passes scroll position + viewport height + one screen). The result is
+    /// then [`LayoutResult::partial`]; run the layout again without it for the whole page.
+    pub stop_y: Option<f32>,
 }
 
 impl Default for LayoutOptions {
     fn default() -> Self {
-        LayoutOptions { viewport_w: 1280.0, viewport_h: 1000.0, dpr: 1.0, work_budget: DEFAULT_WORK_BUDGET }
+        LayoutOptions { viewport_w: 1280.0, viewport_h: 1000.0, dpr: 1.0, work_budget: DEFAULT_WORK_BUDGET, stop_y: None }
     }
 }
 
@@ -107,9 +111,10 @@ pub enum FragKind {
     /// A piece of text from one text box on one line: bytes `start..end` of `LayoutResult::texts[text]`,
     /// shaped into `LayoutResult::glyphs[glyphs.0..glyphs.1]` (advances include letter- and
     /// word-spacing and justification), with the decoration lines `LayoutResult::decorations[decor.0..decor.1]`.
-    Text { text: u32, start: u32, end: u32, glyphs: (u32, u32), decor: (u32, u32) },
+    /// `asc` is the distance from the top of the fragment (the content area) to the baseline.
+    Text { text: u32, start: u32, end: u32, glyphs: (u32, u32), decor: (u32, u32), asc: LayoutUnit },
     /// The text of an inside list marker (same fields as `Text`).
-    Marker { text: u32, start: u32, end: u32, glyphs: (u32, u32) },
+    Marker { text: u32, start: u32, end: u32, glyphs: (u32, u32), asc: LayoutUnit },
     /// The forced break itself (zero width).
     Br,
     /// An atomic inline (`inline-block`, image ...): its box is `box_id`, positioned in `LayoutResult::boxes`.
@@ -192,6 +197,9 @@ pub struct LayoutResult {
     pub incomplete: bool,
     /// Work units used.
     pub work: u64,
+    /// First-screen-first stopped the layout early (see [`LayoutOptions::stop_y`]): the page below the
+    /// stop line is missing and the page height is only what was laid out.
+    pub partial: bool,
 }
 
 impl LayoutResult {
@@ -282,6 +290,16 @@ pub(crate) struct Layouter<'a> {
     pub text_left: u64,
     /// Text was dropped because of the page's text allowance.
     pub truncated: bool,
+    /// First-screen-first: the page y (layout units) at which normal-flow layout stops, and whether it did.
+    pub stop_at: Option<LayoutUnit>,
+    pub stopped: bool,
+    /// Estimated page y of the border-box top of the block being laid out (a lower bound: margins that
+    /// collapse through it are not known yet). Only the stop line is decided with it.
+    pub origin_y: LayoutUnit,
+    /// Greater than 0 inside atomic inlines and out-of-flow boxes, which are always laid out whole.
+    pub no_stop: u32,
+    /// Blocks whose children were cut off by the stop line (their heights are not final).
+    pub cut: Vec<BoxId>,
 }
 
 impl Layouter<'_> {
@@ -292,6 +310,21 @@ impl Layouter<'_> {
             self.exhausted = true;
         }
         !self.exhausted
+    }
+
+    /// First-screen-first: should the content starting at estimated page y `y` be left out? Sets
+    /// `stopped` the first time it says yes; after that it says yes for everything.
+    pub(crate) fn past_stop(&mut self, y: LayoutUnit) -> bool {
+        if self.stopped {
+            return true;
+        }
+        match self.stop_at {
+            Some(s) if self.no_stop == 0 && y >= s => {
+                self.stopped = true;
+                true
+            }
+            _ => false,
+        }
     }
 }
 
@@ -336,15 +369,20 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
         depth: 0,
         text_left: (opts.work_budget / 2).min(MAX_SHAPED_CHARS),
         truncated: false,
+        stop_at: opts.stop_y.map(|y| LayoutUnit::from_f32(y.max(0.0))),
+        stopped: false,
+        origin_y: LayoutUnit::ZERO,
+        no_stop: 0,
+        cut: Vec::new(),
     };
     l.prefetch_text();
     l.layout_root();
-    let (boxes, lines, fragments, glyphs, texts, decorations, markers, oof, work, incomplete) =
-        (l.out, l.lines, l.fragments, l.glyphs, l.texts, l.decorations, l.markers, l.oof_list, l.work, l.exhausted || l.truncated);
+    let (boxes, lines, fragments, glyphs, texts, decorations, markers, oof, work, incomplete, partial) =
+        (l.out, l.lines, l.fragments, l.glyphs, l.texts, l.decorations, l.markers, l.oof_list, l.work, l.exhausted || l.truncated, l.stopped);
     let canvas = canvas_background(doc, &tree);
     let (below, above) = paint_order(&tree);
     let images = tree.images.clone();
-    LayoutResult { tree, boxes, lines, fragments, glyphs, texts, decorations, markers, oof, below, above, canvas, images, viewport, incomplete, work }
+    LayoutResult { tree, boxes, lines, fragments, glyphs, texts, decorations, markers, oof, below, above, canvas, images, viewport, incomplete, work, partial }
 }
 
 /// CSS2 14.2: the root element's background covers the canvas; when it has none (transparent), the

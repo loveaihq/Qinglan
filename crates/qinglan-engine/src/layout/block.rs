@@ -245,7 +245,16 @@ impl Layouter<'_> {
                 if self.exhausted {
                     break;
                 }
+                // First-screen-first: a child that would start at or below the stop line is left out, and
+                // so is everything after it. The estimate is the child's top without the margin it may still collapse with.
+                let est = self.origin_y + if at_top { content_top } else { cursor + strut.resolve() };
+                if self.past_stop(est) {
+                    self.cut.push(id);
+                    break;
+                }
+                let saved_origin = std::mem::replace(&mut self.origin_y, est);
                 let r = self.layout_block(cid, g.content_w, g.spec_h, Flow::default());
+                self.origin_y = saved_origin;
                 let y;
                 if r.through {
                     // Placed where it would be if it had a bottom border (8.3.1).
@@ -468,7 +477,7 @@ impl Layouter<'_> {
         self.texts.push(text);
         self.markers.push(Fragment {
             box_id: id,
-            kind: FragKind::Marker { text: tid, start: 0, end: len, glyphs: (gbase, self.glyphs.len() as u32) },
+            kind: FragKind::Marker { text: tid, start: 0, end: len, glyphs: (gbase, self.glyphs.len() as u32), asc: rf.asc },
             x: -width,
             y: baseline - rf.asc,
             w: width,

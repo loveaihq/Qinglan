@@ -60,6 +60,11 @@ impl Layouter<'_> {
                 self.pending.push(p);
             }
         }
+        // A containing block whose children were cut off by the stop line has no final size: its
+        // positioned descendants wait for the full layout (first-screen-first).
+        if cb.is_some_and(|c| self.cut.contains(&c)) {
+            return;
+        }
         for p in mine {
             self.layout_oof(p);
         }
@@ -80,7 +85,9 @@ impl Layouter<'_> {
             return;
         }
         self.depth += 1;
+        self.no_stop += 1;
         self.layout_oof_inner(p, inline_cb);
+        self.no_stop -= 1;
         self.depth -= 1;
     }
 

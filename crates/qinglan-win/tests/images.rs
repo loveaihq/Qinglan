@@ -163,3 +163,36 @@ fn decoding_runs_on_many_threads_and_the_cache_counts() {
     assert!(cache.bytes() <= 100 * 50 * 4 * 2 + 200 && cache.len() == 2, "{} bytes, {} entries", cache.bytes(), cache.len());
     assert!(cache.get("u1", 100, 50).is_none(), "least recently used went first");
 }
+
+/// `write_png` through WIC: a file that reads back (by our own decoder) with the pixels we wrote.
+#[test]
+fn png_writer_round_trips_pixels() {
+    let (w, h) = (70u32, 150u32); // more rows than one write chunk
+    let mut bgra = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            bgra.extend_from_slice(&[(x * 3) as u8, (y * 2) as u8, 200, 255]);
+        }
+    }
+    let path = std::env::temp_dir().join(format!("qinglan-png-test-{}.png", std::process::id()));
+    qinglan_win::write_png(&path, w, h, &bgra).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    let dec = WicDecoder;
+    assert_eq!(dec.probe(&bytes), Ok(ImageInfo { width: w, height: h }));
+    let img = dec.decode(&bytes, w, h).unwrap();
+    for (x, y) in [(0u32, 0u32), (69, 0), (0, 149), (35, 70), (69, 149)] {
+        let i = ((y * w + x) * 4) as usize;
+        assert_eq!(&img.bgra[i..i + 4], &[(x * 3) as u8, (y * 2) as u8, 200, 255], "pixel ({x},{y})");
+    }
+    // Translucent pixels are composed over white; bad sizes and paths are errors, not panics.
+    let path = std::env::temp_dir().join(format!("qinglan-png-test2-{}.png", std::process::id()));
+    qinglan_win::write_png(&path, 1, 1, &[0, 0, 128, 128]).unwrap();
+    let one = dec.decode(&std::fs::read(&path).unwrap(), 1, 1).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(&one.bgra[..4], &[127, 127, 255, 255]);
+    assert!(qinglan_win::write_png(&path, 0, 5, &[]).is_err());
+    assert!(qinglan_win::write_png(&path, 4, 4, &[0; 8]).is_err());
+    assert!(qinglan_win::write_png(std::path::Path::new("Z:/no/such/dir/x.png"), 1, 1, &[0; 4]).is_err());
+}

@@ -19,9 +19,17 @@
 //! An argument that starts with `http://` or `https://` is a page address, anything else a file. Style
 //! sheets and images are loaded the way the browser will (policy, size caps, Referer, WinHTTP).
 //!
+//! Step 1c-2a command:
+//!   qinglan-cli render <file|url> -o out.png [--width 1280] [--height 1000 | --full] [--dpr 1] [--scroll Y]
+//!                    [--replay <dir>] [--test-font] [--time] [--scroll-bench] [--no-prewarm]
+//!                    [--no-first-screen-first]
+//!                                                    paint the page with the engine's rasterizer into a PNG
+//!
 //! `style` and `layout` use the Windows platform (DirectWrite fonts, legacy encodings) unless
 //! `--test-font` asks for the test platform (every glyph a 1em square, no legacy encodings).
 #![forbid(unsafe_code)]
+
+mod render;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -74,7 +82,8 @@ fn count_notdef(res: &qinglan_engine::layout::LayoutResult) -> (usize, String) {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  qinglan-cli dom <file|url> [--replay <dir>]\n  qinglan-cli style <file|url> [--width W] [--height H] [--time] [--replay <dir>]\n  qinglan-cli layout <file|url> [--width W] [--height H] [--test-font] [--time] [--replay <dir>]\n  qinglan-cli record <url> <dir> [--width W] [--height H]"
+        "usage:\n  qinglan-cli dom <file|url> [--replay <dir>]\n  qinglan-cli style <file|url> [--width W] [--height H] [--time] [--replay <dir>]\n  qinglan-cli layout <file|url> [--width W] [--height H] [--test-font] [--time] [--replay <dir>]\n  qinglan-cli record <url> <dir> [--width W] [--height H]
+  qinglan-cli render <file|url> -o out.png [--width W] [--height H | --full] [--dpr D] [--scroll Y] [--replay <dir>] [--test-font] [--time] [--scroll-bench]"
     );
     ExitCode::from(2)
 }
@@ -89,13 +98,37 @@ struct Args {
     timing: bool,
     test_font: bool,
     replay: Option<PathBuf>,
+    /// `render`: the PNG to write, `--full` for the whole page, device pixel ratio, scroll position.
+    out_png: Option<PathBuf>,
+    full: bool,
+    dpr: f32,
+    scroll: f32,
+    scroll_bench: bool,
+    no_prewarm: bool,
+    no_stop: bool,
 }
 
 fn parse_args() -> Option<Args> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first()?.clone();
     let input = args.get(1)?.clone();
-    let mut a = Args { cmd, input, out_dir: None, width: 1280.0, height: 1000.0, timing: false, test_font: false, replay: None };
+    let mut a = Args {
+        cmd,
+        input,
+        out_dir: None,
+        width: 1280.0,
+        height: 1000.0,
+        timing: false,
+        test_font: false,
+        replay: None,
+        out_png: None,
+        full: false,
+        dpr: 1.0,
+        scroll: 0.0,
+        scroll_bench: false,
+        no_prewarm: false,
+        no_stop: false,
+    };
     let mut i = 2;
     if a.cmd == "record" {
         a.out_dir = Some(PathBuf::from(args.get(2)?));
@@ -115,6 +148,22 @@ fn parse_args() -> Option<Args> {
                 i += 1;
                 a.replay = Some(PathBuf::from(args.get(i)?));
             }
+            "-o" => {
+                i += 1;
+                a.out_png = Some(PathBuf::from(args.get(i)?));
+            }
+            "--dpr" => {
+                i += 1;
+                a.dpr = args.get(i)?.parse().ok().filter(|d: &f32| (0.25..=8.0).contains(d))?;
+            }
+            "--scroll" => {
+                i += 1;
+                a.scroll = args.get(i)?.parse().ok().filter(|s: &f32| s.is_finite() && *s >= 0.0)?;
+            }
+            "--full" => a.full = true,
+            "--scroll-bench" => a.scroll_bench = true,
+            "--no-prewarm" => a.no_prewarm = true,
+            "--no-first-screen-first" => a.no_stop = true,
             "--time" => a.timing = true,
             "--test-font" => a.test_font = true,
             _ => return None,
@@ -134,9 +183,18 @@ fn page_url(input: &str) -> Option<Url> {
 
 fn main() -> ExitCode {
     let Some(args) = parse_args() else { return usage() };
-    if !matches!(args.cmd.as_str(), "dom" | "style" | "layout" | "record") {
+    if !matches!(args.cmd.as_str(), "dom" | "style" | "layout" | "record" | "render") || (args.cmd == "render" && (args.out_png.is_none() || args.width < 1.0 || args.height < 1.0)) {
         return usage();
     }
+    // DirectWrite warms up on its own thread while the page loads (L1 task 17); `render` waits for it before
+    // the clock for "content ready -> first screen" starts, as the window will have it done by then.
+    let prewarm_started = Instant::now();
+    let prewarm = (args.cmd == "render" && !args.test_font && !args.no_prewarm).then(|| {
+        std::thread::spawn(|| {
+            let t = Instant::now();
+            (qinglan_win::prewarm(), t.elapsed())
+        })
+    });
     let Some(url) = page_url(&args.input) else {
         eprintln!("cannot open {}: not an http(s) address and not a file that exists", args.input);
         return ExitCode::FAILURE;
@@ -179,7 +237,21 @@ fn main() -> ExitCode {
     let mut loader = Loader::without_wake(transport);
 
     let test_font = args.test_font && args.cmd != "record";
+    // In the window the prewarm runs while the page is on its way; here the replay answers at once, so the
+    // prewarm is waited for before the platform is made, which is the same order as "prewarm done before content".
+    let warmed = prewarm.and_then(|h| h.join().ok());
+    let t_platform = Instant::now();
     let win = if test_font { None } else { WinPlatform::new() };
+    if args.timing && args.cmd == "render" {
+        eprintln!(
+            "prewarm {}; platform created in {:.1} ms",
+            match warmed {
+                Some((n, d)) => format!("opened {n} font faces in {:.1} ms (waited {:.1} ms)", d.as_secs_f64() * 1000.0, prewarm_started.elapsed().as_secs_f64() * 1000.0),
+                None => "off".into(),
+            },
+            t_platform.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     let platform: &dyn Platform = if test_font {
         &TestPlatform
     } else {
@@ -219,6 +291,31 @@ fn main() -> ExitCode {
             eprintln!("note: page too large, only the first part was parsed");
         }
         return ExitCode::SUCCESS;
+    }
+
+    if args.cmd == "render" {
+        let mut res = blocking::resources_for(&opened);
+        let sopts = StyleOptions { viewport_w: args.width, viewport_h: args.height, ..StyleOptions::default() };
+        res.start_sheets(&opened.doc, &mut loader, &sopts);
+        if !blocking::load_sheets(&mut loader, &mut res, platform, SHEET_TIMEOUT) {
+            eprintln!("warning: some style sheets did not arrive in {} s", SHEET_TIMEOUT.as_secs());
+        }
+        let t_content = t0.elapsed();
+        if args.timing {
+            eprintln!("content ready after {:.1} ms (page and style sheets, from the platform on)", t_content.as_secs_f64() * 1000.0);
+        }
+        let rargs = render::RenderArgs {
+            out: args.out_png.clone().unwrap_or_default(),
+            full: args.full,
+            dpr: args.dpr,
+            scroll: args.scroll,
+            width: args.width,
+            height: args.height,
+            timing: args.timing,
+            scroll_bench: args.scroll_bench,
+            first_screen_first: !args.no_stop,
+        };
+        return render::run(render::Ctx { opened: &mut opened, res: &mut res, loader: &mut loader, platform, win: win.as_ref() }, &rargs);
     }
 
     // Style sheets: fetch the linked ones (and what they import), then compute the styles.

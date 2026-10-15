@@ -693,6 +693,60 @@ pub fn break_between(prev: u8, next: u8) -> bool {
     after == 1 || after == 3 || before == 1 || before == 3
 }
 
+/// What [`warm`] keeps alive: the factory (with its system collection, fallback and analyzer) and the faces
+/// it opened, so that DirectWrite's shared caches stay filled for the platform created later.
+pub struct Warm {
+    _factory: Factory,
+    _faces: Vec<Face>,
+}
+
+// SAFETY: DirectWrite objects are free-threaded (the documentation of IDWriteFactory, IDWriteFontFace,
+// IDWriteFontCollection, IDWriteTextAnalyzer and IDWriteFontFallback says they may be used from any thread).
+// `Warm` is never used after it is built; it only holds the references so that the objects stay alive.
+unsafe impl Send for Warm {}
+// SAFETY: as for `Send`: shared references to a `Warm` give no access to its contents at all.
+unsafe impl Sync for Warm {}
+
+/// One font to open in [`warm`]: family name, weight, and the sample text that is shaped (and a glyph of it
+/// drawn) so that the shaping tables are read.
+pub struct WarmFont<'a> {
+    pub family: &'a str,
+    pub weight: u32,
+    pub sample: &'a str,
+    pub locale: &'a str,
+}
+
+/// Create the factory, the system collection, the fallback and the text analyzer, then open every font
+/// of `fonts` that is installed, shape its sample text and draw one of its glyphs. Returns the objects (keep
+/// them) and how many faces were opened. `None` when DirectWrite is not available.
+pub fn warm(fonts: &[WarmFont<'_>]) -> Option<(Warm, usize)> {
+    let f = Factory::new()?;
+    let mut faces = Vec::new();
+    for wf in fonts {
+        let Some(fi) = f.collection().find_family(wf.family) else { continue };
+        let Some(font) = f.collection().family(fi).and_then(|fam| fam.first_matching_font(wf.weight, 0)) else { continue };
+        let Some(face) = f.create_face(&font) else { continue };
+        let text: Vec<u16> = wf.sample.encode_utf16().collect();
+        let locale = to_wide_nul(wf.locale);
+        if let Some(&(start, len, sa)) = f.analyze_script(&text, &locale).first()
+            && let Some(run) = text.get(start as usize..(start + len) as usize)
+        {
+            let _ = f.shape(run, &face, 16.0, sa, &locale);
+        }
+        if let Some(c) = wf.sample.chars().find(|c| !c.is_whitespace())
+            && let Some(g) = face.glyph_indices(&[c as u32]).and_then(|v| v.first().copied())
+        {
+            let _ = f.rasterize(&face, g, 16.0, 0.0);
+        }
+        faces.push(face);
+    }
+    // The system fallback's first use loads its mapping tables (a Han character with the Chinese locale).
+    let han: Vec<u16> = "\u{4e2d}\u{6587}".encode_utf16().collect();
+    let _ = f.map_characters(&han, &to_wide_nul("zh-Hans"), &to_wide_nul("Segoe UI"), 400, 0);
+    let n = faces.len();
+    Some((Warm { _factory: f, _faces: faces }, n))
+}
+
 /// The DirectWrite objects the platform needs.
 pub struct Factory {
     factory: ComPtr<FactoryVtbl>,

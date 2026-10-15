@@ -22,11 +22,13 @@ pub struct WinHttpConfig {
     pub total_timeout: Duration,
     pub max_redirects: u32,
     pub user_agent: String,
+    /// The `Accept-Language` value; `None`: made from the system's display languages ([`accept_language`]).
+    pub accept_language: Option<String>,
 }
 
 impl Default for WinHttpConfig {
     fn default() -> Self {
-        WinHttpConfig { connect_timeout: Duration::from_secs(15), total_timeout: Duration::from_secs(60), max_redirects: 10, user_agent: USER_AGENT.to_string() }
+        WinHttpConfig { connect_timeout: Duration::from_secs(15), total_timeout: Duration::from_secs(60), max_redirects: 10, user_agent: USER_AGENT.to_string(), accept_language: None }
     }
 }
 
@@ -36,6 +38,26 @@ type Hop = (u16, Vec<(String, String)>, HttpRequest);
 pub struct WinHttpTransport {
     session: Session,
     cfg: WinHttpConfig,
+    accept_language: String,
+}
+
+/// `Accept-Language` for a list of display languages (L1 task 13): the first language with its base language
+/// at q=0.9, then English at q=0.8 unless it is already there. Chinese Windows sends
+/// `zh-CN,zh;q=0.9,en;q=0.8`, English Windows `en-US,en;q=0.9`; sites such as zh.wikipedia.org pick
+/// Simplified or Traditional Chinese from it.
+pub fn accept_language(tags: &[String]) -> String {
+    let first = tags.first().map(|t| t.trim()).filter(|t| !t.is_empty()).unwrap_or("en-US");
+    let base = first.split('-').next().unwrap_or(first);
+    let mut out = first.to_string();
+    if base != first {
+        out.push_str(&format!(",{base};q=0.9"));
+    }
+    if !base.eq_ignore_ascii_case("en") {
+        out.push_str(if base != first { ",en;q=0.8" } else { ",en;q=0.9" });
+    } else if base == first {
+        out.push_str(",en;q=0.9");
+    }
+    out
 }
 
 impl WinHttpTransport {
@@ -45,7 +67,8 @@ impl WinHttpTransport {
 
     pub fn with_config(cfg: WinHttpConfig) -> Result<WinHttpTransport, NetError> {
         let session = Session::open(&cfg.user_agent).map_err(|c| map_error(c, ""))?;
-        Ok(WinHttpTransport { session, cfg })
+        let accept_language = cfg.accept_language.clone().unwrap_or_else(|| accept_language(&crate::sys::user_ui_languages()));
+        Ok(WinHttpTransport { session, cfg, accept_language })
     }
 }
 
@@ -116,7 +139,11 @@ impl WinHttpTransport {
             return Err(NetError::Timeout);
         }
         let to = Timeouts { resolve_ms: ms(self.cfg.connect_timeout.min(left)), connect_ms: ms(self.cfg.connect_timeout.min(left)), send_ms: ms(left), receive_ms: ms(left) };
-        let http = self.session.get(&host, port, secure, &request_target(url), &req.headers, to).map_err(|c| {
+        let mut headers = req.headers.clone();
+        if !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("accept-language")) {
+            headers.push(("Accept-Language".to_string(), self.accept_language.clone()));
+        }
+        let http = self.session.get(&host, port, secure, &request_target(url), &headers, to).map_err(|c| {
             if Instant::now() >= deadline && c != 12007 { NetError::Timeout } else { map_error(c, &host) }
         })?;
         let status = http.status().map_err(|c| map_error(c, &host))?;
@@ -207,6 +234,17 @@ mod tests {
         assert!(matches!(map_error(12038, "h"), NetError::Tls(m) if m.contains("different site")));
         assert!(matches!(map_error(12029, "h"), NetError::Connect(_)));
         assert!(matches!(map_error(99999, "h"), NetError::Other(_)));
+    }
+
+    #[test]
+    fn accept_language_from_display_languages() {
+        let l = |s: &[&str]| accept_language(&s.iter().map(|t| t.to_string()).collect::<Vec<_>>());
+        assert_eq!(l(&["zh-CN", "en-US"]), "zh-CN,zh;q=0.9,en;q=0.8");
+        assert_eq!(l(&["zh-Hant-TW"]), "zh-Hant-TW,zh;q=0.9,en;q=0.8");
+        assert_eq!(l(&["en-US"]), "en-US,en;q=0.9");
+        assert_eq!(l(&["en"]), "en,en;q=0.9");
+        assert_eq!(l(&["ja"]), "ja,en;q=0.9");
+        assert_eq!(l(&[]), "en-US,en;q=0.9");
     }
 
     #[test]

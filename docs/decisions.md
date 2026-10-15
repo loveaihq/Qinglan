@@ -375,7 +375,7 @@
 ### Referer 和请求头
 
 - **Referer**（`policy::referer`，Referrer Policy `strict-origin-when-cross-origin`）：同源 → 页面完整地址（去掉用户名、密码、片段）；跨源 → 只有源（`https://example.com/`）；https 页面请求 http（降级）→ 不发；`file:`/`data:` 页面不发；完整地址超过 4096 字符改发源。"同源"按 `Url::origin()` 比（协议+主机+端口都得一样）。页面本身（用户输入的地址）不带 Referer。
-- 其他请求头：`Accept`（按类型：页面、样式表 `text/css,*/*;q=0.1`、图片列出常见格式）、`User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) qinglan/0.1`（任务单；常量 `net::USER_AGENT`，由传输设置）、`Accept-Encoding: gzip, deflate`（WinHTTP 开了解压就自动加）。**不发 `Accept-Language`**（任务单没写；发了就会泄露系统语言，网站按网址的语言版本也能工作）。不发 Cookie、也不处理 `Set-Cookie`（WinHTTP 的 `DISABLE_FEATURE` 关了 Cookie）。
+- 其他请求头：`Accept`（按类型：页面、样式表 `text/css,*/*;q=0.1`、图片列出常见格式）、`User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) qinglan/0.1`（任务单；常量 `net::USER_AGENT`，由传输设置）、`Accept-Encoding: gzip, deflate`（WinHTTP 开了解压就自动加）。**1c-1 时不发 `Accept-Language`**（任务单没写；发了就会泄露系统语言）。**1c-2a 改为发**，见 1c-2a 一节。不发 Cookie、也不处理 `Set-Cookie`（WinHTTP 的 `DISABLE_FEATURE` 关了 Cookie）。
 
 ### 响应缓存（给前进后退）
 
@@ -445,3 +445,68 @@
 - **图片恶意测试**：PNG 头声称 10 万×10 万 → `TooLarge`，不解码；截断的 PNG/GIF/BMP/JPEG、垃圾字节、假 WebP → 坏图；PNG 每个字节翻转一次（共 136 种）都不 panic。
 - **真实页面**：`qinglan-cli record https://zh.wikipedia.org/wiki/中华人民共和国 tests/corpus/local/zhwiki-rec`（URL 是 `tests/corpus/local/zhwiki/page.html` 里的 canonical 地址；目录 git 忽略）：**146 个响应，正文共 4 840 683 字节**（目录 147 个文件，含索引共约 5.2 MB），实际联网约 20 秒（debug 构建，含排版）。HTTP 200，样式表 26 张（含内联）0 失败，图片 183 个节点：179 个拿到尺寸，4 个是 SVG（坏图，显示 `alt`）。`qinglan-cli layout <同一网址> --replay tests/corpus/local/zhwiki-rec`：退出码 0，转储 31 417 行，缺字框 0，整个进程 1.6 秒（debug；其中打开 188 ms、样式 258 ms、排版 514 ms、图片 166 ms、第二遍排版 324 ms）；两次录制各回放一次，转储逐字节相同。回放时断网也一样（回放传输里没有别的传输）。
 - **证书**（联网抽查，不进测试）：`expired.badssl.com`、`self-signed.badssl.com`、`wrong.host.badssl.com` 都是 `NetError::Tls`（WinHTTP 12175），没有继续的办法。具体原因（过期/名字不对）WinHTTP 同步模式拿不到，只有 12175 这一个代码，所以错误页只能写"证书或 TLS 错误"；要给出具体原因得改用异步的 `WINHTTP_CALLBACK_STATUS_SECURE_FAILURE`，留作以后。
+
+## 第 1 层 · 1c-2a 绘制、`render`、先排第一屏、预热、`Accept-Language`
+
+代码：引擎 `paint/`（`mod.rs` 显示列表和空间索引、`build.rs` 生成、`raster.rs` 光栅、`images.rs` 懒加载和解码图片）；`layout/` 里加了"先排第一屏"（`LayoutOptions::stop_y`、`LayoutResult::partial`）和文字碎片的 `asc`；`platform::Platform::glyph_mask` 改成返回 `Rc<GlyphMask>`；`qinglan-win` 里 `sys/wic.rs`（PNG 编码，`write_png`）、`sys/dwrite.rs`（`warm`）、`prewarm()`、`Accept-Language`（`net::accept_language`、`ui_languages()`）；`qinglan-cli` 里 `render.rs`。测试：`crates/qinglan-engine/tests/paint.rs`（24 个）、`firstscreen.rs`（4 个）、`crates/qinglan-cli/tests/render.rs`（2 个）、win 里 `png_writer_round_trips_pixels`、`prewarm_opens_fonts_on_another_thread`、`accept_language_*`。
+
+### 显示列表（`paint/build.rs`，任务单第 16 节）
+
+- 列表和滚动位置、dpr、平台都无关：坐标是页面坐标（1/64 CSS 像素），每次排版建一份。内容：`Rect`（底色、边框的每一条边、装饰线）、`Image { node }`、`Text`（字形号、前进宽度、偏移、颜色、字号、起笔位置和基线）。每项带 `clip`（`DisplayList::clips` 的下标）。`fixed` 元素和里面的一切放进单独的 `fixed` 列表（视口坐标，滚动时不动）；`z-index < 0` 的 fixed 元素排在前面（`fixed_below`），画在正常流之前，其余画在最后。
+- **绘制顺序**：先 `LayoutResult::below`（z < 0 的定位盒），再从根开始按树序画正常流（背景、边框、外标记、行：行内盒的底色和边框、文字、装饰线、原子行内；然后子块），最后 `above`。定位盒（`position` 不是 static/sticky）和它们里面的东西不在正常流里画，而是在自己那一轮画，里面再嵌的定位盒也各按全局顺序画（完整层叠上下文是第 2 层）。没有按 CSS2 附录 E 那样"所有块背景先、行内内容后"，而是树序（只在负外边距重叠时有差别）。
+- **边框**：所有样式都画实线；每条边一个矩形，上下通长、左右夹在中间（不做斜角，相邻边颜色不同时转角归上下两条）；`none`/`hidden` 的宽度在计算值里已经是 0。行内盒的边框只在 `first`/`last` 那一行画对应的左/右边。装饰线都画成一条实线（`double`、`dotted`、`wavy` 不画特殊样子），画在文字之后。
+- **裁剪**（`overflow: hidden/clip`，`BoxOut::clip`）：padding 盒，多层取交集，存成矩形。定位盒从祖先继承的裁剪：`absolute` 只受包含块（最近的定位祖先）及其以上的裁剪，中间的静态祖先不裁它；`fixed` 不受裁剪；`relative` 受所有祖先。（CSS2 11.1.1。）
+- **替换盒**：图片画在内容盒（边框盒去掉边框和 padding；padding 百分比按父块边框盒宽近似）里，来源 `LayoutBox::image` 有值才出项目，位图有没有由光栅时问 `ImageSource`（没有就不画，坏图画空白，不画破图图标）；占位框（iframe 等）灰底 `#e0e0e0` 加左上角 4px 处的名字（用盒子自己的字体、灰字，裁在内容盒里）；复选框/单选框 13×13，`#767676` 1px 框、白底，有 `checked` 属性画深色内块（单选框也是方的）；`meter`/`progress`/`range`/`color` 画灰框灰底。
+- `visibility: hidden` 的盒子自己的背景、边框、文字不画，可见的子孙照画；画布背景的来源盒（`Canvas::from`）不再画自己的底色。
+- 页面高度：根盒底和所有（受裁剪限制的）项目底的最大值，封顶 2^22 px（防 `top: 1e9px`）。图片的位置（`ImageSpot`，给懒加载）和绘制位置（`ImagePlace`，给解码）也记在列表里。
+
+### 空间索引和光栅（`paint/mod.rs`、`paint/raster.rs`）
+
+- **索引**：页面按 256 px 切带，每个带里是和它相交的项目下标（升序）；横跨超过 8 个带的项目（整页背景）进 `tall` 表，每次查询都带上；查询把各带的下标合并、排序、去重，所以绘制顺序不变。滚动到 y=10000 的帧只碰 ≤ 12 个项目（`only_items_in_the_viewport_are_touched`：800 多个项目的页面）。
+- **光栅**：先铺画布色（半透明的叠在白上），再画 `fixed_below`、索引查出的项目、其余 fixed。设备坐标 = CSS 坐标 × dpr，**每条边单独四舍五入**（相接的盒子在设备像素上也相接，边框保持整数宽）；滚动位置取整到设备像素。文字：基线取整，水平位置量化到 1/4 像素（和平台字形缓存的档位一致），字号 = CSS 字号 × dpr；遮罩直接和文字色混合（sRGB 空间里线性混合，没做对比度/伽马调整，字会比 DirectWrite 自己画的略细，以后看效果再说）。图片：位图尺寸正好等于目标矩形时逐行拷贝（正常情况：按显示尺寸解码），否则双线性（8 位权重，边缘夹住）；预乘 BGRA 的 source-over。
+- 光栅不解码、不联网：位图由 `ImageSource::bitmap(node, 宽, 高)` 给，没有就跳过。`glyph_mask` 现在返回 `Rc<GlyphMask>`（和平台的 LRU 共用，画同一个字形两次不再复制遮罩）。
+
+### 图片懒加载和释放（`paint/images.rs`，任务单第 15 节）
+
+- 都是视口高度的倍数（"一屏"）：**请求**——普通图片离视口 ≤ 2 屏就请求，`loading="lazy"` 的 ≤ 1 屏（任务单没写"近"是多近，这是我定的：普通图片的"近"就是它本来不该被推迟的距离，懒加载的更紧）；`render --full`/`load_all` 全部请求。**解码**——离视口 ≤ 1 屏的图片按显示尺寸（设备像素）解码，光栅前做，光栅本身不解码。**释放**——离视口 > 4 屏的解码结果丢掉（`ImageStore::drop_far`），压缩字节留在加载器的响应缓存里，回到近处时再从缓存解码（`prepare`）；缓存里已经没有字节（被 16 MB LRU 挤掉、或 `no-store` 的响应根本没存）的，`prepare` 在 `missing` 里报出来，窗口重新请求。
+- `wanted_images(layout, list, band, load_all)`、`far_images(list, band)` 是纯函数，窗口每次排版和滚动后调；`PageResources::request_images` 本来就跳过已请求的节点，所以可以反复调。图片没有尺寸的排版里（0×0）它们都挤在页面上方，所以刚开始请求的比最终排版里"近"的多，已发出的请求不收回（Chrome 一样）。先排第一屏的结果里，停止线以下还没排的图片位置未知，一律算"远"，整页排完再算。
+- 解码缓存仍是 24 MB LRU；`ImageStore` 另记每个节点的解码键，按节点丢。解码失败的节点不再重试（`failed`）。
+
+### 先排第一屏（`layout/`，任务单第 17 节引擎部分）
+
+- 选项 `LayoutOptions::stop_y: Option<f32>`（CSS 像素，页面坐标；窗口传 滚动位置 + 视口高 + 一屏，也就是 `scroll + 2 × 视口高`；要跳到 `#片段`/恢复滚动位置就把 `scroll` 换成目标位置）。块的子盒循环里，排每个子块之前估计它的页面 y（父块的估计 y + 光标 + 待合并的外边距）；估计 ≥ 停止线就停，这个块和后面所有子块都不排，`LayoutResult::partial = true`。行内排版里同样按行（估计 y = 块的估计 y + 内容区顶 + 行顶）。估计值是真实位置的下界（子块的外边距还可能与父块合并而下移），所以停得略晚，不会早。
+- **保证和测试**（`tests/firstscreen.rs`）：对每个起点在停止线以上、且不在脱离文档流盒里的盒子，x、y、宽和完整排版一样；完全落在停止线以上的盒子，高、裁剪、每一行和每个碎片（x/y/宽/高/所属盒）、有没有标记都一样。跑了 `tests/pages/` 的 28 个页面 × 3 条停止线（1/4、1/2、3/4 页高）和 zhwiki-rec（1920×1080，停止线 2160），全部一致。
+- 取舍：被停止线切到的块（祖先链）高度不是最终值，它们里面的 `absolute`（包含块是这些块）的盒子**不排**，等整页；原子行内（`inline-block`、图片）和脱离文档流的盒子（`absolute`/`fixed`）总是排完整（`no_stop` 计数），因为排它们时位置还不知道。**已知的缺口**：`absolute`/`fixed` 盒子如果在文档里的位置在停止线之后（比如 `<body>` 末尾的悬浮条、回到顶部按钮），第一遍里没有它们——它们的占位还没排到，静态位置未知，包含块（初始包含块/视口）在上面也没用；整页排完再出现。要避免这个闪一下，得在第一遍扫一遍定位元素并把"`top`/`left` 都不是 auto"的先排掉，这需要知道占位所在的块的坐标，没做。
+- 文字预取：第一遍里只预取页面前面 `停止线 × 视口宽 / 60` 字节的文字（再加 4 KB），不是整页（整页的批量整形 ≈ 28 ms，冷）。预取只是提示，不改变结果。
+- 之后的整页排版就是不带 `stop_y` 再调一次 `layout_document_with`（整页重排）。
+
+### 预热（`qinglan-win` 的 `prewarm()`）
+
+- 建 DirectWrite 共享工厂、系统字体集合、回退、文字分析器；打开 Segoe UI、微软雅黑、宋体、Consolas、Times New Roman（常规、粗体各一，装了的才开），对每个字体整形一段样例（拉丁或中文）并画一个字形，再用 `MapCharacters` 走一次中文回退。建好的对象放进进程里的静态量（`OnceLock`，`Warm` 的 `Send`/`Sync` 在 `sys/dwrite.rs` 里用 `unsafe impl` 并写明 DirectWrite 对象是自由线程的），所以 DirectWrite 共享工厂里的缓存一直是热的；`WinPlatform` 之后新建（任何线程）直接用。返回打开的字体数（第二次调用返回 0）。不碰任何 `WinPlatform`，网页先到就先排，不等它。
+- **测量**（`render --time`，回放 zhwiki，预热在内容到之前跑完）：预热本身 4.5–7 ms（偶尔 13 ms）；`--no-prewarm` 对比：首屏中位数约 79–80 ms → 76 ms（省约 3 ms，3–4%）。比 1b 收尾时记的"首次读字体表约 18 ms"小得多：那时系统的字体文件缓存是冷的；现在每次新开进程，操作系统的文件缓存已经热了（量不到重启后第一次的情形）。所以预热在这台机器上收益很小，留着是因为开销也小（后台线程 5 ms）；重启后第一次打开的收益没有量到。
+
+### `Accept-Language`（任务单第 13 节，**取代** 1c-1 写的"不发"）
+
+- `WinHttpTransport` 每个请求带 `Accept-Language`，由 `GetUserPreferredUILanguages` 的第一个界面语言生成（取不到用用户区域名）：`zh-CN` → `zh-CN,zh;q=0.9,en;q=0.8`，`en-US` → `en-US,en;q=0.9`，`ja` → `ja,en;q=0.9`；请求自己已经带了这个头就不加；`WinHttpConfig::accept_language` 可以覆盖（测试用）。1c-1 写的理由"发了就泄露系统语言"仍然成立，但任务单明确要它（中文维基靠它选简体/繁体），以任务单为准。重放不涉及。
+
+### `qinglan-cli render`（任务单第 18 节）
+
+- `render <网址或文件> -o out.png [--width 1280] [--height 1000 | --full] [--dpr 1] [--scroll Y] [--replay 目录] [--test-font] [--time] [--scroll-bench] [--no-prewarm] [--no-first-screen-first]`。流程是窗口要走的：样式表到齐 →（`--time` 时先量首屏）→ 样式 → 排版 → 取近处的图片（`--full` 取全部）→ 有尺寸后重排（最多 4 轮，到没有变化为止）→ 解码近处的位图 → 光栅 → 用 WIC 写 PNG（24 位，半透明的叠在白上，分 64 行写入）。
+- `--full`：画面高 = 页面高，`fixed` 元素画在顶部（滚动位置 0）；总像素超过 3200 万（128 MB）就截断并提示。普通模式宽高×dpr 超过同样上限直接报错退出。`--scroll Y` 在普通模式有效。
+- `--time`：先量"内容到齐 → 首屏像素在缓冲区里"（样式 + 停止线排版 + 显示列表 + 光栅，没有图片，和窗口第一次画的一样），再做完整流程并打印各段；`--scroll-bench`：从头到尾每帧滚 100 px，每帧只量 `render_frame`（图片解码在帧之前，不计入），第 1 遍是每个字形第一次出现（平台遮罩缓存边走边填），第 2 遍是热的。
+- PNG 编码的 COM 声明手写在 `sys/wic.rs`：`IWICImagingFactory::CreateEncoder`（槽 8）、`IWICBitmapEncoder`（3 Initialize、10 CreateNewFrame、11 Commit）、`IWICBitmapFrameEncode`（3 Initialize、4 SetSize、6 SetPixelFormat、10 WritePixels、12 Commit），槽号对照 `wincodec.h`（SDK 10.0.26100.0）数过；输出用 `SHCreateStreamOnFileEx`。新增 `unsafe` 块全在 `sys/` 里（`wic.rs` 13 个、`dwrite.rs` 2 个 `unsafe impl`、`mod.rs` 2 个），都有 `SAFETY` 说明。
+
+### 验收数据（1c-2a，2026-10-15，release，插电 `BatteryStatus = 2`）
+
+- **环境**：插电（`BatteryStatus = 2`）；Intel i7-8850H；测量时另一个会话在编译/跑 qingpdf 的测试（`cargo`/`rustc` 进程在，总 CPU 10–15%），别的是 Chrome、Claude 桌面版、Malwarebytes。有一次 CPU 被另一个会话占满（100%），那几轮数字慢了一倍，已作废重量。回放 `tests/corpus/local/zhwiki-rec`（146 个响应），1920×1080，dpr 1。
+- **冷启动首屏**（每次新开进程，预热在内容到齐前跑完，先排第一屏开着；"内容到齐"= 页面和 `<head>` 里的样式表都到了、预热和平台已建好；"首屏像素在缓冲区里"= 样式 + 停止线以内的排版 + 显示列表 + 光栅，没有图片，不含贴到窗口）：5 次 82.2、82.4、82.7、85.0、86.3 ms，**中位数 82.7 ms**（目标 ≤ 200 ms 减去贴窗口的时间，余量很大）。分段（中位数附近）：样式 38 + 排版 40 + 显示列表 0.6 + 光栅 4.7。再往前一轮同样 5 次：80.3、85.9、79.2、88.6、78.3，中位数 80.3。
+  - 对比：关掉先排第一屏（`--no-first-screen-first`）：排版 118 ms、显示列表 5 ms，首屏 160–162 ms；所以先排第一屏省约 78 ms（排版 118 → 40）。关掉预热（`--no-prewarm`）：79–80 ms，对 76 ms，约 3 ms。限制预取之前（整页预取）首屏是 88 ms（排版 49 ms），限制后排版 38–40 ms。
+  - 整页：完整排版冷启动约 118 ms（同 1b 收尾的 134 ms 同量级），窗口在首屏画完后马上接着排；`render` 的"取图片 + 整页排版（2 轮）+ 显示列表"约 270–350 ms（含从回放取 183 个图片里近处的头和一次重排）。
+- **滚动光栅**（`--full --scroll-bench`，所有图片都取了，每帧滚 100 px，711 帧，只量 `render_frame`，不含图片解码）：dpr 1：中位数 **4.96 ms**、p95 **8.14 ms**、最大 14.8 ms（第 1 遍，字形第一次出现）；第 2 遍（热）4.49 / 5.70 ms。dpr 1.5：中位数 **10.16 ms**、p95 **14.27 ms**、最大 22.4 ms；热 9.50 / 11.60 ms。目标是中位数 ≤ 16 ms、p95 ≤ 33 ms，都达标；每帧约 370 个项目、2000 个字形。不带 `--full`（只取近处的图片）同样：dpr 1 为 4.4 / 6.7 ms，dpr 1.5 为 10.7 / 15.8 ms。
+- **测试**：`cargo test --workspace`：203 个测试全过（引擎单元 57 + 集成 91 [css 15、firstscreen 4、html5lib 2、排版 17、net 13、paint 24、perf 2、robustness 13、wpt_url 1]，cli 集成 2，win 单元 9 + 集成 44 [corpus 2、images 7、net 11、win 24]；1c-1 是 170 个）；`cargo clippy --workspace --all-targets` 无警告。新增：paint 24 个（矩形/边框/三种边框样式/裁剪/嵌套裁剪/文字/半透明文字/装饰线/dpr 1、1.5、2/图片 1:1 和双线性/半透明图片/fixed 滚动后/z 序/负 z 的 fixed/absolute 的裁剪规则/画布背景/hidden/标记和复选框/索引只碰视口内的项目/恶意数值/先排第一屏与整页首屏逐像素相同/懒加载/图片位置未定/解码和释放和重新解码和缺字节）、firstscreen 4 个、cli 2 个、win 3 个（PNG 往返、预热、`accept_language` 单元测试；`Accept-Language` 头的断言加在已有的 net 测试里）。
+
+### 没做 / 留给 1c-2b、1c-3
+
+- 窗口、把帧贴到窗口上、滚动时"平移旧画面、只画新露出的部分"（目前每帧都是整个视口重画，已经够快所以没做）、图片到达的重排节流和滚动锚定、`qinglan.exe --bench`、`qinglan-cli bench`。
+- 图片的 `object-fit`、破图图标、`alt` 文字（有尺寸的坏图画空白）、`<picture>`；单选框画成圆的；圆角、渐变、阴影（任务单"不做"）。
+- 开放问题：文字对比度（线性混合偏细）；先排第一屏的"末尾悬浮条"缺口（见上）；预热收益只在热缓存下量过。

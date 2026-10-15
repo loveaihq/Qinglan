@@ -157,6 +157,10 @@ fn plain_get_charset_headers_and_no_cookies() {
     assert_eq!(first.header("user-agent"), Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64) qinglan/0.1"));
     assert_eq!(first.header("referer"), Some("http://127.0.0.1/ref"));
     assert_eq!(first.header("accept"), Some("text/html"));
+    // The language header comes from the system's display languages.
+    let want = qinglan_win::accept_language(&qinglan_win::ui_languages());
+    assert_eq!(first.header("accept-language"), Some(want.as_str()));
+    assert!(want.contains(",en"), "{want}");
     let enc = first.header("accept-encoding").unwrap_or("").to_ascii_lowercase();
     assert!(enc.contains("gzip") && enc.contains("deflate"), "Accept-Encoding: {enc}");
     // HTTP error statuses come back as responses.

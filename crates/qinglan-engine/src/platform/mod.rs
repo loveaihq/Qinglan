@@ -15,6 +15,8 @@ pub mod test;
 pub use image::{DecodedCache, DecodedImage, ImageDecoder, ImageError, ImageInfo, NoImages, is_truncated};
 pub use test::TestPlatform;
 
+use std::rc::Rc;
+
 use crate::css::types::FontFamily;
 
 /// A font face chosen by the platform (family, weight and style already resolved, synthetic
@@ -122,7 +124,8 @@ pub trait Platform {
 
     /// Render one glyph as a coverage mask. `subpixel` (0..=3) is the horizontal position of the
     /// pen in quarter pixels. `None` for glyphs that draw nothing (spaces).
-    fn glyph_mask(&self, font: FontId, glyph: u32, size_px: f32, subpixel: u8) -> Option<GlyphMask>;
+    /// The mask is shared with the platform's cache, so drawing a glyph twice does not copy it.
+    fn glyph_mask(&self, font: FontId, glyph: u32, size_px: f32, subpixel: u8) -> Option<Rc<GlyphMask>>;
 }
 
 /// A platform with no legacy-encoding support and no fonts: only what the engine decodes itself
@@ -145,7 +148,7 @@ impl Platform for BasicPlatform {
     fn line_breaks(&self, _text: &str, _lang: Option<&str>) -> Vec<usize> {
         Vec::new()
     }
-    fn glyph_mask(&self, _font: FontId, _glyph: u32, _size_px: f32, _subpixel: u8) -> Option<GlyphMask> {
+    fn glyph_mask(&self, _font: FontId, _glyph: u32, _size_px: f32, _subpixel: u8) -> Option<Rc<GlyphMask>> {
         None
     }
 }

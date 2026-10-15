@@ -1130,14 +1130,14 @@ impl Platform for WinPlatform {
         out
     }
 
-    fn glyph_mask(&self, font: FontId, glyph: u32, size_px: f32, subpixel: u8) -> Option<GlyphMask> {
+    fn glyph_mask(&self, font: FontId, glyph: u32, size_px: f32, subpixel: u8) -> Option<Rc<GlyphMask>> {
         let sub = subpixel.min(3);
         let size = if size_px.is_finite() { size_px.clamp(0.01, 1024.0) } else { return None };
         let g = u16::try_from(glyph).ok()?;
         let key = (font.0, glyph, size.to_bits(), sub);
         let mut inn = self.inner.borrow_mut();
         if let Some(v) = inn.glyph_cache.get(&key) {
-            let r = v.as_ref().map(|m| (**m).clone());
+            let r = v.clone();
             inn.stats.glyph_hits += 1;
             return r;
         }
@@ -1151,8 +1151,8 @@ impl Platform for WinPlatform {
         match mask {
             Some(m) => {
                 let cost = m.alpha.len() + 64;
-                let out = m.clone();
-                inn.glyph_cache.insert(key, Some(Rc::new(m)), cost);
+                let out = Rc::new(m);
+                inn.glyph_cache.insert(key, Some(out.clone()), cost);
                 Some(out)
             }
             None => {

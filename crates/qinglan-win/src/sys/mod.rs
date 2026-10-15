@@ -25,6 +25,7 @@ pub struct Guid {
 unsafe extern "system" {
     fn MultiByteToWideChar(code_page: u32, flags: u32, src: *const u8, src_len: i32, dst: *mut u16, dst_len: i32) -> i32;
     fn GetUserDefaultLocaleName(buf: *mut u16, cch: i32) -> i32;
+    fn GetUserPreferredUILanguages(flags: u32, num: *mut u32, buf: *mut u16, len: *mut u32) -> BOOL;
     fn GetLastError() -> u32;
     fn IsDBCSLeadByteEx(code_page: u32, b: u8) -> BOOL;
 }
@@ -58,6 +59,30 @@ pub fn multi_byte_to_wide(code_page: u32, flags: u32, bytes: &[u8]) -> Result<Ve
 pub fn is_dbcs_lead_byte(code_page: u32, b: u8) -> bool {
     // SAFETY: plain value arguments.
     unsafe { IsDBCSLeadByteEx(code_page, b) != 0 }
+}
+
+/// `MUI_LANGUAGE_NAME`: language names ("zh-CN") instead of identifiers.
+const MUI_LANGUAGE_NAME: u32 = 0x8;
+
+/// The user's preferred display languages in order ("zh-CN", "en-US" ...); the user locale when Windows
+/// does not say.
+pub fn user_ui_languages() -> Vec<String> {
+    let (mut num, mut len) = (0u32, 0u32);
+    // SAFETY: a null buffer asks only for the size; `num` and `len` are valid out values.
+    let ok = unsafe { GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut num, core::ptr::null_mut(), &mut len) };
+    if ok != 0 && len > 0 && len <= 4096 {
+        let mut buf = vec![0u16; len as usize];
+        // SAFETY: `buf` holds `len` units, the size Windows just asked for; `num` and `len` are valid.
+        let ok = unsafe { GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut num, buf.as_mut_ptr(), &mut len) };
+        if ok != 0 {
+            // A double-NUL-terminated list of NUL-terminated names.
+            let langs: Vec<String> = buf.split(|&u| u == 0).filter(|s| !s.is_empty()).map(String::from_utf16_lossy).collect();
+            if !langs.is_empty() {
+                return langs;
+            }
+        }
+    }
+    vec![user_locale_name()]
 }
 
 /// The user's default locale name ("zh-CN", "en-US" ...), or "en-US" when Windows does not say.

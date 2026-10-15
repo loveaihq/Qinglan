@@ -809,6 +809,12 @@ impl Layouter<'_> {
         // Per style: the distinct non-ASCII characters in order of first appearance.
         let mut groups: Vec<PrefetchGroup<'_>> = Vec::new();
         let mut left = self.text_left;
+        if let Some(stop) = self.stop_at {
+            // First-screen-first: only the text that can be on the first screens is worth shaping in bulk now
+            // (about one byte per 60 px2 of the area down to the stop line); the rest is shaped when it is laid out.
+            let area = f64::from(stop.to_f32()) * f64::from(self.viewport.0.to_f32());
+            left = left.min((area / 60.0) as u64 + 4096);
+        }
         for b in &tree.boxes {
             if b.kind != BoxKind::Text || left == 0 {
                 continue;
@@ -1010,7 +1016,10 @@ impl Layouter<'_> {
         let m = |i: usize| bs.margin.get(i).and_then(|d| resolve_margin(d, cbw)).unwrap_or(LU::ZERO);
         let (mt, mr, mb, ml) = (m(0), m(1), m(2), m(3));
         let cw = if bx.kind == BoxKind::Replaced { self.replaced_size(id, cbw, None).0 } else { self.atomic_width(id, cbw) };
+        // Atomic inlines are laid out whole: their position is not known yet, so there is no stop line inside.
+        self.no_stop += 1;
         let r = self.layout_block(id, cbw, None, Flow { forced_w: Some(cw), ..Flow::default() });
+        self.no_stop -= 1;
         let o = self.out.get(id as usize).copied().unwrap_or_default();
         // CSS2 10.8.1: the baseline of an inline-block is that of its last line box, unless it is
         // clipped or has none; replaced elements sit on the bottom margin edge.
@@ -1037,7 +1046,10 @@ impl Layouter<'_> {
         self.depth -= 1;
         // Out-of-flow boxes whose containing block is a positioned inline element of this paragraph.
         for (p, rect) in inline_oof {
-            self.layout_oof_in_rect(p, rect);
+            // The containing block of a cut paragraph is not final (first-screen-first).
+            if !self.cut.contains(&block) {
+                self.layout_oof_in_rect(p, rect);
+            }
         }
         h
     }
@@ -1098,6 +1110,10 @@ impl Layouter<'_> {
                 s += 1;
             }
             if s >= n || self.exhausted {
+                break;
+            }
+            if self.past_stop(self.origin_y + top + y) {
+                self.cut.push(block);
                 break;
             }
             let line_indent = if emitted == 0 { indent } else { LU::ZERO };
@@ -1452,13 +1468,13 @@ impl Layouter<'_> {
                         let tid = text_base + g.item;
                         let glyphs = (ua.glyphs.0, ub.glyphs.1);
                         let kind = if it.marker {
-                            FragKind::Marker { text: tid, start: ua.start, end: ub.end, glyphs }
+                            FragKind::Marker { text: tid, start: ua.start, end: ub.end, glyphs, asc: rf.asc }
                         } else {
                             let d0 = self.decorations.len() as u32;
                             for sp in &it.decor {
                                 self.push_decoration(sp, &rf, fx, baseline_y, g.w);
                             }
-                            FragKind::Text { text: tid, start: ua.start, end: ub.end, glyphs, decor: (d0, self.decorations.len() as u32) }
+                            FragKind::Text { text: tid, start: ua.start, end: ub.end, glyphs, decor: (d0, self.decorations.len() as u32), asc: rf.asc }
                         };
                         self.fragments.push(Fragment { box_id: it.box_id, kind, x: fx, y: baseline_y - rf.asc, w: g.w, h: rf.asc + rf.desc });
                     }

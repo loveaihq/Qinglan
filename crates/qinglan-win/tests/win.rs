@@ -491,3 +491,16 @@ fn bulk_word_shaping_matches_single() {
         assert_eq!(bulk.cache_stats().word_misses, 0, "every word came from the bulk call");
     }
 }
+
+/// The prewarm opens the common fonts on a background thread and leaves a working platform behind it.
+#[test]
+fn prewarm_opens_fonts_on_another_thread() {
+    let n = std::thread::spawn(qinglan_win::prewarm).join().unwrap();
+    assert!(n >= 6, "only {n} font faces opened (Segoe UI, Consolas and Times New Roman, regular and bold, are always there)");
+    // A second call has nothing left to do.
+    assert_eq!(qinglan_win::prewarm(), 0);
+    // A platform made afterwards works as before.
+    let p = plat();
+    let g = p.shape("Hello \u{4e2d}\u{6587}", &q(&sans(), Some("zh-Hans")), 16.0);
+    assert!(g.iter().all(|g| g.glyph != 0));
+}
