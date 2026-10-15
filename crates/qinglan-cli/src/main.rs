@@ -19,6 +19,11 @@
 //! An argument that starts with `http://` or `https://` is a page address, anything else a file. Style
 //! sheets and images are loaded the way the browser will (policy, size caps, Referer, WinHTTP).
 //!
+//! Step 1c-2b command:
+//!   qinglan-cli bench <url> --replay <dir> [--width W] [--height H] [--dpr D]
+//!                                                    the phase timings and memory of the window's --bench, without
+//!                                                    a window (for regression tests)
+//!
 //! Step 1c-2a command:
 //!   qinglan-cli render <file|url> -o out.png [--width 1280] [--height 1000 | --full] [--dpr 1] [--scroll Y]
 //!                    [--replay <dir>] [--test-font] [--time] [--scroll-bench] [--no-prewarm]
@@ -29,6 +34,7 @@
 //! `--test-font` asks for the test platform (every glyph a 1em square, no legacy encodings).
 #![forbid(unsafe_code)]
 
+mod bench;
 mod render;
 
 use std::path::PathBuf;
@@ -83,7 +89,8 @@ fn count_notdef(res: &qinglan_engine::layout::LayoutResult) -> (usize, String) {
 fn usage() -> ExitCode {
     eprintln!(
         "usage:\n  qinglan-cli dom <file|url> [--replay <dir>]\n  qinglan-cli style <file|url> [--width W] [--height H] [--time] [--replay <dir>]\n  qinglan-cli layout <file|url> [--width W] [--height H] [--test-font] [--time] [--replay <dir>]\n  qinglan-cli record <url> <dir> [--width W] [--height H]
-  qinglan-cli render <file|url> -o out.png [--width W] [--height H | --full] [--dpr D] [--scroll Y] [--replay <dir>] [--test-font] [--time] [--scroll-bench]"
+  qinglan-cli render <file|url> -o out.png [--width W] [--height H | --full] [--dpr D] [--scroll Y] [--replay <dir>] [--test-font] [--time] [--scroll-bench]
+  qinglan-cli bench <url> --replay <dir> [--width W] [--height H] [--dpr D]"
     );
     ExitCode::from(2)
 }
@@ -183,13 +190,13 @@ fn page_url(input: &str) -> Option<Url> {
 
 fn main() -> ExitCode {
     let Some(args) = parse_args() else { return usage() };
-    if !matches!(args.cmd.as_str(), "dom" | "style" | "layout" | "record" | "render") || (args.cmd == "render" && (args.out_png.is_none() || args.width < 1.0 || args.height < 1.0)) {
+    if !matches!(args.cmd.as_str(), "dom" | "style" | "layout" | "record" | "render" | "bench") || (args.cmd == "bench" && args.replay.is_none()) || (args.cmd == "render" && (args.out_png.is_none() || args.width < 1.0 || args.height < 1.0)) {
         return usage();
     }
     // DirectWrite warms up on its own thread while the page loads (L1 task 17); `render` waits for it before
     // the clock for "content ready -> first screen" starts, as the window will have it done by then.
     let prewarm_started = Instant::now();
-    let prewarm = (args.cmd == "render" && !args.test_font && !args.no_prewarm).then(|| {
+    let prewarm = (matches!(args.cmd.as_str(), "render" | "bench") && !args.test_font && !args.no_prewarm).then(|| {
         std::thread::spawn(|| {
             let t = Instant::now();
             (qinglan_win::prewarm(), t.elapsed())
@@ -265,6 +272,10 @@ fn main() -> ExitCode {
         }
     };
 
+    if args.cmd == "bench" {
+        let cx = bench::Ctx { loader: &mut loader, platform, win: win.as_ref() };
+        return bench::run(cx, &url, &bench::BenchArgs { width: args.width, height: args.height, dpr: args.dpr });
+    }
     let t0 = Instant::now();
     let mut opened = match blocking::open(&mut loader, &url, platform, OPEN_TIMEOUT) {
         OpenResult::Page(p) => p,

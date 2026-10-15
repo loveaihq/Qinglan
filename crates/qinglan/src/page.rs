@@ -1,0 +1,230 @@
+//! One page in the window: its DOM, styles, layout and display list, the images it has asked for, and the steps that
+//! keep them current. Everything here is the engine's own code; the window and the network are the caller's.
+
+use qinglan_engine::css::{StyleOptions, StyleOutput, style_document_with};
+use qinglan_engine::html::dom::{Document, NodeId};
+use qinglan_engine::interact::{PageIndex, document_title, fragment_target, link_target};
+use qinglan_engine::layout::image::ImageSizes;
+use qinglan_engine::layout::{LayoutOptions, LayoutResult, layout_document_with};
+use qinglan_engine::net::Response;
+use qinglan_engine::net::blocking::{self, Opened};
+use qinglan_engine::net::loader::Loader;
+use qinglan_engine::net::page::{PageResources, Update, apply_probe, probe_response};
+use qinglan_engine::paint::images::{Band, ImageStore};
+use qinglan_engine::paint::raster::{Frame, View, render_frame};
+use qinglan_engine::paint::{DisplayList, build_display_list, wanted_images};
+use qinglan_engine::platform::Platform;
+use qinglan_engine::url::Url;
+use qinglan_win::WicDecoder;
+
+/// The visible area in CSS px and its scale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Viewport {
+    pub w: f32,
+    pub h: f32,
+    pub dpr: f32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Phase {
+    /// The HTML is in; waiting for the style sheets in `<head>` (at most 5 s).
+    Sheets,
+    /// Styled, laid out and shown.
+    Shown,
+}
+
+/// What an arrived image changes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Effect {
+    /// A size is known or changed: lay out again.
+    Relayout,
+    /// Only the picture changed (or nothing did).
+    Repaint,
+}
+
+pub struct Page {
+    /// The document's address (after redirects, no fragment).
+    pub url: Url,
+    /// What the address bar shows.
+    pub display: String,
+    pub doc: Document,
+    pub res: PageResources,
+    pub styled: Option<StyleOutput>,
+    pub sizes: ImageSizes,
+    pub store: ImageStore,
+    pub layout: Option<LayoutResult>,
+    pub list: Option<DisplayList>,
+    /// Hit-testing data of a complete (not first-screen-only) layout.
+    pub index: Option<PageIndex>,
+    pub phase: Phase,
+    pub is_error: bool,
+    pub title: String,
+    pub sheets_missing: usize,
+    /// Scroll position to restore once laid out (back/forward, reload).
+    pub restore: Option<f32>,
+    /// `#fragment` to scroll to once laid out.
+    pub fragment: Option<String>,
+}
+
+impl Page {
+    pub fn from_opened(o: Opened, display: String, is_error: bool) -> Page {
+        let res = blocking::resources_for(&o);
+        let title = document_title(&o.doc);
+        Page {
+            url: o.url,
+            display,
+            doc: o.doc,
+            res,
+            styled: None,
+            sizes: ImageSizes::new(),
+            store: ImageStore::new(),
+            layout: None,
+            list: None,
+            index: None,
+            phase: Phase::Sheets,
+            is_error,
+            title,
+            sheets_missing: 0,
+            restore: None,
+            fragment: None,
+        }
+    }
+
+    /// Compute the styles for `vp` (media queries look at its size).
+    pub fn style(&mut self, platform: &dyn Platform, vp: Viewport) {
+        let opts = StyleOptions { viewport_w: vp.w, viewport_h: vp.h, ..StyleOptions::default() };
+        self.styled = None;
+        let out = style_document_with(&mut self.doc, Some(&self.url), &mut self.res, &opts, Some(platform));
+        self.sheets_missing = out.missing.len();
+        self.styled = Some(out);
+    }
+
+    /// Lay out and make the display list. With `stop_y` the layout stops that far down the page (first-screen-first);
+    /// a layout that stopped has no hit-testing index.
+    pub fn layout(&mut self, platform: &dyn Platform, vp: Viewport, stop_y: Option<f32>) {
+        // The old results go first: a big page's layout and display list are the largest things in memory.
+        self.index = None;
+        self.list = None;
+        self.layout = None;
+        let Some(styled) = &self.styled else { return };
+        let opts = LayoutOptions { viewport_w: vp.w, viewport_h: vp.h, dpr: vp.dpr, stop_y, ..LayoutOptions::default() };
+        let res = layout_document_with(&self.doc, &styled.tree, platform, &opts, &self.sizes);
+        let list = build_display_list(&self.doc, &res, platform);
+        self.index = (!res.partial).then(|| PageIndex::new(&res));
+        self.list = Some(list);
+        self.layout = Some(res);
+    }
+
+    /// Lay out the whole page again (an image arrived, the window changed) and return the scroll position that keeps
+    /// what the user is looking at where it was: the first text or image at or below the top edge stays put
+    /// (simple scroll anchoring). At the very top nothing is anchored.
+    pub fn relayout(&mut self, platform: &dyn Platform, vp: Viewport, scroll: f32) -> f32 {
+        let anchor = match (&self.index, &self.layout) {
+            (Some(index), Some(layout)) if scroll > 0.0 => index.anchor(layout, scroll),
+            _ => None,
+        };
+        self.layout(platform, vp, None);
+        match (anchor, &self.index, &self.layout) {
+            (Some((node, offset)), Some(index), Some(layout)) => index.node_y(layout, node).map_or(scroll, |y| y - offset),
+            _ => scroll,
+        }
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.layout.as_ref().is_some_and(|l| !l.partial)
+    }
+
+    pub fn height(&self) -> f32 {
+        self.list.as_ref().map_or(0.0, |l| l.height.to_f32())
+    }
+
+    pub fn max_scroll(&self, vp: Viewport) -> f32 {
+        (self.height() - vp.h).max(0.0)
+    }
+
+    /// Ask for the images near the viewport (all of them when `all`). True when a broken image changed a size, so the
+    /// page needs a new layout.
+    pub fn request_images(&mut self, loader: &mut Loader, vp: Viewport, scroll: f32, all: bool) -> bool {
+        let (Some(layout), Some(list)) = (&self.layout, &self.list) else { return false };
+        let wanted = wanted_images(layout, list, Band::new(scroll, vp.h), all);
+        let mut changed = false;
+        for n in self.res.request_images(loader, &wanted) {
+            changed |= self.sizes.set_broken(n);
+        }
+        changed
+    }
+
+    /// An image (or its failure) came in.
+    pub fn apply_image(&mut self, nodes: &[NodeId], url: &Url, result: Result<std::sync::Arc<Response>, String>) -> Effect {
+        let changed = match result {
+            Ok(resp) => {
+                let probe = probe_response(&WicDecoder, &resp);
+                let changed = apply_probe(&mut self.sizes, nodes, &probe);
+                if probe.is_ok() {
+                    for n in nodes {
+                        self.store.set_url(*n, &url.serialize(true));
+                    }
+                }
+                changed
+            }
+            Err(_) => nodes.iter().fold(false, |c, n| c | self.sizes.set_broken(*n)),
+        };
+        if changed { Effect::Relayout } else { Effect::Repaint }
+    }
+
+    /// Hand a loader event of this page's sub-resources to the resource tracker.
+    pub fn handle_update(&mut self, loader: &mut Loader, ev: qinglan_engine::net::loader::LoadEvent, platform: &dyn Platform) -> Option<PageUpdate> {
+        match self.res.handle(loader, ev, platform)? {
+            Update::Sheet { .. } => Some(PageUpdate::Sheet),
+            Update::Image { nodes, url, result } => Some(PageUpdate::Image(self.apply_image(&nodes, &url, result))),
+        }
+    }
+
+    /// Decode the images that came near and drop the ones that went far. True when some image's bytes are gone from
+    /// the response cache (they are asked for again).
+    pub fn prepare(&mut self, vp: Viewport, scroll: f32, loader: &mut Loader) -> bool {
+        let Some(list) = &self.list else { return false };
+        let band = Band::new(scroll, vp.h);
+        let prepared = self.store.prepare(list, band, vp.dpr, &WicDecoder, &mut |u| loader.cache_mut().get(u));
+        self.store.drop_far(list, band);
+        if prepared.missing.is_empty() {
+            false
+        } else {
+            self.res.forget_images(&prepared.missing);
+            true
+        }
+    }
+
+    /// Paint the viewport at `scroll` into `frame`.
+    pub fn raster(&mut self, platform: &dyn Platform, vp: Viewport, scroll: f32, frame: &mut Frame) {
+        if let Some(list) = &self.list {
+            render_frame(list, platform, &mut self.store, View { scroll_y: scroll, dpr: vp.dpr }, frame);
+        }
+    }
+
+    /// The link under the point (CSS px in the viewport): its address resolved against the page's base, and whether it
+    /// asks for a new window.
+    pub fn link_at(&self, x: f32, y: f32, scroll: f32) -> Option<(Url, bool)> {
+        let (index, layout) = (self.index.as_ref()?, self.layout.as_ref()?);
+        let node = index.link_at(&self.doc, layout, x, scroll + y, y)?;
+        let (href, blank) = link_target(&self.doc, node)?;
+        Some((self.res.base().join(&href).ok()?, blank))
+    }
+
+    /// The page y (CSS px) of a `#fragment`; the top for an empty one or `top` that matches nothing.
+    pub fn fragment_y(&self, fragment: &str) -> Option<f32> {
+        if let (Some(node), Some(index), Some(layout)) = (fragment_target(&self.doc, fragment), &self.index, &self.layout)
+            && let Some(y) = index.node_y(layout, node)
+        {
+            return Some(y);
+        }
+        (fragment.is_empty() || fragment.eq_ignore_ascii_case("top")).then_some(0.0)
+    }
+}
+
+/// What a sub-resource event did to the page.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PageUpdate {
+    Sheet,
+    Image(Effect),
+}

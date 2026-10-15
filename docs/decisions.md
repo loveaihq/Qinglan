@@ -505,8 +505,70 @@
 - **滚动光栅**（`--full --scroll-bench`，所有图片都取了，每帧滚 100 px，711 帧，只量 `render_frame`，不含图片解码）：dpr 1：中位数 **4.96 ms**、p95 **8.14 ms**、最大 14.8 ms（第 1 遍，字形第一次出现）；第 2 遍（热）4.49 / 5.70 ms。dpr 1.5：中位数 **10.16 ms**、p95 **14.27 ms**、最大 22.4 ms；热 9.50 / 11.60 ms。目标是中位数 ≤ 16 ms、p95 ≤ 33 ms，都达标；每帧约 370 个项目、2000 个字形。不带 `--full`（只取近处的图片）同样：dpr 1 为 4.4 / 6.7 ms，dpr 1.5 为 10.7 / 15.8 ms。
 - **测试**：`cargo test --workspace`：203 个测试全过（引擎单元 57 + 集成 91 [css 15、firstscreen 4、html5lib 2、排版 17、net 13、paint 24、perf 2、robustness 13、wpt_url 1]，cli 集成 2，win 单元 9 + 集成 44 [corpus 2、images 7、net 11、win 24]；1c-1 是 170 个）；`cargo clippy --workspace --all-targets` 无警告。新增：paint 24 个（矩形/边框/三种边框样式/裁剪/嵌套裁剪/文字/半透明文字/装饰线/dpr 1、1.5、2/图片 1:1 和双线性/半透明图片/fixed 滚动后/z 序/负 z 的 fixed/absolute 的裁剪规则/画布背景/hidden/标记和复选框/索引只碰视口内的项目/恶意数值/先排第一屏与整页首屏逐像素相同/懒加载/图片位置未定/解码和释放和重新解码和缺字节）、firstscreen 4 个、cli 2 个、win 3 个（PNG 往返、预热、`accept_language` 单元测试；`Accept-Language` 头的断言加在已有的 net 测试里）。
 
-### 没做 / 留给 1c-2b、1c-3
+### 没做 / 留给 1c-2b、1c-3（1c-2b 已做完，见下一节）
 
 - 窗口、把帧贴到窗口上、滚动时"平移旧画面、只画新露出的部分"（目前每帧都是整个视口重画，已经够快所以没做）、图片到达的重排节流和滚动锚定、`qinglan.exe --bench`、`qinglan-cli bench`。
 - 图片的 `object-fit`、破图图标、`alt` 文字（有尺寸的坏图画空白）、`<picture>`；单选框画成圆的；圆角、渐变、阴影（任务单"不做"）。
 - 开放问题：文字对比度（线性混合偏细）；先排第一屏的"末尾悬浮条"缺口（见上）；预热收益只在热缓存下量过。
+
+## 第 1 层 · 1c-2b 窗口、`qinglan.exe --bench`、`qinglan-cli bench`
+
+代码：`qinglan-win` 里 `sys/window.rs`（user32/gdi32/kernel32/shell32 的声明和安全包装，`unsafe` 只在这里）、`window.rs`（把窗口消息变成 `Event`，给应用一个安全的 `Ui`）；引擎里 `interact.rs`（点链接、`#片段`、元素位置、滚动锚点、标题）、`net/blocking.rs` 的 `open_response`、`PageResources::{forget_images, abandon_pending}`；`crates/qinglan`（`#![forbid(unsafe_code)]`）里 `app.rs`（浏览器逻辑）、`page.rs`（一个页面的 DOM/样式/排版/显示列表）、`address.rs`、`history.rs`、`throttle.rs`、`i18n.rs`、`errorpage.rs`、`bench.rs`、`args.rs`；`qinglan-cli` 加 `bench`。两个 exe 的 `build.rs` 都传 `/STACK:8388608`（用 PE 头核对过：两个都是 8 MB，`qinglan.exe` 是 GUI 子系统，`qinglan-cli.exe` 是控制台）。测试：qinglan 单元 32 个（地址栏分类、历史和滚动恢复、重排节流、错误页、中英文字符串表、命令行、bench 报告）、`tests/bench_smoke.rs`（3 个，真开一个窗口跑 `--bench`）、引擎 `tests/interact.rs`（6 个）、cli `tests/bench.rs`（2 个）、win 的 `sys/window.rs` 里结构体大小和进程数字两个单元测试。
+
+### 窗口结构（`qinglan-win/src/window.rs`）
+
+- 一个顶层窗口（`QinglanFrame`，`WS_CLIPCHILDREN`）加子窗口：三个 `BUTTON`（← → ↻/✕，Segoe UI Symbol）、地址栏（系统 `EDIT`，所以输入法直接能用）、提示条（`STATIC`，淡黄底，平时隐藏）、页面区（`QinglanPage`，带原生竖直滚动条）、状态栏左右两个 `STATIC`（左：链接地址/加载进度；右：http 页面显示"不安全"）。字体取系统消息字体（`SPI_GETNONCLIENTMETRICS` 按 DPI），所以中文系统自然是微软雅黑 UI。
+- **滚动条用原生的、始终显示**（`SIF_DISABLENOSCROLL`）：页面高度变化时可视宽度不变，不会因为出现滚动条而重排；拖拽用 `SIF_TRACKPOS` 取 32 位位置。
+- **消息 → 事件**：窗口过程（`extern "system"`，在 `sys` 里）把消息交给 `window::dispatch`，那里转成 `Event`（`Size`、`Paint`、`MouseMove`、`Click`、`Wheel`、`Key`、`Scroll`、`Command`、`Timer`、`Wake`、`User`、`Ready`、`Close`、`Dpi`）交给 `App::event`。应用处理事件时窗口自己产生的消息（改大小引起的 `WM_SIZE`、定时器、唤醒）进队列，处理完再交；鼠标/按键/绘制这类只有"当下"才有意义的丢掉。`catch_unwind` 包在 `dispatch` 和每次 `App::event` 外面（panic 不能穿过窗口过程）。
+- 地址栏用子类化（`SetWindowLongPtrW(GWLP_WNDPROC)`）接按键：Enter、Esc、Ctrl+L/F6/N/R、F5、Alt+←/→ 在地址栏里也生效；Enter/Esc 的 `WM_CHAR` 吞掉（否则嘟一声）；Ctrl+A 全选自己处理。**输入法**：`SendKeys` 在这台机器的中文输入法下，字母会走输入法组合串，Enter 先被输入法用来"上屏"，所以自动化测试里用 `WM_SETTEXT` 加直接发 `WM_KEYDOWN`；真人在英文状态下输网址、Enter 直接打开，中文组合串状态下第一个 Enter 是上屏（和所有浏览器一样）。
+- **唤醒**：`Loader` 的 `wake` 回调 = `Waker::wake()`，`PostMessageW(WM_APP+1)`；多次唤醒合并成一条（`pending` 原子标志，界面线程处理前清掉）。界面线程只调 `Loader::poll`（不阻塞）。
+- **DPI**：启动时 `SetProcessDpiAwarenessContext(-4)`（per-monitor v2），`GetDpiForWindow` 取 DPI，`dpr = dpi / 96`；`WM_DPICHANGED` 里按系统建议的矩形移动窗口、重做字体、重新摆控件，再发 `Event::Dpi`（应用重新样式+排版，解码尺寸变了的图片靠 `ImageStore::prepare` 自己换）。**没有在多显示器上实测 `WM_DPICHANGED`**（只有本机一个 125% 的显示器），列进手工检查清单。
+- **`println!` 在 GUI 进程里**：`#![windows_subsystem = "windows"]`（`cfg(not(test))`，不然 `cargo test` 的输出也没了）；`--bench` 或命令行有错时 `AttachConsole(ATTACH_PARENT_PROCESS)`，stdout 没被重定向（句柄是 0 或 -1）就把 stdout/stderr 指到 `CONOUT$`。重定向到管道/文件时句柄本来就有效，不动它。
+- 新窗口 = 新进程（`std::process::Command` 启动 `current_exe()`，带 `--replay` 原样传下去，不需要 `unsafe`）。`mailto:` 弹 `MessageBoxW` 确认后用 `ShellExecuteW`。
+
+### 地址栏（`address.rs`，任务单第 17 节）
+
+带 `scheme://` 的原样打开；`mailto:`/`data:`/`about:`/`javascript:`/`file:`/`view-source:`/`tel:`/`blob:` 不带斜杠也算协议；`C:\...`、`C:/...`、`\\server\share` 变 `file:` 地址（这是任务单没写的补充，粘贴路径很常见）；没有空格、主机部分（去掉用户名、端口、路径）是 `localhost`、含点（且不以点开头）或 IPv6 字面量的补 `https://`；其余是搜索词，`https://html.duckduckgo.com/html/?q=` 加百分号编码的查询（空格变 `+`，非 ASCII 按 UTF-8 编码）。`localhost:8080` 不会被当成协议 `localhost:`。"像主机名"规则是任务单的：`node.js`、`v1.2` 这样的搜索词会被当成网址，这是规则本身的代价。
+
+### 页面加载流程（`app.rs`、`page.rs`）
+
+1. **导航**：先问 `policy::plan`（`mailto:`、`javascript:` 等拒绝的当场处理，**不取消**当前页的加载）；再 `cancel_all`、提交页面请求（`use_cache` = 前进后退）。旧页面在新页面的字节到了、解码解析之前就整个丢掉（`self.page = None`，DOM、样式、排版、显示列表、解码图片一起释放），然后才建新页面。
+2. **HTML 到齐后**：`blocking::open_response`（新拆出来的"拿到响应以后"那一半：分类、解码、解析）→ 提交 `<head>` 的样式表 → 样式表都到了（或 **5 秒定时器**到点，没到的当 `missing`，提示条说有几个没加载）就开始显示。没有流式解析：HTML 整个到了才解析（所以"内容到齐"的时钟包含解析，见 bench）。
+3. **先排第一屏**：样式 → `stop_y = 滚动位置 + 2 × 视口高` 的排版 → 显示列表 → 光栅 → 贴窗口（第一屏）；然后马上请求第一屏附近的图片，同一次事件里接着整页排版（界面线程上，期间不处理消息，所以"整页没排完不让滚到没排的地方"自然成立）。**`#片段`的页面不做先排第一屏**，直接整页排（目标位置要排完才知道；任务单写"排到目标位置再多一屏"，这要排版选项能"排到某个节点"，没做——偏离）。恢复滚动位置的（前进后退、刷新）用保存的位置当起点，**保存的位置优先于 `#片段`**。
+4. **图片**：近处的（`wanted_images`，按 1c-2a 的规则）经 `PageResources::request_images` 提交；到达的图片 `probe` 后记尺寸，尺寸变了就要重排。**重排节流**（`throttle.rs`）：两次重排之间至少隔 100 毫秒，**从上一次重排结束算起**（不是开始），所以一次重排很慢时消息循环也有空；没到时间就设一个定时器。**滚动锚定**（`interact::PageIndex::anchor`/`node_y`）：重排前找"离视口顶边最近且至少有一部分在下面"的第一段文字或图片，记下它的节点和离顶边的距离，重排后按同一节点的新位置把滚动位置调回去；滚动位置为 0 时不锚定。**每页最多 24 次由图片引起的重排**（`MAX_IMAGE_RELAYOUTS`，缩放/改大小时清零）：一个 `srcset` 选择取决于上一次选择造成的宽度的页面会无限排下去，这是防线；之后学到的尺寸留给下一次窗口要求的重排。
+5. **图片字节被缓存挤掉的**：`ImageStore::prepare` 报出 `missing`，窗口用新加的 `PageResources::forget_images` 让它们能再请求（1c-2a 留的洞）。
+6. **停止**（Esc 或 ✕）：`cancel_all` + `PageResources::abandon_pending`（被取消的请求不会再报告，计数要清掉，不然"加载中"永远不结束）；还在等样式表的页面马上用现有的显示。
+7. **错误页**（`errorpage.rs`）：内置 HTML（标题、说明、地址、提示、详细信息；地址和详情都转义），经 `parse_document` 交给我们自己的内核显示，和普通页面同一条路；网络错误各种、被拒绝的地址、不支持的类型、地址解析失败、HTTP 4xx/5xx 没有正文（有正文的显示网站的内容）、内部错误（"这个网页触发了轻览的错误"）。错误页进历史（后退能回去）。错误页自己出错就显示空白，不再递归。
+8. **`catch_unwind`**：`Browser::event` 整个包起来；panic → `internal_error`：取消加载、丢掉页面、显示"内部错误"页（消息只截 300 字符放在详细信息里）。栈溢出接不住，靠 8 MB 栈和各处递归上限。**主线程跑解析/样式/排版/绘制**（8 MB 栈）；另起的线程只有预热（`stack_size(8 MB)`）和 `Loader` 的请求线程（1 MB，只做收发，不递归；引擎里的，没动）。
+
+### 交互细节
+
+- **点链接**：`PageIndex::link_at` 遍历有行的块，取最后（最上）命中的文字或原子行内（图片）片段，沿 DOM 往上找带 `href` 的 `<a>`；**不考虑 `overflow` 裁剪**（被裁掉的链接也能点到，已知缺口）。`href` 按 `PageResources::base()`（含 `<base>`）解析。左键点 = 打开；Ctrl、Shift、中键、`target=_blank`（只看 `<a>`）= 新窗口（先过一遍 `policy::plan`，`mailto:` 在本窗口弹确认）。`#片段`链接且目标页就是当前页：不重新下载，按 HTML 7.4.2.3.3 找（先 `id`，再 `<a name>`；原样和百分号解码各试一次），`top`/空 = 页面顶部，进历史。
+- **悬停**：每次鼠标移动做一次命中测试（线性，约 0.3 毫秒），变了就换手形光标、状态栏显示解析后的地址；先排第一屏的临时排版没有索引，所以那期间不命中（界面线程忙着，本来也收不到消息）。
+- **滚轮**：`SPI_GETWHEELSCROLLLINES` 行 × 每行 100/3 CSS 像素（Chrome 默认 3 行 = 100 像素）；"一页"（`WHEEL_PAGESCROLL`）= 视口高的 87.5%；方向键一次 40 像素；PageUp/Down、空格 87.5%；Home/End；Ctrl+滚轮不缩放（第 1 层没有）。滚动位置取整到设备像素；每帧整个视口重画（1c-2a 实测够快，"平移旧画面"没做）。
+- **前进后退**：`History`（最多 200 条，只存地址和离开时的滚动位置）；回去时 `use_cache: true`，页面和子资源都先问加载器的响应缓存（16 MB LRU），没有的才联网。跳转（重定向）后用最终地址更新历史条目。在同一个文档里的前进后退（只有 `#片段` 不同）不重新加载，直接滚到保存的位置。
+- **标题**："页面标题 - 轻览"，没有标题时只写"轻览"（英文 "Qinglan"）。语言取 `GetUserPreferredUILanguages` 的第一项，以 `zh` 开头用中文。命令行给了地址就把焦点放到页面上（键盘能直接滚动），没给就在地址栏。
+
+### `--bench` 怎么量（`crates/qinglan/src/bench.rs`）
+
+- 打开真窗口（页面区 = `width × dpr` × `height × dpr` 设备像素；窗口超出屏幕也照样建，`WM_GETMINMAXINFO` 放宽到 16384），**`--width/--height` 是 CSS 像素**（和 `render` 一致），`--dpr` 默认 1；这样 dpr 1.5 的 1920×1080 是 2880×1620 设备像素，和 1c-2a 的 `render --scroll-bench` 同一个工作量（比 150% 缩放的真 1920×1080 屏幕重）。窗口启动后先等预热线程结束再建平台、开始加载（真实使用时网络比预热慢，预热早做完；回放瞬间到，所以这里等它，顺序和真实一致）。
+- **冷首屏时钟**：从"HTML 到了"（回放的响应交到界面线程，解析之前）开始，到首屏像素贴到窗口、`GdiFlush` 返回为止。我们没有流式解析器，所以解析在 HTML 到了之后才做、被计入；等 `<head>` 样式表的时间是网络的时间，不计。`first-screen-ms` = 这段时间里界面线程忙于这个页面的时间之和（每个事件处理的时长相加：解析、发样式表请求、处理样式表到达、样式、排版、显示列表、光栅、贴窗口）；`first-screen-wall-ms` = 同一段的墙钟时间（多了回放里 26 张样式表的线程和读文件的等待），是上界。两个都打印，差别在无负载时 < 2 毫秒。`full-layout-ms`/`-wall-ms` = 同样的时钟到第一次整页排版结束（图片还没有）。
+- **滚动**：所有图片先全部请求（`all = true`，和 1c-2a 的 `--full` 一样）并等重排稳定（没有在途请求、没有待办重排）；然后从头到尾每帧 100 CSS 像素，每帧由一条投递给自己的消息驱动（消息循环照常转），**每帧时间 = 光栅 + `SetDIBitsToDevice` + `GdiFlush`**，解码/丢弃图片的时间单独记（`scroll-decode-ms`，不计入帧时间）。到底（位置按设备像素取整后和最大滚动位置比，取整后的值比较，否则取整往下舍的底部永远到不了——这个错在 dpr 1.5 时让第一次 bench 无限滚下去，已修；另外加了帧数上限和 120 秒总期限，因为不停投递的消息会饿死低优先级的 `WM_TIMER`）后打印并退出。
+- 内存：`K32GetProcessMemoryInfo`，`PrivateUsage`（滚到底后）和 `PeakPagefileUsage`（峰值）。启动时间：`GetProcessTimes` 创建时间到"窗口出来、地址栏可输入"（`Ready` 事件：窗口显示、焦点在地址栏、第一批消息处理完），用 `GetSystemTimeAsFileTime` 对表。
+- 输出每行 `key: value`（`startup-ms`、`first-screen-ms`、`first-screen-wall-ms`、`full-layout-ms`、`full-layout-wall-ms`、`relayouts`、`scroll-frames`、`scroll-median-ms`、`scroll-p95-ms`、`scroll-max-ms`、`scroll-decode-ms`、`peak-private-bytes`、`private-bytes-after-scroll`，出错时加 `bench-error`，退出码 1）。`qinglan-cli bench <网址> --replay <目录>` 用同样的键和同样的时钟规则（没有窗口，没有贴窗口），另外打印各阶段（`parse-ms`、`style-ms`、`first-layout-ms`、`display-list-ms`、`raster-ms`）和三个时间点的内存。
+
+### 验收数据（1c-2b，release，插电 `BatteryStatus = 2`，Intel i7-8850H，显示器 125%）
+
+- **测量条件**：`tests/corpus/local/zhwiki-rec`，1920×1080 CSS 像素，每次新进程。**下面两组数字都不是干净环境**：另一个会话从 23:33 起一直在跑 qingpdf 的 `cargo test --release`（PID 2032，反复启动 `qpdf.exe`），CPU 占用在 10–20% 之间起伏、有突发。出现这个负载之前只量到 2 次（dpr 1，同一个二进制的前一版，改动只在滚动结束条件）：首屏 105.8、109.0 毫秒，整页排完 208、212 毫秒，滚动中位数 5.0 / 6.3 毫秒（p95 6.3 / 6.3），启动 78.8 / 66.2 毫秒，滚到底后私有内存 83.3 / 83.8 MB；`qinglan-cli bench` 同一时段：首屏 97.6 / 98.6，滚动 4.0 / 4.0（p95 4.8 / 5.0）。
+- **带负载的 5 + 3 次**（`qinglan.exe --bench`，每次新进程，上面说的负载一直在）：dpr 1 五次：首屏（忙时间）250.8 / 248.0 / 303.3 / 214.1 / 227.1，**中位数 248.0 毫秒**（墙钟只多 0.5–1.3 毫秒）；整页排完 466.1 / 505.1 / 505.7 / 414.6 / 456.1，中位数 466.1 毫秒；滚动 711 帧，帧中位数 16.9 / 14.1 / 14.0 / 13.6 / 13.9，**中位数 14.0 毫秒**，p95 27.2 / 19.0 / 19.1 / 19.0 / 19.1，**中位数 19.1 毫秒**（最大 23–61）；启动 172.9 / 128.5 / 137.5 / 137.2 / 177.5，**中位数 137.5 毫秒**；滚到底后私有内存 88.1 / 84.6 / 83.2 / 84.4 / 83.5 MB，**中位数 84.4 MB**（峰值 = 同一个数）；重排 3 次。dpr 1.5（窗口 2880×1620 设备像素）三次：首屏 256.2 / 256.1 / 255.6，**中位数 256.1 毫秒**；整页排完 461.4 毫秒（中位数）；帧中位数 27.0 / 27.0 / 23.1，**中位数 27.0 毫秒**，p95 42.3 / 36.0 / 34.4，**中位数 36.0 毫秒**；启动 165.5 / 137.5 / 164.7，**中位数 164.7 毫秒**；私有内存 98.5 / 95.1 / 94.2 MB，**中位数 95.1 MB**。后来又量了一轮（负载更重：首屏 288–438 毫秒、帧中位数 14.7–17.2 毫秒），没跑完就停了，不采用。
+- **和目标的关系**：干净环境下的两次（dpr 1）首屏 ≤ 200 毫秒、滚动 ≤ 16 / ≤ 33 毫秒、启动 ≤ 0.3 秒都达标；带负载时首屏（248 / 256 毫秒）超目标，dpr 1.5 的帧中位数（27 毫秒）超目标，其余仍达标。**这些超标是负载造成还是实现造成，这次没能分开——需要在空闲机器上重量一遍 5 + 3 次（1c-3 的验收测量）。** 私有内存不管负载都超（见下）。
+- **体积**：release `qinglan.exe` 1 971 200 字节（1.88 MiB）；**超过 1.5 MB 目标**。试了 `opt-level = "s"`：1 575 424 字节，还是超，而且慢（带负载下首屏 580 对 417 毫秒、滚动中位数 35.8 对 27.1 毫秒），所以没改 profile。`qinglan-cli.exe` 1 966 080 字节，说明体积主要在引擎和 DirectWrite/WIC/WinHTTP 的声明代码里，要降到 1.5 MB 需要专门一轮（候选：去掉没用到的 Unicode/实体表重复、`#[inline]` 过多的排版函数、`opt-level` 只对引擎里的冷路径降级）。
+- **依赖的 DLL**（读 PE 导入表）：`qinglan.exe`：`DWrite.dll`、`GDI32.dll`、`KERNEL32.dll`、`SHELL32.dll`、`SHLWAPI.dll`、`USER32.dll`、`WINHTTP.dll`、`api-ms-win-core-synch-l1-2-0.dll`、`bcryptprimitives.dll`、`ntdll.dll`、`ole32.dll`，都是系统 DLL（WIC 经 COM 由 `ole32` 加载 `windowscodecs.dll`，静态链接了 C 运行库，没有 vcruntime）。栈保留 8 388 608 字节（两个 exe）。
+- **内存没达标**：滚到底后私有内存约 83–88 MB（目标 ≤ 50 MB），dpr 1.5 约 94–98 MB。`qinglan-cli bench` 的分段：解析后 16 MB，首屏后 44 MB，整页排版和全部图片后 73 MB，滚完 82 MB。大头是 DOM、样式树、整页排版结果和显示列表、字形遮罩缓存、响应缓存（5 MB 的录制全在里面）和 8–18 MB 的帧缓冲；要降到 50 MB 需要专门一轮（候选：整页排版后丢掉不用的中间结构、样式树瘦身、显示列表按需生成），不在 1c-2b 范围。
+- **手工在窗口里验证过**（`PrintWindow` 截图）：中文维基首屏（工具栏、地址栏、原生滚动条、状态栏都对，字和图正常）；PageDown ×2 滚动、Home 回顶；悬停链接状态栏显示解析后的地址；点 `#歷史` 目录项滚到该节、地址栏带片段、后退可用；Alt+← 回到顶部且前进可用；地址栏输入 `ftp://…` 显示错误页（标题"This page can't be opened - Qinglan"，说明、地址、提示、详情齐全）；输入 `rust lang` 变成搜索地址；`--bench` 在 dpr 1 和 1.5 下跑完退出码 0。
+
+### 没做 / 留给 1c-3
+
+- `#片段`的第一屏要"排到目标再多一屏"（见上，偏离）；`overflow` 裁剪里的链接命中；`WM_DPICHANGED` 在多显示器上的实测；Ctrl+滚轮缩放（第 1 层没有）；表单控件交互（第 1 层没有）；窗口位置/大小不记忆；工具栏按钮没有提示文字。
+- 内存和体积目标没达标（见上）；真实网页库的中位数/最大内存是 1c-3 的事。
+- 开放问题：①内存 50 MB 目标是否按"滚到底、所有图片都请求过"算（这里是）；②冷首屏时钟在没有流式解析器时的定义（这里取"忙的时间之和"，同时给墙钟）；③dpr 1.5 的 1920×1080 CSS 像素是否就是验收说的"150%"（这里是，比物理 1920×1080 屏幕的 150% 重 2.25 倍）。

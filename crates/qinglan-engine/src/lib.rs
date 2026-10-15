@@ -4,6 +4,7 @@
 pub mod css;
 pub mod encoding;
 pub mod html;
+pub mod interact;
 pub mod layout;
 pub mod lru;
 pub mod net;

@@ -188,6 +188,23 @@ impl PageResources {
         broken
     }
 
+    /// The loader was told to cancel everything (the user stopped the load or went elsewhere): the requests in flight
+    /// will never report, so stop waiting for them. Images that did not arrive stay unrequested.
+    pub fn abandon_pending(&mut self) {
+        self.waiting.clear();
+        self.images.clear();
+        self.pending_images = 0;
+        self.pending_sheets = 0;
+    }
+
+    /// Forget that `nodes` asked for their images, so the next [`PageResources::request_images`] fetches them again
+    /// (the window uses this when an image's bytes left the response cache while its bitmap was dropped).
+    pub fn forget_images(&mut self, nodes: &[NodeId]) {
+        for n in nodes {
+            self.node_urls.remove(n);
+        }
+    }
+
     /// Process one loader event. `None` when the ticket is not one of this page's (the caller's own).
     pub fn handle(&mut self, loader: &mut Loader, ev: LoadEvent, platform: &dyn Platform) -> Option<Update> {
         let waiter = self.waiting.remove(&ev.ticket)?;

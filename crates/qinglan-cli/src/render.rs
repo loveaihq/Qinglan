@@ -21,10 +21,10 @@ use qinglan_engine::paint::{DisplayList, build_display_list, wanted_images};
 use qinglan_engine::platform::Platform;
 use qinglan_win::{WicDecoder, WinPlatform};
 
-const IMAGE_TIMEOUT: Duration = Duration::from_secs(60);
+pub const IMAGE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Rounds of "request the images that are near, lay out again with their sizes" before giving up on a page
 /// whose layout keeps moving images in and out of range.
-const MAX_ROUNDS: usize = 4;
+pub const MAX_ROUNDS: usize = 4;
 /// `--full` pages are cut so that the frame stays under this many device pixels (128 MB of BGRA).
 const MAX_FRAME_PIXELS: u64 = 32_000_000;
 /// The scroll benchmark moves the page by this many CSS px per frame.
@@ -51,13 +51,13 @@ pub struct Ctx<'a> {
     pub win: Option<&'a WinPlatform>,
 }
 
-fn ms(d: Duration) -> f64 {
+pub fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
 }
 
 /// The images the page wants that are near `band` (or all of them): request, wait, record their sizes. Returns
 /// whether any size changed (the page must be laid out again).
-fn fetch_images(cx: &mut Ctx<'_>, layout: &LayoutResult, list: &DisplayList, band: Band, all: bool, sizes: &mut ImageSizes, store: &mut ImageStore) -> bool {
+pub fn fetch_images(cx: &mut Ctx<'_>, layout: &LayoutResult, list: &DisplayList, band: Band, all: bool, sizes: &mut ImageSizes, store: &mut ImageStore) -> bool {
     let wanted = wanted_images(layout, list, band, all);
     let mut changed = false;
     for n in cx.res.request_images(cx.loader, &wanted) {

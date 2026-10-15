@@ -86,7 +86,13 @@ pub fn open(loader: &mut Loader, url: &Url, platform: &dyn Platform, timeout: Du
         Ok(r) => r,
         Err(e) => return OpenResult::Failed(e.to_string()),
     };
-    let kind = content::classify(&resp);
+    open_response(&resp, platform)
+}
+
+/// The second half of [`open`] for callers that fetched the page themselves (the window): classify the response,
+/// decode its text and parse it.
+pub fn open_response(resp: &Response, platform: &dyn Platform) -> OpenResult {
+    let kind = content::classify(resp);
     let (text, encoding, warning) = match &kind {
         ContentKind::Html => {
             let d = decode_document(&resp.body, resp.charset().as_deref(), platform);

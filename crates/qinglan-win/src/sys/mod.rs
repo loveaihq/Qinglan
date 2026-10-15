@@ -7,6 +7,7 @@
 pub mod dwrite;
 pub mod wic;
 pub mod winhttp;
+pub mod window;
 
 pub type HRESULT = i32;
 pub type BOOL = i32;
