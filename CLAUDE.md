@@ -46,3 +46,5 @@
 
 - Python：`C:\Users\Vincent\AppData\Local\Programs\Python\Python312\python.exe`（不一定在 PATH 里）。
 - 不要启动用户的 Word、Office 等程序。
+- 不要搜索整个磁盘（比如 `find /`），这种命令会在后台一直跑。Windows SDK 的头文件在 `C:\Program Files (x86)\Windows Kits\10\Include\<版本>\` 下。
+- 量性能前先确认插着电（`powershell -NoProfile -Command "(Get-CimInstance Win32_Battery).BatteryStatus"` 输出 2），也没有别的重活在跑；冷启动要每次新开进程来量，不能用同一进程里热缓存的数字。
