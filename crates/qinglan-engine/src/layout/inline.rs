@@ -465,6 +465,15 @@ fn align_of(a: TextAlign) -> Align {
     }
 }
 
+/// What `prefetch_text` collects for one style: the distinct non-ASCII characters and ASCII words, in order of first appearance.
+struct PrefetchGroup<'t> {
+    style: Rc<ComputedStyle>,
+    seen_chars: HashMap<char, ()>,
+    chars: String,
+    seen_words: HashMap<&'t str, ()>,
+    words: Vec<&'t str>,
+}
+
 /// The padding box of one piece of a relatively positioned inline element, in the owner block's coordinates.
 #[derive(Clone, Copy)]
 struct PadRect {
@@ -790,6 +799,67 @@ impl Layouter<'_> {
             }
         }
         Prepared { items, units, atoms, texts, prev_content, pct_edges: pct, cbw }
+    }
+
+    /// Before layout: tell the platform which non-ASCII characters each style is going to shape, so
+    /// that it can do them in bulk (`Platform::prefetch`). At most the page's text allowance is scanned.
+    pub(super) fn prefetch_text(&mut self) {
+        let tree = self.tree;
+        let mut index: HashMap<(usize, usize), usize> = HashMap::new();
+        // Per style: the distinct non-ASCII characters in order of first appearance.
+        let mut groups: Vec<PrefetchGroup<'_>> = Vec::new();
+        let mut left = self.text_left;
+        for b in &tree.boxes {
+            if b.kind != BoxKind::Text || left == 0 {
+                continue;
+            }
+            let text: &str = match (&b.synth, self.doc.node(b.node).map(|n| &n.data)) {
+                (Some(s), _) => s,
+                (None, Some(NodeData::Text(t))) => t,
+                _ => continue,
+            };
+            let key = (Rc::as_ptr(&b.style.font) as usize, b.style.text.lang.as_ref().map_or(0, |l| Rc::as_ptr(l) as *const u8 as usize));
+            let gi = *index.entry(key).or_insert_with(|| {
+                groups.push(PrefetchGroup { style: b.style.clone(), seen_chars: HashMap::new(), chars: String::new(), seen_words: HashMap::new(), words: Vec::new() });
+                groups.len() - 1
+            });
+            let Some(g) = groups.get_mut(gi) else { continue };
+            let text = text.get(..text.floor_char_boundary(left as usize)).unwrap_or(text);
+            for c in text.chars() {
+                if !c.is_ascii() && g.seen_chars.insert(c, ()).is_none() {
+                    g.chars.push(c);
+                }
+            }
+            // ASCII words: runs of printable characters between spaces and non-ASCII characters.
+            let bytes = text.as_bytes();
+            let mut i = 0usize;
+            while i < bytes.len() {
+                if !bytes.get(i).is_some_and(|b| (0x21..0x7F).contains(b)) {
+                    i += 1;
+                    continue;
+                }
+                let mut j = i;
+                while bytes.get(j).is_some_and(|b| (0x21..0x7F).contains(b)) {
+                    j += 1;
+                }
+                if let Some(w) = text.get(i..j)
+                    && j - i <= 128
+                    && g.seen_words.insert(w, ()).is_none()
+                {
+                    g.words.push(w);
+                }
+                i = j;
+            }
+            left = left.saturating_sub(text.len() as u64);
+        }
+        for PrefetchGroup { style, chars, words, .. } in groups {
+            if chars.is_empty() && words.is_empty() {
+                continue;
+            }
+            let f = &style.font;
+            let q = FontQuery { families: &f.family, weight: f.weight, slant: slant_of(f.style), lang: style.text.lang.as_deref() };
+            self.platform.prefetch(&chars, &words, &q);
+        }
     }
 
     /// Shape a text item and cut it into units (one per glyph cluster).

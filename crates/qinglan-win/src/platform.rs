@@ -16,7 +16,7 @@ use qinglan_engine::platform::{FontId, FontMetrics, FontQuery, FontSlant, Glyph,
 use crate::fx::{FxHasher, FxMap};
 use crate::lru::Lru;
 use crate::sys;
-use crate::sys::dwrite::{DesignMetrics, Face, Factory, Font, Shaped, break_between};
+use crate::sys::dwrite::{DesignMetrics, Face, Factory, Font, ScriptAnalysis, Shaped, break_between};
 
 /// Glyph mask cache budget (L1 task 8: LRU, at most 8 MB).
 const GLYPH_CACHE_BYTES: usize = 8 << 20;
@@ -28,6 +28,15 @@ const MAX_FONTS: usize = 512;
 const MAX_QUERIES: usize = 8192;
 /// A single `GetGlyphs` call gets at most this many UTF-16 units (its cluster map holds 16-bit values).
 const MAX_RUN_UNITS: usize = 8192;
+/// Size at which context-free characters are shaped (advances are scaled linearly afterwards).
+const PROBE: f32 = 100.0;
+/// Most UTF-16 units of words shaped by one bulk call.
+const BATCH_UNITS: usize = 6000;
+/// Separates the words of a bulk call: a private-use character, which fonts map to the missing-glyph box, so
+/// that no kerning or ligature rule of the font reaches across it.
+const WORD_SEP: u16 = 0xE000;
+/// Most characters shaped by one bulk call: each takes up to 2 UTF-16 units plus a separator.
+const BATCH_CHARS: usize = 2048;
 /// Size of one cached glyph, for the shaping cache's byte count.
 const GLYPH_COST: usize = std::mem::size_of::<Glyph>();
 
@@ -49,6 +58,49 @@ pub struct CacheStats {
     pub us_choose: u64,
     pub us_analyze: u64,
     pub us_shape: u64,
+    /// Calls to `AnalyzeScript` and to `GetGlyphs` + `GetGlyphPlacements`.
+    pub analyze_calls: u64,
+    pub shape_calls: u64,
+    /// Bulk calls for context-free characters (`prefetch`), the characters they covered, their time;
+    /// and the time of the one-character calls that remain.
+    pub batch_calls: u64,
+    pub batch_chars: u64,
+    pub us_batch: u64,
+    pub us_single: u64,
+    /// Words (text between spaces, and the spaces) found in / added to the word cache.
+    pub word_hits: u64,
+    pub word_misses: u64,
+    /// Words put into the word cache by `prefetch`.
+    pub word_prefetched: u64,
+    /// Shaping calls over 300 us and their time.
+    pub slow_calls: u64,
+    pub us_slow: u64,
+    /// Time in `MapCharacters`, in creating font faces, and in `AnalyzeLineBreakpoints`; calls to the last.
+    pub us_map: u64,
+    pub us_face: u64,
+    pub us_breaks: u64,
+    pub break_calls: u64,
+    /// Time in `Platform::shape` for texts that were not in the cache (everything above except line breaks, plus the glue).
+    pub us_miss: u64,
+}
+
+impl CacheStats {
+    /// One line per group for `qinglan-cli layout --time`.
+    pub fn report(&self) -> String {
+        let ms = |us: u64| us as f64 / 1000.0;
+        let mut o = String::new();
+        o.push_str(&format!("text: {} texts shaped ({} cached), {:.1} ms in total
+", self.shape_misses, self.shape_hits, ms(self.us_miss)));
+        o.push_str(&format!("  GetGlyphs {} calls {:.1} ms (bulk CJK {} calls for {} chars {:.1} ms; single CJK {:.1} ms)
+", self.shape_calls, ms(self.us_shape), self.batch_calls, self.batch_chars, ms(self.us_batch), ms(self.us_single)));
+        o.push_str(&format!("  AnalyzeScript {} calls {:.1} ms; choosing fonts {:.1} ms (MapCharacters {} calls {:.1} ms); font faces {} {:.1} ms
+", self.analyze_calls, ms(self.us_analyze), ms(self.us_choose), self.fallback_calls, ms(self.us_map), self.fonts, ms(self.us_face)));
+        o.push_str(&format!("  words {} cached, {} shaped on demand, {} shaped in bulk\n", self.word_hits, self.word_misses, self.word_prefetched));
+        o.push_str(&format!("  shaping calls over 300 us: {} taking {:.1} ms
+", self.slow_calls, ms(self.us_slow)));
+        o.push_str(&format!("breaks: {} calls {:.1} ms", self.break_calls, ms(self.us_breaks)));
+        o
+    }
 }
 
 struct FontEntry {
@@ -120,6 +172,18 @@ struct Inner {
     stats: CacheStats,
     /// (font, locale hash, code point) to the glyph and advance of one context-free character.
     simple: FxMap<(u32, u32, u32), (u16, f32)>,
+    /// Shaped words (see `shape_words`).
+    words: FxMap<u64, WordEntry>,
+}
+
+/// A word (or one space) shaped at `PROBE` size; advances and offsets are scaled to the real size when used.
+struct WordEntry {
+    fid: u32,
+    loc: u32,
+    script: u16,
+    shapes: u32,
+    units: Box<[u16]>,
+    shaped: Rc<Shaped>,
 }
 
 /// DirectWrite-backed platform. Not `Send`: use it from the thread that created it.
@@ -146,6 +210,7 @@ impl WinPlatform {
             default_locale: sys::user_locale_name(),
             stats: CacheStats::default(),
             simple: FxMap::default(),
+            words: FxMap::default(),
         };
         Some(WinPlatform { dw, inner: RefCell::new(inner) })
     }
@@ -290,6 +355,18 @@ fn is_context_free(cp: u32) -> bool {
         | 0xFF01..=0xFF60 | 0xFFE0..=0xFFE6 | 0x20000..=0x2FA1F)
 }
 
+fn word_key(fid: u32, loc: u32, sa: ScriptAnalysis, word: &[u16]) -> u64 {
+    let mut h = FxHasher::default();
+    h.write_u32(fid);
+    h.write_u32(loc);
+    h.write_u32(u32::from(sa.script));
+    h.write_u32(sa.shapes);
+    for &u in word {
+        h.write_u16(u);
+    }
+    h.finish()
+}
+
 fn shape_hash(qi: u32, size_bits: u32, text: &str) -> u64 {
     let mut h = FxHasher::default();
     h.write_u32(qi);
@@ -319,6 +396,16 @@ fn is_attached(c: char) -> bool {
 }
 
 impl Inner {
+    /// Time of one `GetGlyphs` + `GetGlyphPlacements` call; calls over 300 us are counted apart
+    /// (the first call for a font and script pays for loading its tables).
+    fn add_shape_time(&mut self, us: u64) {
+        self.stats.us_shape += us;
+        if us > 300 {
+            self.stats.slow_calls += 1;
+            self.stats.us_slow += us;
+        }
+    }
+
     fn find_family(&mut self, dw: &Factory, name: &str) -> Option<u32> {
         let key = name.to_lowercase();
         if let Some(&r) = self.families.get(&key) {
@@ -333,6 +420,13 @@ impl Inner {
     }
 
     fn add_font(&mut self, dw: &Factory, font: Font) -> Option<u32> {
+        let t = Instant::now();
+        let r = self.add_font_inner(dw, font);
+        self.stats.us_face += t.elapsed().as_micros() as u64;
+        r
+    }
+
+    fn add_font_inner(&mut self, dw: &Factory, font: Font) -> Option<u32> {
         let face = dw.create_face(&font)?;
         let addr = face.addr();
         if let Some(&id) = self.by_face.get(&addr) {
@@ -461,7 +555,10 @@ impl Inner {
         let mut buf = [0u16; 2];
         let units = c.encode_utf16(&mut buf);
         self.stats.fallback_calls += 1;
-        let (_, font) = dw.map_characters(units, &q.locale, &q.base_family, q.weight, q.style)?;
+        let t = Instant::now();
+        let mapped = dw.map_characters(units, &q.locale, &q.base_family, q.weight, q.style);
+        self.stats.us_map += t.elapsed().as_micros() as u64;
+        let (_, font) = mapped?;
         let f = self.add_font(dw, font?)?;
         if let Some(s) = self.sticky.get_mut(qi as usize) {
             s.retain(|&x| x != f);
@@ -565,15 +662,21 @@ impl Inner {
     /// fixed size. `None` when DirectWrite does not give exactly one glyph (then it is shaped with
     /// its neighbours instead).
     fn context_free_glyph(&mut self, dw: &Factory, q: &QueryInfo, fid: u32, entry: &FontEntry, cp: u32, unit: &[u16]) -> Option<(u16, f32)> {
-        const PROBE: f32 = 100.0;
         let key = (fid, q.loc, cp);
         if let Some(&r) = self.simple.get(&key) {
             return Some(r);
         }
         let t = Instant::now();
-        let sa = dw.analyze_script(unit, &q.locale).first().map(|r| r.2)?;
-        let sh = dw.shape(unit, &entry.face, PROBE, sa, &q.locale)?;
-        self.stats.us_shape += t.elapsed().as_micros() as u64;
+        let sa = dw.analyze_script(unit, &q.locale).first().map(|r| r.2);
+        self.stats.us_analyze += t.elapsed().as_micros() as u64;
+        self.stats.analyze_calls += 1;
+        let t = Instant::now();
+        let sh = sa.and_then(|sa| dw.shape(unit, &entry.face, PROBE, sa, &q.locale));
+        let us = t.elapsed().as_micros() as u64;
+        self.add_shape_time(us);
+        self.stats.us_single += us;
+        self.stats.shape_calls += 1;
+        let sh = sh?;
         let r = match (sh.glyphs.as_slice(), sh.advances.as_slice()) {
             ([g], [a]) => (*g, *a / PROBE),
             _ => return None,
@@ -585,6 +688,212 @@ impl Inner {
         Some(r)
     }
 
+    /// Shape the context-free characters of `chars` that are not cached yet in bulk: the uncached
+    /// ones are grouped by (font, script) and each group goes through `GetGlyphs` as one string, every
+    /// character followed by a space so that no pair of them can interact. The result is used only if
+    /// each character came out as exactly one glyph (cluster map 1:1); otherwise nothing is cached and
+    /// the characters are shaped one at a time later, as before. Every glyph and advance is the same as
+    /// shaping the character alone (checked against the whole CJK range by `bulk_shaping_matches_single`).
+    fn prefetch_chars(&mut self, dw: &Factory, qi: u32, chars: &str) {
+        let Some(q) = self.queries.get(qi as usize).cloned() else { return };
+        if q.chain.is_empty() {
+            return;
+        }
+        type Key = (u32, u16, u32);
+        let mut index: FxMap<Key, usize> = FxMap::default();
+        let mut groups: Vec<(Key, Vec<char>)> = Vec::new();
+        for c in chars.chars() {
+            let cp = c as u32;
+            if !is_context_free(cp) {
+                continue;
+            }
+            let fid = self.choose_font(dw, qi, &q, c, None);
+            if self.simple.contains_key(&(fid, q.loc, cp)) {
+                continue;
+            }
+            let mut buf = [0u16; 2];
+            let t = Instant::now();
+            let sa = dw.analyze_script(c.encode_utf16(&mut buf), &q.locale).first().map(|r| r.2);
+            self.stats.us_analyze += t.elapsed().as_micros() as u64;
+            self.stats.analyze_calls += 1;
+            let Some(sa) = sa else { continue };
+            let key = (fid, sa.script, sa.shapes);
+            let gi = *index.entry(key).or_insert_with(|| {
+                groups.push((key, Vec::new()));
+                groups.len() - 1
+            });
+            if let Some((_, v)) = groups.get_mut(gi) {
+                v.push(c);
+            }
+        }
+        for ((fid, script, shapes), cs) in groups {
+            let Some(entry) = self.fonts.get(fid as usize).cloned() else { continue };
+            for part in cs.chunks(BATCH_CHARS) {
+                self.shape_batch(dw, &q, fid, &entry, ScriptAnalysis { script, shapes }, part);
+            }
+        }
+    }
+
+    fn shape_batch(&mut self, dw: &Factory, q: &QueryInfo, fid: u32, entry: &FontEntry, sa: ScriptAnalysis, chars: &[char]) {
+        let mut units: Vec<u16> = Vec::with_capacity(chars.len() * 3);
+        let mut pos: Vec<(usize, usize)> = Vec::with_capacity(chars.len());
+        for &c in chars {
+            let mut buf = [0u16; 2];
+            let u = c.encode_utf16(&mut buf);
+            pos.push((units.len(), u.len()));
+            units.extend_from_slice(u);
+            units.push(0x20);
+        }
+        let t = Instant::now();
+        let sh = dw.shape(&units, &entry.face, PROBE, sa, &q.locale);
+        let us = t.elapsed().as_micros() as u64;
+        self.add_shape_time(us);
+        self.stats.us_batch += us;
+        self.stats.shape_calls += 1;
+        self.stats.batch_calls += 1;
+        let Some(sh) = sh else { return };
+        // Glyph 2i is character i, glyph 2i + 1 its space; the cluster map says the same.
+        if sh.glyphs.len() != 2 * chars.len() {
+            return;
+        }
+        for (i, &(u, l)) in pos.iter().enumerate() {
+            let want = (2 * i) as u16;
+            let ok = sh.cluster_map.get(u) == Some(&want) && (l == 1 || sh.cluster_map.get(u + 1) == Some(&want)) && sh.cluster_map.get(u + l) == Some(&(want + 1));
+            if !ok {
+                return;
+            }
+        }
+        if self.simple.len() > 300_000 {
+            self.simple.clear();
+        }
+        for (i, &c) in chars.iter().enumerate() {
+            if let (Some(&g), Some(&a)) = (sh.glyphs.get(2 * i), sh.advances.get(2 * i)) {
+                self.simple.insert((fid, q.loc, c as u32), (g, a / PROBE));
+                self.stats.batch_chars += 1;
+            }
+        }
+    }
+
+    /// Shape the ASCII words of `words` that are not in the word cache yet, many to a `GetGlyphs` call:
+    /// `w1 SEP w2 SEP ...` with `SEP` = `WORD_SEP`. The glyphs of each word are cut out of the result and
+    /// cached like a word shaped alone. A word is only taken when it came out exactly as it would alone:
+    /// the glyph run is contiguous and one separator glyph follows, and its last glyph has its
+    /// design advance (the one thing a rule between the word and the separator could change).
+    /// Everything else is left to be shaped when it is needed.
+    fn prefetch_words(&mut self, dw: &Factory, qi: u32, words: &[&str]) {
+        let Some(q) = self.queries.get(qi as usize).cloned() else { return };
+        let Some(&fid) = q.chain.first() else { return };
+        let Some(entry) = self.fonts.get(fid as usize).cloned() else { return };
+        // All printable ASCII must come from the primary font, or the words would be split by fallback.
+        if !(0x21u32..0x7F).all(|cp| self.covers(fid, cp)) {
+            return;
+        }
+        let sa = dw.latin_script();
+        let em = entry.m.units_per_em.max(1.0);
+        let mut todo: Vec<(u64, Vec<u16>)> = Vec::new();
+        for w in words {
+            let units: Vec<u16> = w.encode_utf16().collect();
+            let key = word_key(fid, q.loc, sa, &units);
+            if self.words.contains_key(&key) || todo.last().is_some_and(|(k, _)| *k == key) {
+                continue;
+            }
+            todo.push((key, units));
+        }
+        let mut i = 0usize;
+        while i < todo.len() {
+            let mut j = i;
+            let mut n = 0usize;
+            while let Some((_, u)) = todo.get(j) {
+                if n + u.len() + 1 > BATCH_UNITS && j > i {
+                    break;
+                }
+                n += u.len() + 1;
+                j += 1;
+            }
+            let Some(part) = todo.get(i..j) else { return };
+            i = j;
+            let mut units: Vec<u16> = Vec::with_capacity(n);
+            let mut pos: Vec<usize> = Vec::with_capacity(part.len());
+            for (_, u) in part {
+                pos.push(units.len());
+                units.extend_from_slice(u);
+                units.push(WORD_SEP);
+            }
+            let t = Instant::now();
+            let sh = dw.shape(&units, &entry.face, PROBE, sa, &q.locale);
+            let us = t.elapsed().as_micros() as u64;
+            self.add_shape_time(us);
+            self.stats.us_batch += us;
+            self.stats.shape_calls += 1;
+            self.stats.batch_calls += 1;
+            let Some(sh) = sh else { continue };
+            for (k, (key, u)) in part.iter().enumerate() {
+                let Some(&start) = pos.get(k) else { break };
+                let end = start + u.len();
+                let (Some(&g0), Some(&g1)) = (sh.cluster_map.get(start), sh.cluster_map.get(end)) else { continue };
+                let (g0, g1) = (usize::from(g0), usize::from(g1));
+                // The separator is one glyph: the next word starts right after it (or the run ends).
+                let next = pos.get(k + 1).map_or(Some(sh.glyphs.len()), |&p| sh.cluster_map.get(p).map(|&g| usize::from(g)));
+                if g0 >= g1 || next != Some(g1 + 1) || sh.cluster_map.get(start..end).is_none_or(|m| m.iter().any(|&g| !(g0..g1).contains(&usize::from(g)))) {
+                    continue;
+                }
+                let (Some(glyphs), Some(advances), Some(offsets), Some(map)) = (sh.glyphs.get(g0..g1), sh.advances.get(g0..g1), sh.offsets.get(g0..g1), sh.cluster_map.get(start..end)) else { continue };
+                let (Some(&last_g), Some(&last_adv)) = (glyphs.last(), advances.last()) else { continue };
+                let design = entry.face.design_advance(last_g).map_or(f32::NAN, |a| a as f32 * PROBE / em);
+                let close = (last_adv - design).abs() < 0.01; // false for NaN too
+                if !close {
+                    continue;
+                }
+                let shaped = Shaped { glyphs: glyphs.to_vec(), cluster_map: map.iter().map(|&g| g - g0 as u16).collect(), advances: advances.to_vec(), offsets: offsets.to_vec() };
+                if self.words.len() > 60_000 {
+                    self.words.clear();
+                }
+                self.words.insert(*key, WordEntry { fid, loc: q.loc, script: sa.script, shapes: sa.shapes, units: u.as_slice().into(), shaped: Rc::new(shaped) });
+                self.stats.word_prefetched += 1;
+            }
+        }
+    }
+
+    /// Shape one script run word by word, the way Blink's word cache does: the text is cut at every
+    /// U+0020, each word and each space is shaped alone (at `PROBE` size, scaled afterwards) and
+    /// remembered by (font, locale, script, text). Kerning between a word and the space next to it is
+    /// lost, as in Chrome. Runs the platform cannot shape become missing-glyph boxes.
+    #[allow(clippy::too_many_arguments)]
+    fn shape_words(&mut self, dw: &Factory, q: &QueryInfo, fid: u32, entry: &FontEntry, sub: &[u16], sa: ScriptAnalysis, size: f32, base: usize, map: &[u32], out: &mut Vec<Glyph>) {
+        let mut i = 0usize;
+        while i < sub.len() {
+            let j = if sub.get(i) == Some(&0x20) { i + 1 } else { sub.get(i..).and_then(|r| r.iter().position(|&u| u == 0x20)).map_or(sub.len(), |p| i + p) };
+            let Some(word) = sub.get(i..j) else { return };
+            let key = word_key(fid, q.loc, sa, word);
+            let hit = self.words.get(&key).filter(|w| w.fid == fid && w.loc == q.loc && w.script == sa.script && w.shapes == sa.shapes && *w.units == *word).map(|w| Rc::clone(&w.shaped));
+            let shaped = match hit {
+                Some(sh) => {
+                    self.stats.word_hits += 1;
+                    Some(sh)
+                }
+                None => {
+                    self.stats.word_misses += 1;
+                    let t = Instant::now();
+                    let sh = dw.shape(word, &entry.face, PROBE, sa, &q.locale).map(Rc::new);
+                    self.add_shape_time(t.elapsed().as_micros() as u64);
+                    self.stats.shape_calls += 1;
+                    if let Some(sh) = &sh {
+                        if self.words.len() > 60_000 {
+                            self.words.clear();
+                        }
+                        self.words.insert(key, WordEntry { fid, loc: q.loc, script: sa.script, shapes: sa.shapes, units: word.into(), shaped: Rc::clone(sh) });
+                    }
+                    sh
+                }
+            };
+            match shaped {
+                Some(sh) => emit_run(out, fid, &sh, base + i, j - i, map, size / PROBE),
+                None => notdef_run(out, fid, base + i, base + j, map, size),
+            }
+            i = j;
+        }
+    }
+
     /// Script runs of `seg[from..to]`, each shaped with the font of `entry`.
     #[allow(clippy::too_many_arguments)]
     fn shape_complex(&mut self, dw: &Factory, q: &QueryInfo, fid: u32, entry: &FontEntry, seg: &[u16], from: usize, to: usize, base: usize, map: &[u32], size: f32, out: &mut Vec<Glyph>) {
@@ -594,6 +903,7 @@ impl Inner {
         let t = Instant::now();
         let runs = if ascii { vec![(0u32, seg.len() as u32, dw.latin_script())] } else { dw.analyze_script(seg, &q.locale) };
         self.stats.us_analyze += t.elapsed().as_micros() as u64;
+        self.stats.analyze_calls += u64::from(!ascii);
         let mut cursor = 0usize;
         for (ps, pl, sa) in runs {
             let (ps, pl) = (ps as usize, pl as usize);
@@ -604,12 +914,8 @@ impl Inner {
             let mut s = ps.max(cursor);
             while s < end {
                 let e = if s + MAX_RUN_UNITS >= end { end } else { run_cut(seg, s, s + MAX_RUN_UNITS) };
-                let t = Instant::now();
-                let shaped = seg.get(s..e).and_then(|sub| dw.shape(sub, &entry.face, size, sa, &q.locale));
-                self.stats.us_shape += t.elapsed().as_micros() as u64;
-                match shaped {
-                    Some(sh) => emit_run(out, fid, &sh, base + s, e - s, map),
-                    None => notdef_run(out, fid, base + s, base + e, map, size),
+                if let Some(sub) = seg.get(s..e) {
+                    self.shape_words(dw, q, fid, entry, sub, sa, size, base + s, map, out);
                 }
                 s = e;
             }
@@ -675,7 +981,8 @@ fn decode_unit(units: &[u16], i: usize) -> (u32, usize) {
 /// Glyphs of one shaped run. `start`/`len` locate the run in the paragraph's UTF-16 units; `map`
 /// turns unit positions into byte offsets. A cluster is a stretch of text whose cluster-map values
 /// are equal; it owns the glyphs from its value up to the next cluster's value.
-fn emit_run(out: &mut Vec<Glyph>, fid: u32, sh: &Shaped, start: usize, len: usize, map: &[u32]) {
+/// `scale` multiplies advances and offsets (the run was shaped at another size).
+fn emit_run(out: &mut Vec<Glyph>, fid: u32, sh: &Shaped, start: usize, len: usize, map: &[u32], scale: f32) {
     let gcount = sh.glyphs.len();
     let mut i = 0usize;
     while i < len {
@@ -692,9 +999,9 @@ fn emit_run(out: &mut Vec<Glyph>, fid: u32, sh: &Shaped, start: usize, len: usiz
             out.push(Glyph {
                 font: FontId(fid),
                 glyph: sh.glyphs.get(g).map_or(0, |&v| u32::from(v)),
-                advance: sh.advances.get(g).copied().unwrap_or(0.0),
-                offset_x: ox,
-                offset_y: -oy,
+                advance: sh.advances.get(g).copied().unwrap_or(0.0) * scale,
+                offset_x: ox * scale,
+                offset_y: -oy * scale,
                 cluster_start: cs,
                 cluster_end: ce,
             });
@@ -767,10 +1074,19 @@ impl Platform for WinPlatform {
             return g.to_vec();
         }
         inn.stats.shape_misses += 1;
+        let t_miss = Instant::now();
         let glyphs = inn.shape_uncached(&self.dw, text, qi, size);
+        inn.stats.us_miss += t_miss.elapsed().as_micros() as u64;
         let cost = text.len() + glyphs.len() * GLYPH_COST + 96;
         inn.shape_cache.insert(key, ShapeEntry { qi, size_bits, text: text.into(), glyphs: glyphs.as_slice().into() }, cost);
         glyphs
+    }
+
+    fn prefetch(&self, chars: &str, words: &[&str], query: &FontQuery<'_>) {
+        let mut inn = self.inner.borrow_mut();
+        let qi = inn.query_index(&self.dw, query);
+        inn.prefetch_chars(&self.dw, qi, chars);
+        inn.prefetch_words(&self.dw, qi, words);
     }
 
     fn line_breaks(&self, text: &str, lang: Option<&str>) -> Vec<usize> {
@@ -790,7 +1106,13 @@ impl Platform for WinPlatform {
                 map.push(bi as u32);
             }
         }
+        let t_br = Instant::now();
         let bits = self.dw.analyze_line_breaks(&u16s, &locale);
+        {
+            let mut inn = self.inner.borrow_mut();
+            inn.stats.us_breaks += t_br.elapsed().as_micros() as u64;
+            inn.stats.break_calls += 1;
+        }
         if bits.len() != u16s.len() {
             return Vec::new();
         }

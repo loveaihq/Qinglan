@@ -106,6 +106,13 @@ pub trait Platform {
     /// other fonts for characters the primary font lacks. No letter- or word-spacing is applied.
     fn shape(&self, text: &str, query: &FontQuery<'_>, size_px: f32) -> Vec<Glyph>;
 
+    /// A hint before layout: `chars` are the distinct non-ASCII characters of a page that will be
+    /// shaped with `query`, and `words` its distinct ASCII words (maximal runs of printable ASCII
+    /// without space), both in order of first appearance. A platform may shape them in bulk now, which
+    /// is cheaper than one call per character or word later. It must not change what `shape` returns;
+    /// the default does nothing.
+    fn prefetch(&self, _chars: &str, _words: &[&str], _query: &FontQuery<'_>) {}
+
     /// Soft line-break opportunities of a whole paragraph (UAX #14): ascending byte offsets
     /// `o` (0 < o < `text.len()`) such that a line may end before `text[o..]`. No CSS is applied
     /// here: the engine adds `word-break`, `overflow-wrap` and `white-space` on top.

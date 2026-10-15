@@ -394,3 +394,100 @@ fn long_runs_are_not_cut_inside_a_cluster() {
         assert!(g.iter().all(|x| !(x.cluster_start == e_mark.end - 2 && x.cluster_end == e_mark.end)), "{filler:?}: the mark has a cluster of its own");
     }
 }
+
+/// Shaping the context-free characters in bulk (`prefetch`) gives the same glyph, advance and cluster
+/// as shaping each one alone, for the CJK ideographs, kana, Hangul, CJK and full-width punctuation, in
+/// several fonts and languages. (The combining marks of those blocks are not context-free and are left out;
+/// the same characters in the same order go through both platforms, because the fallback font a
+/// character gets can depend on which fallback fonts were chosen before it.)
+#[test]
+fn bulk_shaping_matches_single() {
+    let ranges: &[(u32, u32)] = &[(0x3000, 0x303F), (0x3040, 0x30FF), (0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xAC00, 0xD7A3), (0xF900, 0xFAFF), (0xFF01, 0xFF60), (0x20000, 0x2A6DF)];
+    let configs: [(Vec<FontFamily>, &str, usize); 5] = [
+        (sans(), "zh-Hans", 1),
+        (sans(), "ja", 5),
+        (sans(), "ko", 5),
+        (generic(GenericFamily::Serif), "zh-Hant", 5),
+        (named("Microsoft YaHei"), "zh-Hans", 5),
+    ];
+    for (fam, lang, step) in &configs {
+        let chars: Vec<char> = ranges.iter().flat_map(|&(a, b)| (a..=b).step_by(*step)).filter(|c| !matches!(c, 0x302A..=0x302F | 0x3099..=0x309A)).filter_map(char::from_u32).collect();
+        let all: String = chars.iter().collect();
+        let (single, bulk) = (plat(), plat());
+        bulk.prefetch(&all, &[], &q(fam, Some(lang)));
+        let stats = bulk.cache_stats();
+        assert!(stats.batch_chars as usize > chars.len() / 2, "{lang}: only {} of {} characters were shaped in bulk", stats.batch_chars, chars.len());
+        for c in chars {
+            let s = c.to_string();
+            let a = single.shape(&s, &q(fam, Some(lang)), 16.0);
+            let b = bulk.shape(&s, &q(fam, Some(lang)), 16.0);
+            // FontIds are numbered in the order the platform meets the fonts, so compare the families.
+            assert_eq!(a.len(), b.len(), "{lang}: U+{:04X}", c as u32);
+            for (x, y) in a.iter().zip(&b) {
+                let same = (x.glyph, x.advance.to_bits(), x.offset_x.to_bits(), x.offset_y.to_bits(), x.cluster_start, x.cluster_end) == (y.glyph, y.advance.to_bits(), y.offset_x.to_bits(), y.offset_y.to_bits(), y.cluster_start, y.cluster_end);
+                assert!(same && single.family_name(x.font) == bulk.family_name(y.font), "{lang}: U+{:04X}: {x:?} vs {y:?}", c as u32);
+            }
+        }
+        assert_eq!(single.cache_stats().batch_calls, 0);
+    }
+}
+
+/// Words are shaped once and reused, also at another size (advances scale linearly).
+#[test]
+fn words_are_cached_and_scale_with_the_size() {
+    let p = plat();
+    let f = sans();
+    let a = p.shape("the quick brown fox the", &q(&f, Some("en")), 16.0);
+    let s1 = p.cache_stats();
+    assert!(s1.word_hits >= 2, "the second \"the\" and the repeated spaces are cache hits: {s1:?}");
+    let b = p.shape("the quick brown fox the", &q(&f, Some("en")), 24.0);
+    let s2 = p.cache_stats();
+    assert_eq!(s2.word_misses, s1.word_misses, "no new words at another size");
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(&b) {
+        assert_eq!((x.glyph, x.cluster_start, x.cluster_end), (y.glyph, y.cluster_start, y.cluster_end));
+        assert!((x.advance * 1.5 - y.advance).abs() < 0.01, "{} {}", x.advance, y.advance);
+    }
+    // Spaces are glyphs of their own and the clusters cover the text.
+    assert_eq!(a.last().unwrap().cluster_end as usize, "the quick brown fox the".len());
+}
+
+/// ASCII words shaped in bulk (`prefetch`) are exactly the words shaped one at a time (same glyphs, the
+/// same advances to the bit), in several fonts, including words with kerning pairs such as "AV" and "To".
+#[test]
+fn bulk_word_shaping_matches_single() {
+    let mut words: Vec<String> = ["AV", "To", "Yo", "WAVE", "Typography", "fi", "ffl", "office", "1990", "(2011)", "http://example.org/a_b?c=d&e=f", "T.", "Y-", "LTA", "r.", "v,", "AT&T", "{}", "~"]
+        .iter()
+        .map(|w| w.to_string())
+        .collect();
+    // A few thousand pseudo-random words over the printable ASCII range.
+    let mut x = 12345u32;
+    for _ in 0..4000 {
+        x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+        let len = 1 + (x >> 28) as usize;
+        let mut w = String::new();
+        for _ in 0..len {
+            x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+            w.push(char::from(0x21 + ((x >> 24) % 94) as u8));
+        }
+        words.push(w);
+    }
+    words.sort();
+    words.dedup();
+    let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+    for (fam, lang) in [(sans(), "en"), (generic(GenericFamily::Serif), "en"), (generic(GenericFamily::Monospace), "en"), (named("Arial"), "en"), (named("Microsoft YaHei"), "zh-Hans")] {
+        let (single, bulk) = (plat(), plat());
+        bulk.prefetch("", &refs, &q(&fam, Some(lang)));
+        let stats = bulk.cache_stats();
+        assert!(stats.word_prefetched as usize > refs.len() / 2, "{lang}: only {} of {} words were taken from the bulk call", stats.word_prefetched, refs.len());
+        for w in &refs {
+            let a = single.shape(w, &q(&fam, Some(lang)), 16.0);
+            let b = bulk.shape(w, &q(&fam, Some(lang)), 16.0);
+            assert_eq!(a.len(), b.len(), "{w:?}");
+            for (x, y) in a.iter().zip(&b) {
+                assert!((x.glyph, x.advance.to_bits(), x.offset_x.to_bits(), x.cluster_start, x.cluster_end) == (y.glyph, y.advance.to_bits(), y.offset_x.to_bits(), y.cluster_start, y.cluster_end), "{w:?}: {x:?} vs {y:?}");
+            }
+        }
+        assert_eq!(bulk.cache_stats().word_misses, 0, "every word came from the bulk call");
+    }
+}

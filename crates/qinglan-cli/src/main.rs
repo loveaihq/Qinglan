@@ -130,15 +130,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let win;
+    let win = if test_font { None } else { WinPlatform::new() };
     let platform: &dyn Platform = if test_font {
         &TestPlatform
     } else {
-        match WinPlatform::new() {
-            Some(p) => {
-                win = p;
-                &win
-            }
+        match &win {
+            Some(p) => p,
             None if cmd == "dom" => &BasicPlatform,
             None => {
                 eprintln!("error: DirectWrite is not available; use --test-font");
@@ -207,6 +204,9 @@ fn main() -> ExitCode {
                 let (count, samples) = count_notdef(&res);
                 eprintln!("style {:.1} ms, layout {:.1} ms", (t_style - t_parse).as_secs_f64() * 1000.0, (t_layout - t_style).as_secs_f64() * 1000.0);
                 eprintln!(".notdef glyphs after fallback: {count}{}", if count > 0 { format!(" (first characters: {samples})") } else { String::new() });
+                if let Some(w) = &win {
+                    eprintln!("{}", w.cache_stats().report());
+                }
             }
         }
         _ => return usage(),

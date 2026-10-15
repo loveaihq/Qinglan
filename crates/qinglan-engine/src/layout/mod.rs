@@ -337,6 +337,7 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
         text_left: (opts.work_budget / 2).min(MAX_SHAPED_CHARS),
         truncated: false,
     };
+    l.prefetch_text();
     l.layout_root();
     let (boxes, lines, fragments, glyphs, texts, decorations, markers, oof, work, incomplete) =
         (l.out, l.lines, l.fragments, l.glyphs, l.texts, l.decorations, l.markers, l.oof_list, l.work, l.exhausted || l.truncated);
