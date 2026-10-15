@@ -25,6 +25,14 @@ pub struct Frame {
 
 impl Frame {
     /// A transparent black frame. Sizes are the caller's to bound (`render --full` caps them).
+    /// Make this frame `width` x `height` pixels, reusing the allocation when it is big enough. The contents are
+    /// not meaningful afterwards (`render_frame` and `render_band` overwrite every pixel).
+    pub fn set_size(&mut self, width: u32, height: u32) {
+        self.width = width;
+        self.height = height;
+        self.data.resize(width as usize * height as usize * 4, 0);
+    }
+
     pub fn new(width: u32, height: u32) -> Frame {
         Frame { width, height, data: vec![0; width as usize * height as usize * 4] }
     }
@@ -126,8 +134,16 @@ struct Ctx<'a> {
 /// the band `scroll_y ..` (found through the index), then the other fixed items. The frame is `dpr` times the size
 /// of the viewport in CSS px.
 pub fn render_frame(list: &DisplayList, platform: &dyn Platform, images: &mut dyn ImageSource, view: View, frame: &mut Frame) -> RasterStats {
+    render_band(list, platform, images, view, 0, frame)
+}
+
+/// Draw rows `y0 ..` (device pixels from the top of the viewport) of the viewport into `frame`, whose height is the
+/// number of rows wanted: a window can draw and copy the viewport a band at a time and so needs a buffer of a band,
+/// not of the whole viewport. The pixels are the same as the same rows of [`render_frame`].
+pub fn render_band(list: &DisplayList, platform: &dyn Platform, images: &mut dyn ImageSource, view: View, y0: u32, frame: &mut Frame) -> RasterStats {
     let dpr = f64::from(view.dpr).clamp(0.25, 8.0);
-    let sy = (f64::from(view.scroll_y.max(0.0)) * dpr).round().min(1.0e9) as i32;
+    let band = y0.min(1 << 30) as i32;
+    let sy = (f64::from(view.scroll_y.max(0.0)) * dpr).round().min(1.0e9) as i32 + band;
     let (w, h) = (frame.width as i32, frame.height as i32);
     let bounds = IRect { x0: 0, y0: 0, x1: w, y1: h };
     let canvas = list.canvas.unwrap_or(Color::WHITE);
@@ -139,13 +155,14 @@ pub fn render_frame(list: &DisplayList, platform: &dyn Platform, images: &mut dy
     for p in frame.data.as_chunks_mut::<4>().0 {
         *p = px;
     }
-    let mut cx = Ctx { list, platform, images, dpr, sy: 0, bounds, stats: RasterStats::default() };
+    let mut cx = Ctx { list, platform, images, dpr, sy: band, bounds, stats: RasterStats::default() };
     for it in list.fixed.iter().take(list.fixed_below) {
         cx.item(frame, it);
     }
     cx.sy = sy;
-    let top = LU::from_f32(view.scroll_y.max(0.0));
-    let bottom = LU::from_f32(view.scroll_y.max(0.0) + (h as f32 / dpr as f32) + 1.0);
+    let top_css = view.scroll_y.max(0.0) + (f64::from(band) / dpr) as f32;
+    let top = LU::from_f32(top_css);
+    let bottom = LU::from_f32(top_css + (h as f32 / dpr as f32) + 1.0);
     let mut idx = Vec::new();
     list.query(top, bottom, &mut idx);
     for &i in &idx {
@@ -153,7 +170,7 @@ pub fn render_frame(list: &DisplayList, platform: &dyn Platform, images: &mut dy
             cx.item(frame, it);
         }
     }
-    cx.sy = 0;
+    cx.sy = band;
     for it in list.fixed.iter().skip(list.fixed_below) {
         cx.item(frame, it);
     }

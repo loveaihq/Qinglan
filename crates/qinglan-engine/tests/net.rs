@@ -255,8 +255,12 @@ fn documents_and_styles_jump_the_image_queue() {
 #[test]
 fn cache_serves_history_and_respects_budget() {
     let fake = Fake::new(0, |req| {
-        let big = req.url.pathname().starts_with("/big");
-        let mut r = resp(&req.url, if req.url.pathname() == "/missing" { 404 } else { 200 }, Some("text/html"), &vec![b'x'; if big { 7 * 1024 * 1024 } else { 10 }]);
+        let size = match req.url.pathname().as_str() {
+            p if p.starts_with("/big") => 900 * 1024,
+            "/huge" => 3 * 512 * 1024,
+            _ => 10,
+        };
+        let mut r = resp(&req.url, if req.url.pathname() == "/missing" { 404 } else { 200 }, Some("text/html"), &vec![b'x'; size]);
         if req.url.pathname() == "/nostore" {
             r.headers.push(("Cache-Control".into(), "private, No-Store".into()));
         }
@@ -279,13 +283,15 @@ fn cache_serves_history_and_respects_budget() {
     assert!(!get(&mut loader, "/nostore", true).from_cache, "no-store is not kept");
     get(&mut loader, "/missing", false);
     assert!(!get(&mut loader, "/missing", true).from_cache, "errors are not kept");
-    for i in 0..4 {
+    get(&mut loader, "/huge", false);
+    assert!(!get(&mut loader, "/huge", true).from_cache, "a response over 1 MB is not kept");
+    for i in 0..12 {
         get(&mut loader, &format!("/big{i}"), false);
     }
     let bytes = loader.cache().bytes();
-    assert!(bytes <= 16 * 1024 * 1024, "cache holds {bytes} bytes");
-    assert!(bytes >= 7 * 1024 * 1024);
-    assert!(get(&mut loader, "/big3", true).from_cache, "the newest big page is still there");
+    assert!(bytes <= 8 * 1024 * 1024, "cache holds {bytes} bytes");
+    assert!(bytes >= 6 * 1024 * 1024);
+    assert!(get(&mut loader, "/big11", true).from_cache, "the newest big page is still there");
     assert!(!get(&mut loader, "/big0", true).from_cache, "the oldest was evicted");
 }
 

@@ -63,11 +63,11 @@ impl Layouter<'_> {
         let bx = self.tree.get(id);
         let attr = |name: &str| self.doc.atoms.lookup(name).and_then(|a| self.doc.attr(bx.node, a)).and_then(parse_html_int);
         let mut n = Natural { w: None, h: None, ratio: None, default_w: 300.0, default_h: 150.0 };
-        match bx.replaced {
+        match bx.replaced() {
             Some(ReplacedKind::Image) => {
                 n.default_w = 0.0;
                 n.default_h = 0.0;
-                match (self.images.get(bx.node), &bx.image) {
+                match (self.images.get(bx.node), bx.image()) {
                     (Some(ImageState::Loaded { width, height }), Some(src)) => {
                         let d = (src.density as f64).max(0.0001);
                         let (w, h) = (width as f64 / d, height as f64 / d);

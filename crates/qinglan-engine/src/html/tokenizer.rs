@@ -349,7 +349,9 @@ impl Tokenizer {
         } else {
             self.last_start_tag.clear();
             self.last_start_tag.push_str(&self.tag_name);
-            let attrs = std::mem::take(&mut self.tag_attrs);
+            // Exactly sized: a pushed-to Vec would keep room for four attributes in every element, for the life of the page.
+            let mut attrs: Vec<Attribute> = Vec::with_capacity(self.tag_attrs.len());
+            attrs.extend(self.tag_attrs.drain(..));
             self.queue.push_back(Token::StartTag(TagToken { name, attrs, self_closing: self.tag_self_closing }));
         }
     }

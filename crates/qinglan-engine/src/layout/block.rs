@@ -391,10 +391,10 @@ impl Layouter<'_> {
         let bs = &bx.style.boxs;
         let mut content_h_auto = content_h_auto;
         // Text fields, selects and text areas are at least their rows high.
-        if !matches!(bx.control, Control::None) {
+        if !matches!(bx.control(), Control::None) {
             let rf = self.font_for(&bx.style);
             let line_h = rf.asc + rf.desc + rf.lead_top + rf.lead_bottom;
-            content_h_auto = match bx.control {
+            content_h_auto = match bx.control() {
                 Control::TextArea(_, rows) => LU::from_raw(line_h.raw() as i64 * rows as i64),
                 _ => content_h_auto.max(line_h),
             };
@@ -406,14 +406,14 @@ impl Layouter<'_> {
         let w = g.content_w + g.h_extra;
         let h = content_h + g.v_extra;
         let clip = bx.force_clip
-            || matches!(bx.control, Control::TextArea(..))
+            || matches!(bx.control(), Control::TextArea(..))
             || matches!(bs.overflow_x, Overflow::Hidden | Overflow::Clip)
             || matches!(bs.overflow_y, Overflow::Hidden | Overflow::Clip);
         if let Some(o) = self.out.get_mut(id as usize) {
             let (lines, marker) = (o.lines, o.marker);
             *o = BoxOut { x: o.x, y: o.y, w, h, clip, lines, marker };
         }
-        if bx.ordinal.is_some() {
+        if bx.ordinal().is_some() {
             self.layout_marker(id, content_top);
         }
     }
@@ -450,7 +450,7 @@ impl Layouter<'_> {
     /// plus its suffix, shaped in the item's font.
     pub(super) fn marker_shape(&mut self, id: BoxId) -> Option<(String, Vec<crate::platform::Glyph>, LU)> {
         let bx = self.tree.get(id);
-        let text = super::lists::marker_text(&bx.style.text.list_style_type, bx.ordinal?)?;
+        let text = super::lists::marker_text(&bx.style.text.list_style_type, bx.ordinal()?)?;
         let rf = self.font_for(&bx.style);
         let f = &bx.style.font;
         let q = FontQuery { families: &f.family, weight: f.weight, slant: slant_of(f.style), lang: bx.style.text.lang.as_deref() };

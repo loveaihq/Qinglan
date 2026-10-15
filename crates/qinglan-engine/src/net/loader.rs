@@ -280,6 +280,13 @@ impl Loader {
                 // A transport that forgot the cap is still held to it.
                 let result = match fetched {
                     Ok(r) if r.body.len() > max_bytes => Err(NetError::TooLarge { limit: max_bytes }),
+                    Ok(mut r) => {
+                        // The engine reads two response headers; a real server sends twenty or thirty, and each
+                        // pair is two heap blocks held for as long as the response is cached.
+                        r.headers.retain(|(n, _)| n.eq_ignore_ascii_case("content-type") || n.eq_ignore_ascii_case("cache-control"));
+                        r.headers.shrink_to_fit();
+                        Ok(r)
+                    }
                     other => other,
                 };
                 let _ = tx.send(Done { ticket: q.ticket, generation, url: q.url, host: q.host, result });

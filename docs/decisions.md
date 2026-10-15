@@ -572,3 +572,25 @@
 - `#片段`的第一屏要"排到目标再多一屏"（见上，偏离）；`overflow` 裁剪里的链接命中；`WM_DPICHANGED` 在多显示器上的实测；Ctrl+滚轮缩放（第 1 层没有）；表单控件交互（第 1 层没有）；窗口位置/大小不记忆；工具栏按钮没有提示文字。
 - 内存和体积目标没达标（见上）；真实网页库的中位数/最大内存是 1c-3 的事。
 - 开放问题：①内存 50 MB 目标是否按"滚到底、所有图片都请求过"算（这里是）；②冷首屏时钟在没有流式解析器时的定义（这里取"忙的时间之和"，同时给墙钟）；③dpr 1.5 的 1920×1080 CSS 像素是否就是验收说的"150%"（这里是，比物理 1920×1080 屏幕的 150% 重 2.25 倍）。
+
+## 第 1 层 · 1c-2c 内存和体积（2026-10-16）
+
+### 怎么量
+
+- `qinglan.exe --bench ... --mem` / `qinglan-cli bench ... --mem`：开计数分配器（`qinglan-win/src/sys/alloc.rs`，`System` 的包装，`unsafe` 只在 `sys/`，没开时每次分配多一次 relaxed 读）。不带 `--mem` 的 bench 不计数，时间数字用它的。带 `--mem` 时按"把它丢掉、看活堆缩了多少"给出各部分字节数（`mem-*`，`-blocks` 是块数），再加 DOM 内部拆分、布局各数组、Windows 堆的 `allocated/committed`（`HeapSummary`）、各阶段 `PrivateUsage`、全部丢完后的 `PrivateUsage`。
+- 结论：私有内存 ≈ 堆里 committed（比我们要的多 13–14 MB：每块约 16 字节头 + 释放后不还给系统的空闲块 + 峰值）+ 约 3 MB 非堆。`HeapCompact` 试过，没有效果，没留。
+
+### 改了什么（zhwiki-rec，1920×1080，滚到底，私有内存 83.6 → 49.1 MB，十进制 MB）
+
+- 整页布局 23.3 → 6.9 MB：`LayoutBox` 把少见字段（`replaced/control/synth/ordinal/image`）放进 `Option<Box<Rare>>`（160 → 约 72 字节）；布局完成时对保留的数组 `shrink_to_fit`；显示列表建好后 `LayoutResult::release_text_data()` 丢掉 `glyphs`/`texts`（只有建显示列表和 dump 读它们；命中测试和滚动锚定用盒子/行/碎片）。
+- 帧缓冲 8.3 → 2.1 MB：窗口按条带画（`render_band`，条带 ≤ 2 MiB，1080p 四条）再逐条 `SetDIBitsToDevice`（`blit_at`）；像素和整帧逐像素相同（`paint.rs` 里有测试）。窗口里本来没有第二块全尺寸缓冲，所以没有"直接画进 DIB section"可省的；DIB section 的内存不算在私有字节里，那样只是挪出统计，没做。条带更小（0.5 MiB，16 条）窗口里每帧慢约 10%，所以取 2 MiB。
+- DOM+样式表 10.2 → 7.5 MB：标签的属性数组按实际个数分配（原来每个元素留 4 个的位置）；解析完 `nodes.shrink_to_fit()`。
+- 显示列表 5.0 → 4.1 MB：建完 `shrink_to_fit`。
+- 响应缓存：预算 16 → 8 MB，**单个响应 > 1 MB 不存**（zhwiki 的页面本身 2.4 MB，比其余加起来还大；后退到这么大的页面要重新取）；加载器只留 `Content-Type`、`Cache-Control` 两个头（引擎只读这两个；真实服务器发二三十个头，每个两块堆）。zhwiki 的样式表和图片共 2.6 MB。
+- 缓存预算：字形遮罩 8 → 1.5 MB，排版整形 8 → 1 MB，词表上限 6 万 → 3 万词，解码图片 24 → 12 MB（zhwiki 滚完峰值 3.8 MB）。
+- 没改：响应缓存里的图片压缩字节（回滚要用）、DOM 属性值的单独堆块（8.98 万块，换成共用池要动 DOM 接口）。
+
+### 体积
+
+- 没达标：release `qinglan.exe` 1 971 200 → 2 148 864 字节（比 1.5 MiB 多 576 KB）。这一轮加的东西（分配器包装、`--mem` 的统计代码、条带绘制、`Rare` 访问器）让代码多了约 177 KB，没来得及拿回来。
+- 试过：`qinglan-win` 用 "s"、引擎用 opt-level 2：2 096 640（只省 51 KB），窗口里滚动中位数慢 8%，没采用。非 LTO 构建的链接映射（/MAP，v0 名字，脚本按模块累加）：.text 1.6 MB，其中 `qinglan_engine` 650 KB（`html::tokenizer::step` 42 KB、`layout::inline` 44、`css::parse_prop` 48、`cascade` 42、`selector` 34）、core 198（`drop_glue` 77）、std 112（`process::spawn` 24、mpmc 21）、hashbrown 90、alloc 97；.rdata 约 370 KB。要到 1.5 MiB 得把引擎里冷的部分（net、encoding、url、css 的属性解析）拆成单独的 crate 用 "s"，或者去掉 `--mem` 统计代码（用 feature 关掉），这一轮没做。

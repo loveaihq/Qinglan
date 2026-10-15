@@ -111,6 +111,7 @@ pub struct TreeBuilder {
 pub fn parse_document(input: String) -> Document {
     let mut tb = TreeBuilder::new(input);
     tb.run();
+    tb.doc.nodes.shrink_to_fit();
     tb.doc
 }
 

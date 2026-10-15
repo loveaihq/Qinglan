@@ -4,6 +4,7 @@
 //! The rest of the crate sees only the safe wrappers exported from here.
 #![allow(non_snake_case, non_camel_case_types, clippy::upper_case_acronyms)]
 
+pub mod alloc;
 pub mod dwrite;
 pub mod wic;
 pub mod winhttp;

@@ -535,7 +535,12 @@ impl Ui {
 
     /// Copy a top-down BGRA picture of `width` x `height` pixels to the page area.
     pub fn blit(&self, width: u32, height: u32, bgra: &[u8]) -> bool {
-        w::blit(state().page, width, height, bgra)
+        w::blit(state().page, 0, width, height, bgra)
+    }
+
+    /// Like [`Ui::blit`], with the picture's top row at row `y` of the page area (a band of the page).
+    pub fn blit_at(&self, y: u32, width: u32, height: u32, bgra: &[u8]) -> bool {
+        w::blit(state().page, y, width, height, bgra)
     }
 
     /// Wait until the drawing done so far has reached the window (for timing).

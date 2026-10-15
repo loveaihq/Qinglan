@@ -28,7 +28,17 @@ use qinglan_engine::net::replay::ReplayTransport;
 use qinglan_win::WinHttpTransport;
 use qinglan_win::window::{self, Waker};
 
+// Counts live heap bytes in `--bench --mem` runs (the memory breakdown); costs a relaxed load otherwise.
+#[global_allocator]
+static ALLOC: qinglan_win::CountingAlloc = qinglan_win::CountingAlloc;
+
 fn main() -> ExitCode {
+    // `--bench ... --mem` also prints what each structure holds; counting every allocation costs a little time, so
+    // the timings of a run without `--mem` are the ones to compare.
+    let flags: Vec<String> = std::env::args().collect();
+    if flags.iter().any(|a| a == "--bench") && flags.iter().any(|a| a == "--mem") {
+        qinglan_win::count_heap();
+    }
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let opts = match args::parse(&argv) {
         Ok(o) => o,

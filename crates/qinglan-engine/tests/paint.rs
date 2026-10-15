@@ -14,7 +14,7 @@ use qinglan_engine::html::treebuilder::parse_document;
 use qinglan_engine::layout::{LayoutOptions, LayoutResult, layout_document};
 use qinglan_engine::net::Response;
 use qinglan_engine::paint::images::{Band, ImageSource, ImageStore, NoBitmaps};
-use qinglan_engine::paint::raster::{Frame, View, render_frame};
+use qinglan_engine::paint::raster::{Frame, View, render_band, render_frame};
 use qinglan_engine::paint::{DisplayList, RasterStats, build_display_list, far_images, wanted_images};
 use qinglan_engine::platform::image::{DecodedImage, ImageDecoder, ImageError, ImageInfo};
 use qinglan_engine::platform::{BasicPlatform, Platform, TestPlatform};
@@ -447,4 +447,26 @@ fn decoded_bitmaps_far_away_are_dropped_and_come_back_from_the_cached_bytes() {
     let (f, stats) = draw(&page, 100, 200, 1.0, 0.0, &mut store);
     assert_eq!(stats.images, 1);
     expect(&f, &[(50, 50, RED), (50, 150, WHITE)]);
+}
+
+#[test]
+fn a_viewport_drawn_in_bands_is_the_same_picture() {
+    let html = "<body style=\"margin:0\"><div style=\"position:fixed;top:30px;left:10px;width:50px;height:20px;background:#00f\"></div>                <div style=\"height:40px;background:#f00\"></div><p style=\"margin:0;font-size:16px\">text text text text text</p>                <div style=\"height:900px;background:#0f0\"></div>";
+    for dpr in [1.0f32, 1.5] {
+        let page = lay(html, 200, 120, dpr, None);
+        for scroll in [0.0f32, 37.0, 64.0] {
+            let (whole, _) = draw(&page, 200, 120, dpr, scroll, &mut NoBitmaps);
+            let (w, h) = (whole.width, whole.height);
+            let mut data = Vec::new();
+            let mut y0 = 0;
+            while y0 < h {
+                let bh = 37.min(h - y0);
+                let mut band = Frame::new(w, bh);
+                render_band(&page.list, &TestPlatform, &mut NoBitmaps, View { scroll_y: scroll, dpr }, y0, &mut band);
+                data.extend_from_slice(&band.data);
+                y0 += bh;
+            }
+            assert!(data == whole.data, "bands differ from the whole frame at dpr {dpr}, scroll {scroll}");
+        }
+    }
 }

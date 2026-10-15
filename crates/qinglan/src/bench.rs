@@ -44,6 +44,12 @@ pub struct Bench {
     /// Layouts after the first whole-page one (images arriving, the window changing).
     pub relayouts: u32,
     pub error: Option<String>,
+    /// Private bytes at some points of the run: (name, bytes).
+    pub marks: Vec<(&'static str, u64)>,
+    /// The `mem-*` lines of the memory breakdown (see `Browser::memory_breakdown`).
+    pub breakdown: String,
+    /// The most decoded-image bytes held at any frame of the scroll.
+    pub peak_decoded: usize,
 }
 
 /// A phase measured two ways (see the module comment).
@@ -70,6 +76,9 @@ impl Bench {
             next_y: 0.0,
             relayouts: 0,
             error: None,
+            marks: Vec::new(),
+            breakdown: String::new(),
+            peak_decoded: 0,
         }
     }
 
@@ -146,9 +155,13 @@ impl Report<'_> {
         line("scroll-decode-ms", num(frames.then_some(b.decode_ms)));
         line("peak-private-bytes", self.memory.map_or_else(|| "n/a".to_string(), |m| m.1.to_string()));
         line("private-bytes-after-scroll", self.memory.map_or_else(|| "n/a".to_string(), |m| m.0.to_string()));
+        for (name, bytes) in &b.marks {
+            line(&format!("private-{name}-bytes"), bytes.to_string());
+        }
         if let Some(e) = &b.error {
             line("bench-error", e.clone());
         }
+        s.push_str(&b.breakdown);
         s
     }
 }

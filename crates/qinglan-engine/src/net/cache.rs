@@ -1,8 +1,9 @@
-//! The in-memory response cache for back/forward (L1 task 13): LRU, at most 16 MB of response bytes.
+//! The in-memory response cache for back/forward (L1 task 13): LRU, at most 8 MB of response bytes, none of them in
+//! one response over 1 MB.
 
 use std::sync::Arc;
 
-use super::{CACHE_BUDGET, Response};
+use super::{CACHE_BUDGET, CACHE_ENTRY_MAX, Response};
 use crate::lru::ByteLru;
 
 pub struct ResponseCache {
@@ -28,7 +29,7 @@ impl ResponseCache {
             return;
         }
         let no_store = resp.header("cache-control").is_some_and(|v| v.to_ascii_lowercase().contains("no-store"));
-        if no_store {
+        if no_store || resp.cost() > CACHE_ENTRY_MAX {
             return;
         }
         self.lru.insert(key, resp.clone(), resp.cost());

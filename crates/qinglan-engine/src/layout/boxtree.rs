@@ -111,15 +111,29 @@ pub struct LayoutBox {
     pub oof: bool,
     /// Document order of the element (pre-order); pieces of a split element share it.
     pub order: u32,
+    /// What only a few boxes have (replaced elements, controls, made-up text, list items), out of line so the
+    /// common box stays small. Read it through `replaced()`, `control()`, `synth()`, `ordinal()` and `image()`.
+    pub rare: Option<Box<Rare>>,
+    /// Content is clipped to the padding box regardless of `overflow` (text fields).
+    pub force_clip: bool,
+}
+
+/// The parts of a [`LayoutBox`] that most boxes do not have.
+#[derive(Clone, Debug)]
+pub struct Rare {
     pub replaced: Option<ReplacedKind>,
     pub control: Control,
     /// Text made up by layout (alt text, field values) instead of coming from a DOM text node.
     pub synth: Option<Rc<str>>,
     /// The number of a list item (shown in its marker).
     pub ordinal: Option<i32>,
-    /// Content is clipped to the padding box regardless of `overflow` (text fields).
-    pub force_clip: bool,
     pub image: Option<ImageSource>,
+}
+
+impl Default for Rare {
+    fn default() -> Self {
+        Rare { replaced: None, control: Control::None, synth: None, ordinal: None, image: None }
+    }
 }
 
 impl LayoutBox {
@@ -136,13 +150,33 @@ impl LayoutBox {
             split: SplitPart::default(),
             oof: false,
             order: 0,
-            replaced: None,
-            control: Control::None,
-            synth: None,
-            ordinal: None,
+            rare: None,
             force_clip: false,
-            image: None,
         }
+    }
+
+    pub fn replaced(&self) -> Option<ReplacedKind> {
+        self.rare.as_ref().and_then(|r| r.replaced)
+    }
+
+    pub fn control(&self) -> Control {
+        self.rare.as_ref().map_or(Control::None, |r| r.control)
+    }
+
+    pub fn synth(&self) -> Option<&Rc<str>> {
+        self.rare.as_ref().and_then(|r| r.synth.as_ref())
+    }
+
+    pub fn ordinal(&self) -> Option<i32> {
+        self.rare.as_ref().and_then(|r| r.ordinal)
+    }
+
+    pub fn image(&self) -> Option<&ImageSource> {
+        self.rare.as_ref().and_then(|r| r.image.as_ref())
+    }
+
+    fn rare_mut(&mut self) -> &mut Rare {
+        self.rare.get_or_insert_with(Box::default)
     }
 
     /// Is this box an atomic inline-level box (laid out as a unit inside a line)?
@@ -369,7 +403,7 @@ impl Builder<'_> {
         let style = Rc::new(ComputedStyle { text: Rc::new(t), ..(**base).clone() });
         let id = self.new_box(BoxKind::Text, NONE, style, true);
         if let Some(b) = self.box_mut(id) {
-            b.synth = Some(Rc::from(text));
+            b.rare_mut().synth = Some(Rc::from(text));
         }
         Out::Inline(id)
     }
@@ -567,7 +601,9 @@ impl Builder<'_> {
                         };
                         let id = self.new_box(bk, n, style, false);
                         if let Some(b) = self.box_mut(id) {
-                            b.control = ctl;
+                            if ctl != Control::None {
+                                b.rare_mut().control = ctl;
+                            }
                             b.force_clip = matches!(ctl, Control::TextInput(_) | Control::Select);
                             b.fallback = fallback;
                         }
@@ -593,7 +629,9 @@ impl Builder<'_> {
                         let id = self.new_box(bk, n, style, false);
                         if let Some(b) = self.box_mut(id) {
                             b.fallback = fallback;
-                            b.ordinal = ordinal;
+                            if ordinal.is_some() {
+                                b.rare_mut().ordinal = ordinal;
+                            }
                         }
                         self.set_order(id, order, oof);
                         self.finish_block(id, child_outs);
@@ -632,8 +670,9 @@ impl Builder<'_> {
         let oof = matches!(style.boxs.position, Position::Absolute | Position::Fixed);
         let id = self.new_box(BoxKind::Replaced, n, style, false);
         if let Some(b) = self.box_mut(id) {
-            b.replaced = Some(rk);
-            b.image = image;
+            let r = b.rare_mut();
+            r.replaced = Some(rk);
+            r.image = image;
         }
         self.set_order(id, order, oof);
         id
@@ -775,7 +814,7 @@ impl Builder<'_> {
         match b.kind {
             BoxKind::Text => {
                 let collapse = b.style.text.white_space_collapse;
-                if let Some(s) = &b.synth {
+                if let Some(s) = b.synth() {
                     return is_collapsible_whitespace(s, collapse);
                 }
                 self.doc.node(b.node).is_some_and(|n| match &n.data {

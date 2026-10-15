@@ -19,6 +19,7 @@ use qinglan_engine::paint::build_display_list;
 use qinglan_engine::platform::Platform;
 use qinglan_engine::url::Url;
 use qinglan_win::WicDecoder;
+use qinglan_win::memstats::{Breakdown, dom_parts, layout_parts};
 
 use crate::render::{self, MAX_ROUNDS, ms};
 
@@ -52,6 +53,7 @@ pub fn run(cx: Ctx<'_>, url: &Url, a: &BenchArgs) -> ExitCode {
     let (frame_w, frame_h) = ((a.width * dpr).round() as u32, (a.height * dpr).round() as u32);
     println!("bench-address: {}", url.href());
     println!("bench-viewport: {}x{} css px, dpr {dpr} ({frame_w}x{frame_h} device px)", a.width, a.height);
+    let mem_start = memory();
 
     // The page itself (the replay answers at once).
     let req = LoadRequest { url: url.clone(), kind: ResourceKind::Document, page: None, use_cache: false };
@@ -122,7 +124,7 @@ pub fn run(cx: Ctx<'_>, url: &Url, a: &BenchArgs) -> ExitCode {
     let band = Band::new(0.0, a.height);
     let mut rounds = 0;
     let (mut d_full_first, mut full_wall, mut d_images) = (Duration::ZERO, Duration::ZERO, Duration::ZERO);
-    let mut cx2 = render::Ctx { opened: &mut opened, res: &mut res, loader, platform, win: cx.win };
+    let mut cx2 = render::Ctx { opened: &mut opened, res: &mut res, loader: &mut *loader, platform, win: cx.win };
     let (layout, list) = loop {
         let t = Instant::now();
         let layout = layout_document_with(&cx2.opened.doc, &styled.tree, platform, &lopts, &sizes);
@@ -147,9 +149,9 @@ pub fn run(cx: Ctx<'_>, url: &Url, a: &BenchArgs) -> ExitCode {
     let full_layout = first_screen + d_full_first;
 
     // Scroll from the top to the bottom, 100 px a frame; raster only (no window to blit to).
-    let loader = cx2.loader;
     let mut frames: Vec<f64> = Vec::new();
     let mut decode = 0.0;
+    let mut peak_decoded = 0;
     let last = (list.height.to_f32() - a.height).max(0.0);
     let mut y = 0.0f32;
     loop {
@@ -157,6 +159,7 @@ pub fn run(cx: Ctx<'_>, url: &Url, a: &BenchArgs) -> ExitCode {
         let t = Instant::now();
         store.prepare(&list, band, dpr, &WicDecoder, &mut |u| loader.cache_mut().get(u));
         store.drop_far(&list, band);
+        peak_decoded = peak_decoded.max(store.bytes());
         decode += ms(t.elapsed());
         let t = Instant::now();
         render_frame(&list, platform, &mut store, View { scroll_y: y, dpr }, &mut frame);
@@ -194,7 +197,47 @@ pub fn run(cx: Ctx<'_>, url: &Url, a: &BenchArgs) -> ExitCode {
     println!("private-after-parse: {}", mib(mem_parse));
     println!("private-after-first-screen: {}", mib(mem_first));
     println!("private-after-full-layout-and-images: {}", mib(mem_layout));
-    if layout.incomplete {
+    println!("private-at-start: {}", mib(mem_start));
+    if !qinglan_win::heap_counting() {
+        return ExitCode::SUCCESS;
+    }
+    let (heap, heap_peak, allocs) = (qinglan_win::heap_live(), qinglan_win::heap_peak(), qinglan_win::heap_allocs());
+    let mut bd = Breakdown::default();
+    bd.note("heap-live", heap);
+    bd.note("heap-peak", heap_peak);
+    bd.note("allocations", allocs as usize);
+    bd.note("live-blocks", qinglan_win::heap_blocks());
+    bd.note("peak-decoded-images", peak_decoded);
+    bd.note("response-cache-accounted", loader.cache().bytes());
+    let incomplete = layout.incomplete;
+    let (nodes, text, attrs) = dom_parts(&opened.doc);
+    bd.note("dom-detail-node-array", nodes);
+    bd.note("dom-detail-text", text);
+    bd.note("dom-detail-attributes", attrs);
+    bd.note("dom-node-count", opened.doc.nodes.len());
+    for (name, count, bytes) in layout_parts(&layout) {
+        bd.note(&format!("layout-detail-{name}"), bytes);
+        bd.note(&format!("layout-count-{name}"), count);
+    }
+    bd.freed("display-list", || drop(list));
+    bd.freed("box-and-fragment-tree", || drop(layout));
+    bd.freed("computed-styles", || drop(styled));
+    bd.freed("decoded-images", || drop(store));
+    bd.freed("response-cache", || loader.cache_mut().clear());
+    bd.freed("parsed-sheets-and-resources", || drop(res));
+    if let Some(w) = cx.win {
+        let stats = w.cache_stats();
+        bd.note("shaping-cache-accounted", stats.shape_bytes);
+        bd.note("glyph-cache-accounted", stats.glyph_bytes);
+        bd.freed("shaping-cache", || w.clear_shape_cache());
+        bd.freed("glyph-cache", || w.clear_glyph_cache());
+        bd.freed("word-tables", || w.clear_word_caches());
+    }
+    bd.freed("dom", || drop(opened));
+    bd.freed("frame-buffers", || drop(frame));
+    print!("{}", bd.lines());
+    println!("private-after-teardown: {}", mib(memory()));
+    if incomplete {
         eprintln!("note: page too complex, only part of it is laid out");
     }
     ExitCode::SUCCESS

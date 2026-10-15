@@ -40,7 +40,7 @@ impl Layouter<'_> {
         }
         let tree = self.tree;
         let bx = tree.get(id);
-        let r = match bx.control {
+        let r = match bx.control() {
             Control::TextInput(n) | Control::TextArea(n, _) => {
                 let rf = self.font_for(&bx.style);
                 let w = LU::from_raw(rf.zero_adv.raw() as i64 * n as i64);
@@ -120,7 +120,7 @@ impl Layouter<'_> {
             Some(w) => w,
             None => {
                 let (min, max) = self.content_widths(id);
-                if matches!(bx.control, Control::TextInput(_) | Control::TextArea(..)) { min } else { min.max(avail).min(max) }
+                if matches!(bx.control(), Control::TextInput(_) | Control::TextArea(..)) { min } else { min.max(avail).min(max) }
             }
         };
         let max_w = match self.kw_size(id, &bs.max_width, avail) {

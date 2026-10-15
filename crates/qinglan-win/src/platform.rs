@@ -19,9 +19,9 @@ use crate::sys;
 use crate::sys::dwrite::{DesignMetrics, Face, Factory, Font, ScriptAnalysis, Shaped, break_between};
 
 /// Glyph mask cache budget (L1 task 8: LRU, at most 8 MB).
-const GLYPH_CACHE_BYTES: usize = 8 << 20;
+const GLYPH_CACHE_BYTES: usize = 3 << 19;
 /// Shaping cache budget. Counted by text bytes plus 28 bytes per glyph plus a fixed overhead.
-const SHAPE_CACHE_BYTES: usize = 8 << 20;
+const SHAPE_CACHE_BYTES: usize = 1 << 20;
 /// Most fonts (faces) the platform keeps; more are refused and the text falls back to the primary font.
 const MAX_FONTS: usize = 512;
 /// Most distinct font queries kept (family list, weight, slant, language).
@@ -237,6 +237,20 @@ impl WinPlatform {
     /// `DWRITE_FONT_SIMULATIONS` of `font`: 1 = synthetic bold, 2 = synthetic oblique.
     pub fn simulations(&self, font: FontId) -> u32 {
         self.inner.borrow().fonts.get(font.0 as usize).map_or(0, |e| e.font.simulations())
+    }
+
+    /// Empty the glyph mask cache (the memory breakdown of the benches).
+    pub fn clear_glyph_cache(&self) {
+        self.inner.borrow_mut().glyph_cache = Lru::new(GLYPH_CACHE_BYTES);
+    }
+
+    /// Empty the word and single-character shaping tables and the font choices (the memory breakdown of the
+    /// benches).
+    pub fn clear_word_caches(&self) {
+        let mut inn = self.inner.borrow_mut();
+        inn.words = FxMap::default();
+        inn.simple = FxMap::default();
+        inn.choice = FxMap::default();
     }
 
     /// Empty the shaping cache (tests).
@@ -845,7 +859,7 @@ impl Inner {
                     continue;
                 }
                 let shaped = Shaped { glyphs: glyphs.to_vec(), cluster_map: map.iter().map(|&g| g - g0 as u16).collect(), advances: advances.to_vec(), offsets: offsets.to_vec() };
-                if self.words.len() > 60_000 {
+                if self.words.len() > 30_000 {
                     self.words.clear();
                 }
                 self.words.insert(*key, WordEntry { fid, loc: q.loc, script: sa.script, shapes: sa.shapes, units: u.as_slice().into(), shaped: Rc::new(shaped) });
@@ -878,7 +892,7 @@ impl Inner {
                     self.add_shape_time(t.elapsed().as_micros() as u64);
                     self.stats.shape_calls += 1;
                     if let Some(sh) = &sh {
-                        if self.words.len() > 60_000 {
+                        if self.words.len() > 30_000 {
                             self.words.clear();
                         }
                         self.words.insert(key, WordEntry { fid, loc: q.loc, script: sa.script, shapes: sa.shapes, units: word.into(), shaped: Rc::clone(sh) });

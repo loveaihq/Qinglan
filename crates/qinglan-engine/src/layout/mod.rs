@@ -203,6 +203,14 @@ pub struct LayoutResult {
 }
 
 impl LayoutResult {
+    /// Free the shaped glyphs and the white-space-processed texts. Only [`crate::paint::build_display_list`] (and the
+    /// dumps) read them; hit testing and scroll anchoring use boxes, lines and fragments. A window calls this once the
+    /// display list is built.
+    pub fn release_text_data(&mut self) {
+        self.glyphs = Vec::new();
+        self.texts = Vec::new();
+    }
+
     pub fn box_out(&self, id: BoxId) -> BoxOut {
         self.boxes.get(id as usize).copied().unwrap_or_default()
     }
@@ -337,7 +345,7 @@ pub fn layout_document(doc: &Document, styles: &StyleTree, platform: &dyn Platfo
 /// Lay out a styled document; `images` holds the image sizes the host has learned so far.
 pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn Platform, opts: &LayoutOptions, images: &ImageSizes) -> LayoutResult {
     let env = boxtree::BuildEnv { viewport_w: opts.viewport_w, viewport_h: opts.viewport_h, dpr: opts.dpr, images };
-    let tree = boxtree::build_box_tree_with(doc, styles, &env);
+    let mut tree = boxtree::build_box_tree_with(doc, styles, &env);
     let viewport = (LayoutUnit::from_f32(opts.viewport_w).max0(), LayoutUnit::from_f32(opts.viewport_h).max0());
     let n = tree.boxes.len();
     let mut l = Layouter {
@@ -377,8 +385,14 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
     };
     l.prefetch_text();
     l.layout_root();
-    let (boxes, lines, fragments, glyphs, texts, decorations, markers, oof, work, incomplete, partial) =
+    let (boxes, mut lines, mut fragments, glyphs, texts, mut decorations, mut markers, oof, work, incomplete, partial) =
         (l.out, l.lines, l.fragments, l.glyphs, l.texts, l.decorations, l.markers, l.oof_list, l.work, l.exhausted || l.truncated, l.stopped);
+    // The arrays grew by doubling; what is kept for the life of the page should not carry the slack.
+    tree.boxes.shrink_to_fit();
+    lines.shrink_to_fit();
+    fragments.shrink_to_fit();
+    decorations.shrink_to_fit();
+    markers.shrink_to_fit();
     let canvas = canvas_background(doc, &tree);
     let (below, above) = paint_order(&tree);
     let images = tree.images.clone();

@@ -804,9 +804,9 @@ pub fn confirm(hwnd: Hwnd, caption: &str, text: &str) -> bool {
     unsafe { MessageBoxW(hwnd, t.as_ptr(), c.as_ptr(), MB_OKCANCEL | MB_ICONQUESTION) == IDOK }
 }
 
-/// Copy a top-down 32-bit BGRA picture of `w` x `h` pixels to the top-left of the window's client area.
-pub fn blit(hwnd: Hwnd, w: u32, h: u32, bgra: &[u8]) -> bool {
-    if w == 0 || h == 0 || h > i32::MAX as u32 || (bgra.len() as u64) < u64::from(w) * u64::from(h) * 4 {
+/// Copy a top-down 32-bit BGRA picture of `w` x `h` pixels to the window's client area, its top row at row `y`.
+pub fn blit(hwnd: Hwnd, y: u32, w: u32, h: u32, bgra: &[u8]) -> bool {
+    if w == 0 || h == 0 || h > i32::MAX as u32 || y > i32::MAX as u32 || (bgra.len() as u64) < u64::from(w) * u64::from(h) * 4 {
         return false;
     }
     let info = BitmapInfo {
@@ -832,7 +832,7 @@ pub fn blit(hwnd: Hwnd, w: u32, h: u32, bgra: &[u8]) -> bool {
         if hdc == 0 {
             return false;
         }
-        let lines = SetDIBitsToDevice(hdc, 0, 0, w, h, 0, 0, 0, h, bgra.as_ptr().cast(), &info, 0);
+        let lines = SetDIBitsToDevice(hdc, 0, y as i32, w, h, 0, 0, 0, h, bgra.as_ptr().cast(), &info, 0);
         ReleaseDC(hwnd, hdc);
         lines != 0
     }

@@ -11,7 +11,7 @@ use qinglan_engine::net::blocking::{self, Opened};
 use qinglan_engine::net::loader::Loader;
 use qinglan_engine::net::page::{PageResources, Update, apply_probe, probe_response};
 use qinglan_engine::paint::images::{Band, ImageStore};
-use qinglan_engine::paint::raster::{Frame, View, render_frame};
+use qinglan_engine::paint::raster::{Frame, View, render_band};
 use qinglan_engine::paint::{DisplayList, build_display_list, wanted_images};
 use qinglan_engine::platform::Platform;
 use qinglan_engine::url::Url;
@@ -108,9 +108,11 @@ impl Page {
         self.layout = None;
         let Some(styled) = &self.styled else { return };
         let opts = LayoutOptions { viewport_w: vp.w, viewport_h: vp.h, dpr: vp.dpr, stop_y, ..LayoutOptions::default() };
-        let res = layout_document_with(&self.doc, &styled.tree, platform, &opts, &self.sizes);
+        let mut res = layout_document_with(&self.doc, &styled.tree, platform, &opts, &self.sizes);
         let list = build_display_list(&self.doc, &res, platform);
         self.index = (!res.partial).then(|| PageIndex::new(&res));
+        // Only the display list needs the glyphs and texts; the page keeps the boxes, lines and fragments.
+        res.release_text_data();
         self.list = Some(list);
         self.layout = Some(res);
     }
@@ -195,10 +197,10 @@ impl Page {
         }
     }
 
-    /// Paint the viewport at `scroll` into `frame`.
-    pub fn raster(&mut self, platform: &dyn Platform, vp: Viewport, scroll: f32, frame: &mut Frame) {
+    /// Paint rows `y0 ..` (device pixels) of the viewport at `scroll` into `frame` (a band of the viewport).
+    pub fn raster(&mut self, platform: &dyn Platform, vp: Viewport, scroll: f32, y0: u32, frame: &mut Frame) {
         if let Some(list) = &self.list {
-            render_frame(list, platform, &mut self.store, View { scroll_y: scroll, dpr: vp.dpr }, frame);
+            render_band(list, platform, &mut self.store, View { scroll_y: scroll, dpr: vp.dpr }, y0, frame);
         }
     }
 

@@ -12,7 +12,7 @@ use crate::lru::ByteLru;
 /// Images with more pixels than this are refused without decoding (L1 task 15).
 pub const MAX_IMAGE_PIXELS: u64 = 100_000_000;
 /// The decoded-image cache budget (L1 task 15), counted in bytes of pixels.
-pub const DECODED_CACHE_BUDGET: usize = 24 * 1024 * 1024;
+pub const DECODED_CACHE_BUDGET: usize = 12 * 1024 * 1024;
 /// A decode never produces more than this many pixels (16 Mpx = 64 MB of BGRA): a request for a
 /// bigger display size is scaled down to fit.
 pub const MAX_DECODED_PIXELS: u64 = 16_000_000;

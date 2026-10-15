@@ -661,7 +661,7 @@ impl Layouter<'_> {
             BoxKind::Text => {
                 let decor = if self.decorated.get(b.parent as usize).copied().unwrap_or(false) { self.decor_specs(b.parent) } else { Vec::new() };
                 let cx = TextCx { bid, owner: b.parent, style: &b.style, decor: &decor, marker: false };
-                if let Some(s) = &b.synth {
+                if let Some(s) = b.synth() {
                     add_text(st, items, &cx, s);
                 } else if let Some(NodeData::Text(t)) = self.doc.node(b.node).map(|n| &n.data) {
                     add_text(st, items, &cx, t);
@@ -715,9 +715,9 @@ impl Layouter<'_> {
         let mut st = Collapser::default();
         let mut pct = false;
         // An inside list marker is the first inline of the item (css-lists-3 3.1).
-        if bx.ordinal.is_some()
+        if bx.ordinal().is_some()
             && bx.style.text.list_style_position == ListStylePosition::Inside
-            && let Some(text) = super::lists::marker_text(&bx.style.text.list_style_type, bx.ordinal.unwrap_or(0))
+            && let Some(text) = super::lists::marker_text(&bx.style.text.list_style_type, bx.ordinal().unwrap_or(0))
         {
             let mut it = make_item(ItemKind::Text, block, block, &bx.style, text);
             it.collapsible = false;
@@ -819,7 +819,7 @@ impl Layouter<'_> {
             if b.kind != BoxKind::Text || left == 0 {
                 continue;
             }
-            let text: &str = match (&b.synth, self.doc.node(b.node).map(|n| &n.data)) {
+            let text: &str = match (b.synth(), self.doc.node(b.node).map(|n| &n.data)) {
                 (Some(s), _) => s,
                 (None, Some(NodeData::Text(t))) => t,
                 _ => continue,
@@ -1025,7 +1025,7 @@ impl Layouter<'_> {
         // clipped or has none; replaced elements sit on the bottom margin edge.
         // (A text field keeps its text's baseline even though its content is clipped; a text area does not.)
         let clipped = o.clip && !bx.force_clip;
-        let baseline = if bx.kind == BoxKind::Replaced || clipped || matches!(bx.control, Control::TextArea(..)) { None } else { self.last_baseline(id) };
+        let baseline = if bx.kind == BoxKind::Replaced || clipped || matches!(bx.control(), Control::TextArea(..)) { None } else { self.last_baseline(id) };
         let outer_h = mt + o.h + mb;
         let a = baseline.map_or(outer_h, |b| mt + b);
         (ml + o.w + mr, a, outer_h - a, ml, mt, r.rel)

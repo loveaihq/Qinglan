@@ -40,8 +40,11 @@ pub const MAX_PER_HOST: usize = 6;
 pub const MAX_IN_FLIGHT: usize = 16;
 /// Requests waiting for a free slot; more are refused (a page with 100 000 images).
 pub const MAX_QUEUED: usize = 4096;
-/// Back/forward response cache budget.
-pub const CACHE_BUDGET: usize = 16 * 1024 * 1024;
+/// Back/forward response cache budget. The zhwiki page set (styles, 130 small images) is 2.6 MB without the page.
+pub const CACHE_BUDGET: usize = 8 * 1024 * 1024;
+/// A response bigger than this is not kept: the page itself is parsed and then dead weight (zhwiki's is 2.4 MB, more
+/// than the rest together), and going back to a page that big fetches it again.
+pub const CACHE_ENTRY_MAX: usize = 1024 * 1024;
 
 /// What a request is for. It sets the size cap, the `Accept` header and the queue priority.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]

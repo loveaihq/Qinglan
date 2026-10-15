@@ -90,7 +90,7 @@ fn usage() -> ExitCode {
     eprintln!(
         "usage:\n  qinglan-cli dom <file|url> [--replay <dir>]\n  qinglan-cli style <file|url> [--width W] [--height H] [--time] [--replay <dir>]\n  qinglan-cli layout <file|url> [--width W] [--height H] [--test-font] [--time] [--replay <dir>]\n  qinglan-cli record <url> <dir> [--width W] [--height H]
   qinglan-cli render <file|url> -o out.png [--width W] [--height H | --full] [--dpr D] [--scroll Y] [--replay <dir>] [--test-font] [--time] [--scroll-bench]
-  qinglan-cli bench <url> --replay <dir> [--width W] [--height H] [--dpr D]"
+  qinglan-cli bench <url> --replay <dir> [--width W] [--height H] [--dpr D] [--mem]"
     );
     ExitCode::from(2)
 }
@@ -169,6 +169,7 @@ fn parse_args() -> Option<Args> {
             }
             "--full" => a.full = true,
             "--scroll-bench" => a.scroll_bench = true,
+            "--mem" => {}
             "--no-prewarm" => a.no_prewarm = true,
             "--no-first-screen-first" => a.no_stop = true,
             "--time" => a.timing = true,
@@ -188,7 +189,16 @@ fn page_url(input: &str) -> Option<Url> {
     }
 }
 
+// Counts live heap bytes once `bench` switches it on (the memory breakdown); costs a relaxed load otherwise.
+#[global_allocator]
+static ALLOC: qinglan_win::CountingAlloc = qinglan_win::CountingAlloc;
+
 fn main() -> ExitCode {
+    // `bench ... --mem` also prints what each structure holds; counting every allocation costs a little time.
+    let flags: Vec<String> = std::env::args().collect();
+    if flags.get(1).map(String::as_str) == Some("bench") && flags.iter().any(|a| a == "--mem") {
+        qinglan_win::count_heap();
+    }
     let Some(args) = parse_args() else { return usage() };
     if !matches!(args.cmd.as_str(), "dom" | "style" | "layout" | "record" | "render" | "bench") || (args.cmd == "bench" && args.replay.is_none()) || (args.cmd == "render" && (args.out_png.is_none() || args.width < 1.0 || args.height < 1.0)) {
         return usage();

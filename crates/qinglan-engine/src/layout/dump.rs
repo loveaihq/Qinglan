@@ -140,8 +140,8 @@ fn dump_head(doc: &Document, res: &LayoutResult, id: BoxId, pos: (LU, LU), depth
     if o.clip {
         out.push_str(" [clip]");
     }
-    match b.replaced {
-        Some(ReplacedKind::Image) => match &b.image {
+    match b.replaced() {
+        Some(ReplacedKind::Image) => match b.image() {
             Some(i) => out.push_str(&format!(" [image src={} d={}]", i.src, i.density)),
             None => out.push_str(" [image]"),
         },

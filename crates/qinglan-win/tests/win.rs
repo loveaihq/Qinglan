@@ -305,7 +305,7 @@ fn caches_stay_inside_their_budgets() {
         p.shape(&s, &q(&f, None), 14.0);
     }
     let s = p.cache_stats();
-    assert!(s.shape_bytes <= 8 << 20, "{s:?}");
+    assert!(s.shape_bytes <= 1 << 20, "{s:?}");
     // Many distinct glyph masks.
     let g = p.shape("A", &q(&f, None), 16.0)[0];
     for size in 8..300 {
@@ -314,8 +314,8 @@ fn caches_stay_inside_their_budgets() {
         }
     }
     let s = p.cache_stats();
-    assert!(s.glyph_bytes <= 8 << 20, "{s:?}");
-    assert!(s.glyph_entries > 100);
+    assert!(s.glyph_bytes <= 3 << 19, "{s:?}");
+    assert!(s.glyph_entries > 10);
 }
 
 #[test]

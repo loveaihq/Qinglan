@@ -99,6 +99,15 @@ fn panic_text(p: Box<dyn Any + Send>) -> String {
     }
 }
 
+/// A frame buffer holds this many bytes at most: the page is drawn and copied to the window a band of rows at a time
+/// (a full 1920 x 1080 frame is 8 MB, a band 2 MB, four bands).
+const BAND_BYTES: u32 = 2 << 20;
+
+/// Rows of a band for a viewport `w` x `h` device pixels.
+fn band_rows(w: u32, h: u32) -> u32 {
+    (BAND_BYTES / (w.max(1) * 4)).clamp(64, h.max(64))
+}
+
 /// `about:blank`, made by hand: the address of an error page whose own address cannot be parsed.
 fn blank_url() -> Url {
     Url { scheme: "about".into(), username: String::new(), password: String::new(), host: None, port: None, path: UrlPath::Opaque("blank".into()), query: None, fragment: None }
@@ -199,6 +208,7 @@ impl Browser {
         if let Some(b) = self.bench.as_mut() {
             b.startup_ms = qinglan_win::window::since_process_creation_ms();
         }
+        self.mem_mark("ready");
         self.prewarm = std::thread::Builder::new().name("prewarm".into()).stack_size(8 << 20).spawn(qinglan_win::prewarm).ok();
         let start = if let Some(b) = &self.bench {
             let (w, h) = ((b.opts.width * b.opts.dpr).round() as u32, (b.opts.height * b.opts.dpr).round() as u32);
@@ -213,7 +223,9 @@ impl Browser {
         } else {
             self.opts.address.clone()
         };
+        self.mem_mark("prewarmed");
         self.platform = WinPlatform::new().map(Rc::new);
+        self.mem_mark("platform");
         self.ui.set_nav_enabled(false, false);
         self.ui.set_loading(false);
         if self.platform.is_none() {
@@ -238,7 +250,6 @@ impl Browser {
             return;
         }
         self.dev = (w, h);
-        self.frame = Frame::new(w, h);
         self.image_relayouts = 0;
         if self.page.as_ref().is_some_and(|p| p.layout.is_some()) {
             self.restyle = true;
@@ -422,6 +433,7 @@ impl Browser {
             NavKind::Reload | NavKind::History => self.history.set_current_url(display.clone()),
         }
         let mut page = Page::from_opened(opened, display.clone(), is_error);
+        self.mem_mark("parsed");
         page.restore = (kind != NavKind::New && !is_error).then_some(scroll);
         page.fragment = fragment.filter(|f| !f.is_empty());
         page.res.use_cache |= kind == NavKind::History;
@@ -579,6 +591,7 @@ impl Browser {
         self.update_scrollbar();
         self.paint();
         self.mark_first_screen();
+        self.mem_mark("first-screen");
         // Start the images of the first screen, then make the rest of the layout while they come.
         self.request_images();
         if partial && let Some(page) = self.page.as_mut() {
@@ -592,6 +605,7 @@ impl Browser {
         };
         self.scroll = self.snap(target.clamp(0.0, max));
         self.mark_full_layout();
+        self.mem_mark("full-layout");
         self.update_scrollbar();
         self.update_notice();
         self.request_images();
@@ -625,24 +639,39 @@ impl Browser {
         (y * self.dpr).round() / self.dpr
     }
 
+    /// Draw the page at `scroll` into the window, a band of rows at a time through the one small frame buffer.
+    fn draw_bands(&mut self, scroll: f32) {
+        let (w, h) = self.dev;
+        let vp = self.vp();
+        let rows = band_rows(w, h);
+        let platform = self.platform.clone();
+        let mut y0 = 0;
+        while y0 < h {
+            let bh = rows.min(h - y0);
+            self.frame.set_size(w, bh);
+            match (&platform, self.page.as_mut()) {
+                (Some(p), Some(page)) if page.list.is_some() => page.raster(&**p, vp, scroll, y0, &mut self.frame),
+                _ => self.frame.data.fill(255),
+            }
+            self.ui.blit_at(y0, w, bh, &self.frame.data);
+            y0 += bh;
+        }
+    }
+
     fn paint(&mut self) {
         let (w, h) = self.dev;
         if w == 0 || h == 0 {
             return;
         }
-        if self.frame.width != w || self.frame.height != h {
-            self.frame = Frame::new(w, h);
-        }
         let (vp, scroll) = (self.vp(), self.scroll);
         let mut need_images = false;
-        match (self.platform.clone(), self.page.as_mut()) {
-            (Some(platform), Some(page)) if page.list.is_some() => {
-                need_images = page.prepare(vp, scroll, &mut self.loader);
-                page.raster(&*platform, vp, scroll, &mut self.frame);
-            }
-            _ => self.frame.data.fill(255),
+        if self.platform.is_some()
+            && let Some(page) = self.page.as_mut()
+            && page.list.is_some()
+        {
+            need_images = page.prepare(vp, scroll, &mut self.loader);
         }
-        self.ui.blit(w, h, &self.frame.data);
+        self.draw_bands(scroll);
         if self.bench.as_ref().is_some_and(|b| b.first_screen.is_none()) {
             // The clock for the first screen stops when the pixels are on the window, not when the call returned
             // to a queue.
@@ -906,7 +935,9 @@ impl Browser {
     /// One frame of the scroll: the next position, decode what came near, paint it, put it on the window.
     fn bench_step(&mut self) {
         let Some(next_y) = self.bench.as_ref().filter(|b| b.stage == Stage::Scrolling).map(|b| b.next_y) else { return };
-        let Some(platform) = self.platform.clone() else { return };
+        if self.platform.is_none() {
+            return;
+        }
         let vp = self.vp();
         // Positions are whole device pixels: compare against the snapped end, or a bottom that rounds down is never
         // reached (the walk would go on for ever).
@@ -914,19 +945,18 @@ impl Browser {
         let y = self.snap(next_y.min(max));
         self.scroll = y;
         self.update_scrollbar();
-        if self.frame.width != self.dev.0 || self.frame.height != self.dev.1 {
-            self.frame = Frame::new(self.dev.0, self.dev.1);
-        }
         let t_decode = Instant::now();
+        let mut decoded = 0;
         if let Some(p) = self.page.as_mut() {
             p.prepare(vp, y, &mut self.loader);
+            decoded = p.store.bytes();
+        }
+        if let Some(b) = self.bench.as_mut() {
+            b.peak_decoded = b.peak_decoded.max(decoded);
         }
         let decode = ms(t_decode.elapsed());
         let t = Instant::now();
-        if let Some(p) = self.page.as_mut() {
-            p.raster(&*platform, vp, y, &mut self.frame);
-        }
-        self.ui.blit(self.dev.0, self.dev.1, &self.frame.data);
+        self.draw_bands(y);
         self.ui.flush();
         let frame_ms = ms(t.elapsed());
         if let Some(b) = self.bench.as_mut() {
@@ -945,12 +975,83 @@ impl Browser {
         }
     }
 
+    /// Remember the process's private bytes under `name` (bench runs only).
+    fn mem_mark(&mut self, name: &'static str) {
+        if let Some(b) = self.bench.as_mut()
+            && let Some((private, _)) = qinglan_win::window::process_memory()
+        {
+            b.marks.push((name, private));
+        }
+    }
+
+    /// What each structure holds, by dropping them one at a time and seeing how much the live heap shrinks (the
+    /// page is gone afterwards, so this is the last thing a bench run does).
+    fn memory_breakdown(&mut self) -> String {
+        use qinglan_win::memstats::{Breakdown, dom_parts, layout_parts};
+        if !qinglan_win::heap_counting() {
+            return String::new();
+        }
+        let mut bd = Breakdown::default();
+        bd.note("heap-live", qinglan_win::heap_live());
+        bd.note("heap-peak", qinglan_win::heap_peak());
+        bd.note("allocations", qinglan_win::heap_allocs() as usize);
+        bd.note("live-blocks", qinglan_win::heap_blocks());
+        bd.note("peak-decoded-images", self.bench.as_ref().map_or(0, |b| b.peak_decoded));
+        bd.note("response-cache-accounted", self.loader.cache().bytes());
+        let Some(mut page) = self.page.take() else { return bd.lines() };
+        let (nodes, text, attrs) = dom_parts(&page.doc);
+        bd.note("dom-node-count", page.doc.nodes.len());
+        bd.note("dom-detail-node-array", nodes);
+        bd.note("dom-detail-text", text);
+        bd.note("dom-detail-attributes", attrs);
+        if let Some(l) = &page.layout {
+            for (name, count, bytes) in layout_parts(l) {
+                bd.note(&format!("layout-detail-{name}"), bytes);
+                bd.note(&format!("layout-count-{name}"), count);
+            }
+        }
+        bd.freed("hit-test-index", || page.index = None);
+        bd.freed("display-list", || page.list = None);
+        bd.freed("box-and-fragment-tree", || page.layout = None);
+        bd.freed("computed-styles", || page.styled = None);
+        bd.freed("decoded-images", || page.store = qinglan_engine::paint::images::ImageStore::new());
+        bd.freed("response-cache", || self.loader.cache_mut().clear());
+        if let Some(w) = &self.platform {
+            let stats = w.cache_stats();
+            bd.note("shaping-cache-accounted", stats.shape_bytes);
+            bd.note("glyph-cache-accounted", stats.glyph_bytes);
+            bd.freed("shaping-cache", || w.clear_shape_cache());
+            bd.freed("glyph-cache", || w.clear_glyph_cache());
+            bd.freed("word-tables", || w.clear_word_caches());
+        }
+        bd.freed("dom-and-sheets", || drop(page));
+        bd.freed("frame-buffer", || self.frame = Frame::new(0, 0));
+        bd.lines()
+    }
+
     fn bench_finish(&mut self) {
         self.ui.kill_timer(TIMER_BENCH);
+        if self.bench.as_ref().is_none_or(|b| b.stage == Stage::Done) {
+            return;
+        }
+        let memory = qinglan_win::window::process_memory();
+        let heap_stats = qinglan_win::heap_summary();
+        let breakdown = self.memory_breakdown();
+        let torn_down = qinglan_win::window::process_memory();
         let Some(b) = self.bench.as_mut() else { return };
         b.stage = Stage::Done;
+        b.breakdown = breakdown;
+        if let Some((allocated, committed)) = heap_stats {
+            b.breakdown.push_str(&format!("mem-win-heap-allocated: {allocated}
+mem-win-heap-committed: {committed}
+"));
+        }
+        if let Some((private, _)) = torn_down {
+            b.breakdown.push_str(&format!("mem-private-after-teardown: {private}
+"));
+        }
         let code = i32::from(b.error.is_some());
-        let report = Report { bench: b, memory: qinglan_win::window::process_memory() }.format();
+        let report = Report { bench: b, memory }.format();
         print!("{report}");
         let _ = std::io::stdout().flush();
         self.ui.close(code);

@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-pub const USAGE: &str = "usage: qinglan.exe [address] [--replay <dir>]\n       qinglan.exe --bench <address> [--replay <dir>] [--width W] [--height H] [--dpr D]";
+pub const USAGE: &str = "usage: qinglan.exe [address] [--replay <dir>]\n       qinglan.exe --bench <address> [--replay <dir>] [--width W] [--height H] [--dpr D] [--mem]";
 
 /// Largest bench picture, in device pixels (the same cap `qinglan-cli render` has).
 const MAX_BENCH_PIXELS: f64 = 32_000_000.0;
@@ -36,6 +36,8 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
                 bench = true;
                 o.address = Some(value(&mut it, "--bench")?);
             }
+            // Read in `main` (it switches the heap counting on before anything is allocated).
+            "--mem" => {}
             "--replay" => o.replay = Some(PathBuf::from(value(&mut it, "--replay")?)),
             "--width" => width = Some(number(value(&mut it, "--width")?, "--width")?),
             "--height" => height = Some(number(value(&mut it, "--height")?, "--height")?),

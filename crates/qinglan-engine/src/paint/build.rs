@@ -201,7 +201,7 @@ impl Builder<'_> {
         }
         let rect = Rect::new(ax, ay, o.w, o.h);
         self.box_decor(id, rect);
-        if bx.replaced.is_some() {
+        if bx.replaced().is_some() {
             self.replaced(id, rect);
         }
         let prev = o.clip.then(|| {
@@ -360,9 +360,9 @@ impl Builder<'_> {
         let p = |i: usize| bs.padding.get(i).map_or(LU::ZERO, |l| pad_px(l, cb_w));
         let (l, t, rt, bt) = (b(3) + p(3), b(0) + p(0), b(1) + p(1), b(2) + p(2));
         let content = Rect::new(r.x + l, r.y + t, (r.w - l - rt).max0(), (r.h - t - bt).max0());
-        match bx.replaced {
+        match bx.replaced() {
             Some(ReplacedKind::Image) => {
-                if bx.image.is_some() && !content.is_empty() && self.visible(&content) {
+                if bx.image().is_some() && !content.is_empty() && self.visible(&content) {
                     self.push(content, ItemKind::Image { node: bx.node });
                     self.list.images.push(ImagePlace { node: bx.node, rect: content, fixed: self.fixed });
                 }
@@ -424,6 +424,13 @@ impl Builder<'_> {
         }
         self.list.height = height;
         self.list.spots = self.spots();
+        // The arrays grew by doubling; the list lives as long as the page.
+        let l = &mut self.list;
+        l.items.shrink_to_fit();
+        l.fixed.shrink_to_fit();
+        l.clips.shrink_to_fit();
+        l.glyphs.shrink_to_fit();
+        l.images.shrink_to_fit();
         self.list.build_index();
         self.list
     }
