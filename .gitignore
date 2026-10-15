@@ -1,0 +1,8 @@
+/target/
+
+# Spec text is copyrighted: keep it local, never commit it
+docs/spec/
+# Recorded real pages are copyrighted: local only
+tests/corpus/local/
+tests/out/
+.claude/worktrees/

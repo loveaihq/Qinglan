@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["crates/qinglan-engine", "crates/qinglan-win", "crates/qinglan", "crates/qinglan-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.99"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+# No panic = "abort": a page must be able to catch_unwind (L1-TASK 1c).
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

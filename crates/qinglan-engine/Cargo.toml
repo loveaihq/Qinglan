@@ -1,0 +1,16 @@
+[package]
+name = "qinglan-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+# Page data is hostile (CLAUDE.md "Robustness"): no panics from engine code.
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"

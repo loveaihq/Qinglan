@@ -1,0 +1,13 @@
+[package]
+name = "qinglan"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+qinglan-engine = { path = "../qinglan-engine" }
+qinglan-win = { path = "../qinglan-win" }
+
+[lints]
+workspace = true
