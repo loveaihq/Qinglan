@@ -1,0 +1,63 @@
+viewport 400x400
+block html (0,0 400x198)
+  block body (0,0 400x198)
+    block div#a (0,0 200x16)
+      line (0,0 200x16) baseline=11
+        text "x" (0,3 10x10)
+        inline-block span#ib (10,0 36x16)
+          line (13,3 30x10) baseline=11
+            text "abc" (13,3 30x10)
+        text "y" (46,3 10x10)
+    block div#b (0,16 200x30)
+      line (0,16 200x30) baseline=24
+        text "m" (0,16 10x10)
+        inline-block span#ibb (15,21 20x20)
+        text "n" (40,16 10x10)
+    block div#c (0,46 50x20)
+      line (0,46 50x10) baseline=54
+        text "ab" (0,46 20x10)
+        inline-block span#ic (20,46 30x10)
+          line (20,46 30x10) baseline=54
+            text "c" (20,46 10x10)
+      line (0,56 50x10) baseline=64
+        text "de" (0,56 20x10)
+    block div#d (0,66 60x20)
+      line (0,66 60x20) baseline=84
+        inline-block span#id (0,66 60x20)
+          line (0,66 60x10) baseline=74
+            text "aa bb" (0,66 50x10)
+          line (0,76 60x10) baseline=84
+            text "cc" (0,76 20x10)
+    block div#e1 (0,86 20x30)
+      line (0,86 20x10) baseline=94
+        text "aa" (0,86 20x10)
+      line (0,96 20x10) baseline=104
+        text "bb" (0,96 20x10)
+      line (0,106 20x10) baseline=114
+        text "cc" (0,106 20x10)
+    block div#e2 (0,116 80x10)
+      line (0,116 80x10) baseline=124
+        text "aa bb cc" (0,116 80x10)
+    block div#e3 (0,126 80x10)
+      line (0,126 80x10) baseline=134
+        text "aa bb cc" (0,126 80x10)
+    block div (0,136 50x20)
+      block div#e4 (0,136 50x20)
+        line (0,136 50x10) baseline=144
+          text "aa bb" (0,136 50x10)
+        line (0,146 50x10) baseline=154
+          text "cc" (0,146 20x10)
+    block div#e5 (0,156 50x10)
+      line (0,156 50x10) baseline=164
+        text "aa bb" (0,156 50x10)
+    block div#e6 (0,166 30x20)
+      line (0,166 30x10) baseline=174
+        text "aa" (0,166 20x10)
+      line (0,176 30x10) baseline=184
+        text "bbb" (0,176 30x10)
+    block div#f (0,186 200x12)
+      line (0,186 200x12) baseline=196
+        inline-block span#fo (0,186 60x12)
+          line (0,186 60x12) baseline=196
+            inline-block span#fi (0,186 40x10)
+            text "zz" (40,188 20x10)

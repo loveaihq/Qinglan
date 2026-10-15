@@ -1,0 +1,39 @@
+<!--
+viewport: 300x300
+Text decoration lines (css-text-decor-3 2). Their positions come from the font metrics; the test font has underline offset
+0.1em (below the baseline), strike-through offset 0.3em (above it), thickness 0.05em, rounded to whole px with a minimum of
+1px. The overline sits at the top of the content area (baseline - ascent). A line spans its text fragment. Decorations
+propagate from a box to the text of its in-flow descendants, but not into atomic inlines (inline-block).
+Font 10px (ascent 8, descent 2), line-height normal (10), body margin 0; every div is 10 high unless noted.
+
+a   y=0, baseline 8: underline at 8 + 1 = 9, 30 wide ("abc"), 1 thick, in the text colour.
+b   y=10, baseline 18: line-through at 18 - 3 = 15.
+c   y=20, baseline 28: overline at 28 - 8 = 20.
+d   y=30, baseline 38: "a" and "b" (the span) are underlined at 39; the text in the inline-block is not.
+e   y=40, baseline 48: `underline wavy red` with 3px thickness: at 49, 3 thick (10 wide for "j"), style wavy, colour #ff0000.
+f   y=50, baseline 58: underline at 59 and line-through at 55, both under "kl" (20 wide).
+g   y=60: a 20px span: line 20 high, baseline 76. "m" (10px) underline at 77; "n" (20px) underline at 76 + 2 = 78 (offset 0.1em of
+    its own font), 20 wide.
+check: underline (0,9 30x1) :: solid #000000
+check: line-through (0,15 30x1) :: solid #000000
+check: overline (0,20 30x1) :: solid #000000
+check: underline (0,39 10x1) :: solid
+check: underline (10,39 10x1) :: solid
+check: underline (0,49 10x3) :: wavy #ff0000
+check: underline (0,59 20x1) :: solid
+check: line-through (0,55 20x1) :: solid
+check: underline (0,77 10x1) :: solid
+check: underline (10,78 20x1) :: solid
+check: block div#g :: (0,60 300x20)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px Ahem }
+</style>
+<div id="a" style="text-decoration:underline">abc</div>
+<div id="b" style="text-decoration:line-through">def</div>
+<div id="c" style="text-decoration:overline">ghi</div>
+<div id="d" style="text-decoration:underline">a<span>b</span><span style="display:inline-block">c</span></div>
+<div id="e" style="text-decoration:underline wavy red;text-decoration-thickness:3px">j</div>
+<div id="f" style="text-decoration:underline line-through">kl</div>
+<div id="g" style="text-decoration:underline">m<span style="font-size:20px">n</span></div>

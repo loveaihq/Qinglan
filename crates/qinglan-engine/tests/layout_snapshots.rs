@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use qinglan_engine::css::{NoResources, StyleOptions, style_document_with};
 use qinglan_engine::encoding::decode_document;
 use qinglan_engine::html::treebuilder::parse_document;
-use qinglan_engine::layout::{LayoutOptions, dump::dump_layout, layout_document};
+use qinglan_engine::layout::{ImageSizes, LayoutOptions, dump::dump_layout, layout_document_with};
 use qinglan_engine::platform::{BasicPlatform, Platform, TestPlatform};
 
 fn pages_dir() -> PathBuf {
@@ -53,13 +53,37 @@ fn viewport(comment: &str) -> (f32, f32) {
     (800.0, 600.0)
 }
 
+/// `dpr: 2` sets the device pixel ratio; `image: id WxH` tells layout the pixel size of the image with
+/// that `id` (as if it had loaded); `broken: id` marks an image as failed.
+fn header_value<'a>(comment: &'a str, key: &str) -> Vec<&'a str> {
+    comment.lines().filter_map(|l| l.trim().strip_prefix(key).and_then(|r| r.strip_prefix(':')).map(str::trim)).collect()
+}
+
+fn node_by_id(doc: &qinglan_engine::html::dom::Document, id: &str) -> Option<u32> {
+    (0..doc.nodes.len() as u32).find(|&n| doc.attr(n, qinglan_engine::html::atoms::a::ID) == Some(id))
+}
+
 pub fn layout_page(src: &str, vw: f32, vh: f32) -> String {
+    layout_page_with(src, vw, vh, "")
+}
+
+pub fn layout_page_with(src: &str, vw: f32, vh: f32, comment: &str) -> String {
     let platform = TestPlatform;
     let decoded = decode_document(src.as_bytes(), None, &BasicPlatform);
     let mut doc = parse_document(decoded.text);
     let sopts = StyleOptions { viewport_w: vw, viewport_h: vh, ..StyleOptions::default() };
     let styled = style_document_with(&mut doc, None, &mut NoResources, &sopts, Some(&platform as &dyn Platform));
-    let res = layout_document(&doc, &styled.tree, &platform, &LayoutOptions { viewport_w: vw, viewport_h: vh });
+    let mut sizes = ImageSizes::new();
+    for v in header_value(comment, "image") {
+        let (id, dims) = v.split_once(' ').expect("image: id WxH");
+        let (w, h) = dims.trim().split_once('x').expect("WxH");
+        sizes.set_loaded(node_by_id(&doc, id).expect("image id"), w.parse().unwrap(), h.parse().unwrap());
+    }
+    for v in header_value(comment, "broken") {
+        sizes.set_broken(node_by_id(&doc, v).expect("broken id"));
+    }
+    let dpr = header_value(comment, "dpr").first().map_or(1.0, |v| v.parse().unwrap());
+    let res = layout_document_with(&doc, &styled.tree, &platform, &LayoutOptions { viewport_w: vw, viewport_h: vh, dpr, ..LayoutOptions::default() }, &sizes);
     dump_layout(&doc, &res)
 }
 
@@ -110,7 +134,7 @@ fn layout_snapshots() {
         let src = std::fs::read_to_string(page).unwrap();
         let comment = header_comment(&src);
         let (vw, vh) = viewport(comment);
-        let dump = layout_page(&src, vw, vh);
+        let dump = layout_page_with(&src, vw, vh, comment);
         let n = run_checks(&name, comment, &dump, &mut failures);
         if n == 0 {
             failures.push(format!("{name}: the header comment has no `check:` lines (hand-computed numbers)"));

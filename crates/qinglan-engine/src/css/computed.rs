@@ -82,6 +82,7 @@ pub struct TextStyle {
     pub cursor: CursorKind,
     pub list_style_type: ListStyleType,
     pub list_style_position: ListStylePosition,
+    pub tab_size: TabSize,
     /// The element's language (nearest `lang` attribute), inherited.
     pub lang: Option<Rc<str>>,
 }
@@ -168,6 +169,7 @@ impl TextStyle {
             cursor: CursorKind::Auto,
             list_style_type: ListStyleType::Disc,
             list_style_position: ListStylePosition::Outside,
+            tab_size: TabSize::Spaces(8.0),
             lang: None,
         }
     }
@@ -522,6 +524,13 @@ pub fn compute_text(parent: &Rc<TextStyle>, d: &Declared<'_>, ctx: &LenCtx, lang
     simple!(PropId::Cursor, Cursor, cursor);
     simple!(PropId::ListStyleType, ListStyleType, list_style_type);
     simple!(PropId::ListStylePosition, ListStylePosition, list_style_position);
+    match pick(d, PropId::TabSize) {
+        Pick::Inherit => {}
+        Pick::Initial => t.tab_size = TabSize::Spaces(8.0),
+        Pick::Value(Value::TabSize(TabSize::Len(l))) => t.tab_size = TabSize::Len(l.compute(ctx)),
+        Pick::Value(Value::TabSize(s)) => t.tab_size = s.clone(),
+        Pick::Value(_) => {}
+    }
     if let Some(l) = lang {
         t.lang = Some(Rc::from(l));
     }
@@ -826,6 +835,7 @@ impl ComputedStyle {
         add(PropId::Cursor, t.cursor.keyword().into());
         add(PropId::ListStyleType, t.list_style_type.to_css());
         add(PropId::ListStylePosition, t.list_style_position.keyword().into());
+        add(PropId::TabSize, t.tab_size.to_css());
         add(PropId::VerticalAlign, m.vertical_align.to_css());
         add(PropId::TextDecorationLine, m.text_decoration_line.to_css());
         add(PropId::TextDecorationStyle, m.text_decoration_style.keyword().into());

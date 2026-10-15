@@ -13,7 +13,7 @@ fn lay(html: &str, platform: &dyn Platform) -> (String, LayoutResult) {
     let mut doc = parse_document(decoded.text);
     let sopts = StyleOptions { viewport_w: 300.0, viewport_h: 200.0, ..StyleOptions::default() };
     let styled = style_document_with(&mut doc, None, &mut NoResources, &sopts, Some(platform));
-    let res = layout_document(&doc, &styled.tree, platform, &LayoutOptions { viewport_w: 300.0, viewport_h: 200.0 });
+    let res = layout_document(&doc, &styled.tree, platform, &LayoutOptions { viewport_w: 300.0, viewport_h: 200.0, ..LayoutOptions::default() });
     (dump_layout(&doc, &res), res)
 }
 
@@ -112,4 +112,107 @@ fn long_unbreakable_text_is_linear() {
     // Overflows on one line: 200000 glyphs of 10px.
     assert_eq!(res.lines.len(), 1);
     assert_eq!(res.fragments[0].w.to_f32(), 2_000_000.0_f32.min(res.fragments[0].w.to_f32()));
+}
+
+fn lay_opts(html: &str, opts: &LayoutOptions, images: &qinglan_engine::layout::ImageSizes) -> (String, LayoutResult) {
+    let decoded = decode_document(html.as_bytes(), None, &BasicPlatform);
+    let mut doc = parse_document(decoded.text);
+    let sopts = StyleOptions { viewport_w: opts.viewport_w, viewport_h: opts.viewport_h, ..StyleOptions::default() };
+    let styled = style_document_with(&mut doc, None, &mut NoResources, &sopts, Some(&TestPlatform as &dyn Platform));
+    let res = qinglan_engine::layout::layout_document_with(&doc, &styled.tree, &TestPlatform, opts, images);
+    (dump_layout(&doc, &res), res)
+}
+
+#[test]
+fn work_budget_stops_layout_and_flags_it() {
+    let html = format!("<body style='font:10px Ahem'>{}", "<p>some text in a paragraph</p>".repeat(3000));
+    let sizes = qinglan_engine::layout::ImageSizes::new();
+    let (_, full) = lay_opts(&html, &LayoutOptions::default(), &sizes);
+    assert!(!full.incomplete);
+    assert!(full.lines.len() >= 3000);
+    let tight = LayoutOptions { work_budget: 4000, ..LayoutOptions::default() };
+    let (dump, cut) = lay_opts(&html, &tight, &sizes);
+    assert!(cut.incomplete, "the budget of 4000 must run out");
+    assert!(cut.lines.len() < full.lines.len() && !cut.lines.is_empty(), "{} of {} lines", cut.lines.len(), full.lines.len());
+    assert!(dump.ends_with("incomplete\n"));
+    // The work done stays near the budget (one box or paragraph may overshoot a little).
+    assert!(cut.work < 4000 + 2000, "work {}", cut.work);
+}
+
+/// Text beyond the page's allowance is dropped (memory and time stay bounded) and the layout is flagged.
+#[test]
+fn text_allowance_bounds_hostile_text() {
+    let text = "x".repeat(300_000);
+    let html = format!("<body style='font:10px Ahem'><div style='width:100px'>{text}</div>");
+    let opts = LayoutOptions { work_budget: 400_000, ..LayoutOptions::default() };
+    let (_, res) = lay_opts(&html, &opts, &qinglan_engine::layout::ImageSizes::new());
+    assert!(res.incomplete);
+    // Half the budget (200000 characters) was shaped.
+    assert!(res.glyphs.len() <= 200_000, "{} glyphs", res.glyphs.len());
+}
+
+#[test]
+fn image_sizes_feed_the_next_layout() {
+    use qinglan_engine::layout::ImageSizes;
+    let html = "<body style='margin:0;font:10px Ahem'><img id=a src=pic.png srcset='pic2.png 2x'><img id=b src=b.png>";
+    let (dump, res) = lay_opts(html, &LayoutOptions { dpr: 2.0, ..LayoutOptions::default() }, &ImageSizes::new());
+    assert_eq!(res.images.len(), 2);
+    assert_eq!((res.images[0].src.as_str(), res.images[0].density), ("pic2.png", 2.0));
+    assert_eq!((res.images[1].src.as_str(), res.images[1].density), ("b.png", 1.0));
+    assert!(dump.contains("replaced img#a (0,8 0x0)"), "{dump}");
+    // The host learns the size of the first image (nodes are stable between layouts) and lays out again.
+    let node = res.images[0].node;
+    let mut sizes = ImageSizes::new();
+    assert!(sizes.set_loaded(node, 100, 60));
+    assert!(!sizes.set_loaded(node, 100, 60), "no change the second time");
+    let (dump, _) = lay_opts(html, &LayoutOptions { dpr: 2.0, ..LayoutOptions::default() }, &sizes);
+    assert!(dump.contains("replaced img#a (0,0 50x30)"), "{dump}");
+}
+
+/// Atomic inlines recurse (box -> paragraph -> box ...): bounded by `MAX_BOX_DEPTH` like blocks.
+#[test]
+fn deep_atomic_and_positioned_nesting_fits_in_one_megabyte() {
+    let h = std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let mut html = String::new();
+            for i in 0..1500 {
+                html.push_str(match i % 3 {
+                    0 => "<span style='display:inline-block'>",
+                    1 => "<div style='position:absolute;left:1px'>",
+                    _ => "<div style='position:relative;width:min-content'>",
+                });
+            }
+            html.push_str("deep text");
+            // Nesting deeper than the limits is cut off (the text may not be laid out); it must not crash.
+            let (dump, _) = lay(&html, &TestPlatform);
+            assert!(dump.contains("block"));
+        })
+        .unwrap();
+    h.join().unwrap();
+}
+
+/// Plain block nesting is bounded by `MAX_BOX_DEPTH` alone, so a block frame must be small enough for 256 levels in 1 MB.
+#[test]
+fn deep_block_nesting_fits_in_one_megabyte() {
+    let h = std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let html = format!("{}x{}", "<div style='position:relative;padding:1px;margin:1px;width:80%'>".repeat(1500), "</div>".repeat(1500));
+            let (_, res) = lay(&html, &TestPlatform);
+            assert!(res.texts.iter().any(|t| t == "x"));
+        })
+        .unwrap();
+    h.join().unwrap();
+}
+
+#[test]
+fn hostile_positioning_does_not_panic() {
+    let html = "<body style='font:10px Ahem'><div style='position:relative;left:1e9px;top:-1e9px'>a\
+                <span style='position:absolute;left:1e9px;right:1e9px;top:-1e9px;bottom:1e9px;width:1e9px;height:1e9px;margin:auto'>b</span>\
+                <span style='position:fixed;left:-1e9px;width:calc(100% + 1e9px)'>c</span>\
+                <span style='position:absolute;width:0;height:0'>d<img src=x width=1e9 height=1e9></span></div>\
+                <div style='width:max-content;min-width:min-content'>e<input size=1e9><textarea cols=1e9 rows=1e9></textarea></div>";
+    let (dump, _) = lay(html, &TestPlatform);
+    assert!(dump.contains("[absolute]") && dump.contains("[fixed]"));
 }

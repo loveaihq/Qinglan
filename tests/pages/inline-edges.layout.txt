@@ -1,0 +1,36 @@
+viewport 300x300
+block html (0,0 300x80)
+  block body (0,0 300x80)
+    block div (0,0 200x10)
+      line (0,0 200x10) baseline=8
+        inline span#sa (23,-2 34x14) [first last]
+        text "ab" (0,0 20x10)
+        text "cd" (30,0 20x10)
+        text "ef" (60,0 20x10)
+    block div#sb (0,10 60x30)
+      line (0,10 60x10) baseline=18
+        inline span#sbs (30,9 26x12) [first]
+        text "aa " (0,10 30x10)
+        text "bb" (36,10 20x10)
+      line (0,20 60x10) baseline=28
+        inline span#sbs (0,19 56x12) [last]
+        text "cc dd" (0,20 50x10)
+      line (0,30 60x10) baseline=38
+        text "ee" (0,30 20x10)
+    block div (0,40 200x10)
+      line (0,40 200x10) baseline=48
+        text "k" (0,40 10x10)
+        text "l" (5,40 10x10)
+        text "m" (10,40 10x10)
+    block div#sd (0,50 200x30)
+      block (anonymous) (0,50 200x10)
+        line (0,50 200x10) baseline=58
+          inline span#s1 (0,49 15x12) [first]
+          text "p" (5,50 10x10)
+      block div#blk (0,60 50x10)
+        line (0,60 50x10) baseline=68
+          text "blk" (0,60 30x10)
+      block (anonymous) (0,70 200x10)
+        line (0,70 200x10) baseline=78
+          inline span#s1 (0,69 15x12) [last]
+          text "q" (0,70 10x10)

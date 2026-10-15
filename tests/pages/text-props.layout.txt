@@ -1,0 +1,57 @@
+viewport 400x400
+block html (0,0 400x190)
+  block body (0,0 400x190)
+    block div#j1 (0,0 100x20)
+      line (0,0 100x10) baseline=8
+        text "aa bb cc" (0,0 100x10)
+      line (0,10 100x10) baseline=18
+        text "dd ee" (0,10 50x10)
+    block div#j2 (0,20 95x20)
+      line (0,20 95x10) baseline=28
+        text "中文汉字测试一二三" (0,20 95x10)
+      line (0,30 95x10) baseline=38
+        text "四五六七八九" (0,30 60x10)
+    block div#ti1 (0,40 100x20)
+      line (0,40 100x10) baseline=48
+        text "ab cd" (30,40 50x10)
+      line (0,50 100x10) baseline=58
+        text "ef gh" (0,50 50x10)
+    block div#ti2 (0,60 130x10)
+      line (30,60 100x10) baseline=68
+        text "ij kl mn op" (10,60 110x10)
+    block div#ti3 (0,70 100x10)
+      line (0,70 100x10) baseline=78
+        text "qr" (10,70 20x10)
+    block div#ti4 (0,80 100x10)
+      line (0,80 100x10) baseline=88
+        text "st" (50,80 20x10)
+    block div#ls (0,90 100x10)
+      line (0,90 100x10) baseline=98
+        text "uvw" (0,90 36x10)
+    block div#ws (0,100 100x10)
+      line (0,100 100x10) baseline=108
+        text "x y" (0,100 35x10)
+    block div#tt1 (0,110 100x10)
+      line (0,110 100x10) baseline=118
+        text "AB CD" (0,110 50x10)
+    block div#tt2 (0,120 100x20)
+      line (0,120 100x10) baseline=128
+        text "Hello" (0,120 50x10)
+      line (0,130 100x10) baseline=138
+        text "World" (0,130 50x10)
+    block div#tt3 (0,140 100x10)
+      line (0,140 100x10) baseline=148
+        text "H" (0,140 10x10)
+        text "ello" (10,140 40x10)
+    block div#tt4 (0,150 100x10)
+      line (0,150 100x10) baseline=158
+        text "ａｂ１" (0,150 30x10)
+    block div#tab1 (0,160 100x10)
+      line (0,160 100x10) baseline=168
+        text "a\tb" (0,160 50x10)
+    block div#tab2 (0,170 100x10)
+      line (0,170 100x10) baseline=178
+        text "c\td" (0,170 30x10)
+    block div#tab3 (0,180 100x10)
+      line (0,180 100x10) baseline=188
+        text "e\tf" (0,180 90x10)

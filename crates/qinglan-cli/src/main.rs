@@ -153,7 +153,7 @@ fn main() -> ExitCode {
             let sopts = StyleOptions { viewport_w: width, viewport_h: height, ..StyleOptions::default() };
             let out = style_document_with(&mut doc, url.as_ref(), &mut loader, &sopts, Some(&platform as &dyn Platform));
             let t_style = t0.elapsed();
-            let res = layout_document(&doc, &out.tree, &platform, &LayoutOptions { viewport_w: width, viewport_h: height });
+            let res = layout_document(&doc, &out.tree, &platform, &LayoutOptions { viewport_w: width, viewport_h: height, ..LayoutOptions::default() });
             let t_layout = t0.elapsed();
             print!("{}", dump_layout(&doc, &res));
             if doc.too_large {

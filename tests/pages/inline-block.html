@@ -1,0 +1,62 @@
+<!--
+viewport: 400x400
+Atomic inlines: inline-block (shrink-to-fit width, CSS2 10.3.9; baseline = last line box, 10.8.1) and the intrinsic
+width keywords (css-sizing-3). Font 10px/10px Ahem (ascent 8, descent 2), body margin 0, divs 200 wide unless set.
+
+a   inline-block "abc" with padding 2 and border 1: width 30+4+2 = 36, height 10+4+2 = 16. Its baseline is the baseline of
+    its text: 1+2+8 = 11 below its top. Line: above = max(8,11) = 11, below = max(2, 16-11) = 5: 16 high. The box is at the
+    line top (y=0), x=10 (after "x"); "x" top = 11-8 = 3; the text inside is at (10+3, 3); "y" at x=46.
+b   an empty 20x20 inline-block with margin 5 and vertical-align:top: margin box 30x30, no line boxes so its baseline is the
+    bottom margin edge. It is taller than the 10 high line, so the line grows to 30. The box sits at the top: margin edge at
+    y=0, box at (10+5, 5). "m" at the top, "n" at x=10+30.
+c   width 50: "ab" (20) + inline-block (30) = 50 fit; "de" does not: it goes to line 2 (a break is allowed after an atomic inline).
+d   width 60: shrink-to-fit = min(max(min-content 20, available 60), max-content 80) = 60; "aa bb cc" wraps inside it: 2 lines.
+e1  width:min-content = 20 (the longest word): 3 lines of 10. e2 max-content = 80, one line. e3 fit-content with 200 available = 80.
+e4  fit-content inside a 50 wide parent: min(max(20, 50), 80) = 50: "aa bb" / "cc".
+e5  width 30 but min-width:max-content (50) -> 50. e6 auto width 200 but max-width:min-content (the longest word "bbb" = 30) -> 30.
+f   nested: the inner inline-block is 40 wide (fixed), the outer one is shrink-to-fit: max-content 40+20 = 60. The empty inner
+    box has its baseline at its bottom (A=10, D=0), the text "zz" has A=8, D=2: the outer line is above 10 + below 2 = 12 high,
+    the inner box at its top, "zz" at x=40, y = 10-8 = 2.
+Heights: 16, 30, 20, 20, 30, 10, 10, 20, 10, 20, 12.
+check: block div#a :: (0,0 200x16)
+check: text "x" :: (0,3 10x10)
+check: inline-block span#ib :: (10,0 36x16)
+check: text "abc" :: (13,3 30x10)
+check: text "y" :: (46,3 10x10)
+check: block div#b :: (0,16 200x30)
+check: text "m" :: (0,16 10x10)
+check: inline-block span#ibb :: (15,21 20x20)
+check: text "n" :: (40,16 10x10)
+check: block div#c :: (0,46 50x20)
+check: inline-block span#ic :: (20,46 30x10)
+check: text "de" :: (0,56 20x10)
+check: inline-block span#id :: (0,66 60x20)
+check: text "aa bb" :: (0,66 50x10)
+check: text "cc" :: (0,76 20x10)
+check: block div#e1 :: (0,86 20x30)
+check: block div#e2 :: (0,116 80x10)
+check: block div#e3 :: (0,126 80x10)
+check: block div#e4 :: (0,136 50x20)
+check: block div#e5 :: (0,156 50x10)
+check: block div#e6 :: (0,166 30x20)
+check: inline-block span#fo :: (0,186 60x12)
+check: inline-block span#fi :: (0,186 40x10)
+check: text "zz" :: (40,188 20x10)
+check: block div#f :: (0,186 200x12)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+div { width: 200px }
+</style>
+<div id="a">x<span id="ib" style="display:inline-block;padding:2px;border:1px solid">abc</span>y</div>
+<div id="b">m<span id="ibb" style="display:inline-block;width:20px;height:20px;margin:5px;vertical-align:top;background:red"></span>n</div>
+<div id="c" style="width:50px">ab<span id="ic" style="display:inline-block;width:30px;height:10px">c</span>de</div>
+<div id="d" style="width:60px"><span id="id" style="display:inline-block">aa bb cc</span></div>
+<div id="e1" style="width:min-content">aa bb cc</div>
+<div id="e2" style="width:max-content">aa bb cc</div>
+<div id="e3" style="width:fit-content">aa bb cc</div>
+<div style="width:50px"><div id="e4" style="width:fit-content">aa bb cc</div></div>
+<div id="e5" style="width:30px;min-width:max-content">aa bb</div>
+<div id="e6" style="max-width:min-content">aa bbb</div>
+<div id="f"><span id="fo" style="display:inline-block"><span id="fi" style="display:inline-block;width:40px;height:10px"></span>zz</span></div>

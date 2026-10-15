@@ -1,0 +1,81 @@
+<!--
+viewport: 400x300
+vertical-align (CSS2 10.8.1). Font 10px/10px Ahem (ascent 8, descent 2), body margin 0, divs are 300 wide. ".big" spans
+are 20px/20px (ascent 16, descent 4), ".small" ones 10px/10px. A box's extent above its baseline is ascent + half-leading
+(A), below it descent + half-leading (D); with line-height = font-size the half-leading is 0. The line is as high as
+the highest A plus the deepest D over the strut and all inline boxes (after their shifts); baseline = that highest A.
+A text fragment's top = baseline - shift - ascent. `sub` / `super` shift by the parent's font size / 5 + 1 and / 3 + 1
+(Blink's formula; the spec leaves it to the UA).
+
+a   baseline: A = max(8,16) = 16, D = max(2,4) = 4: line 20, baseline 16. "p" top = 16-8 = 8; "Q" top 0; "r" top 8.
+b1  parent 30px font, span 10px `super`: shift 30/3+1 = 11: line above = max(24, 11+8) = 24, below max(6, 2-11) = 6: 30 high,
+    baseline 24. "s" (30px) top 0, "t" top = 24-11-8 = 5 at x=30 (after the 30 wide "s").
+b2  `sub`: shift -(30/5+1) = -7: above 24, below max(6, 2+7) = 9: 33 high. "t"-like "v" top = 24+7-8 = 23.
+c1  vertical-align:5px: span A = 13, D = -3: above 13, below 2: 15 high. "w" top 13-8 = 5, "y" top 13-5-8 = 0.
+c2  50% = half of the span's own line-height (10) = 5: same numbers as c1.
+c3  -3px: above 8, below 2+3 = 5: 13 high. "q" top = 8+3-8 = 3.
+d   middle: shift = x-height/2 - (A-D)/2 = 4 - 6 = -2 (x-height of the test font is 0.8em = 8). "M" box is 20 high: above
+    max(8, 16-2) = 14, below max(2, 4+2) = 6: 20 high; "M" top = 14+2-16 = 0; "x" top = 14-8 = 6.
+e1  text-top: the box's top at the parent's content-area top: shift = 8-16 = -8: above max(8,8) = 8, below max(2,4+8) = 12:
+    20 high; "T" top 8+8-16 = 0.
+e2  text-bottom: shift = D - parent descent = 4-2 = 2: above max(8, 18) = 18, below max(2,2) = 2: 20 high; "B" top 18-2-16 = 0,
+    "h" top 18-8 = 10.
+f1  top: the span (20 high) is taller than the 10 high line: the line grows to 20 at the bottom: baseline 8; span at the
+    line top; the baseline text stays at the top: "j", "k" top 0.
+f2  bottom: the line grows at the top: above 18, below 2; "V" at the line bottom: top 0; "l" top 18-8 = 10.
+h   nested: outer 5px (A 16+5 = 21 above), inner +3 in a 10px span (off 8): above max(8,21,16) = 21, below 2: 23 high.
+    "1" top 21-8 = 13; "2" top 21-5-16 = 0; "3" top 21-8-8 = 5.
+Heights: 20, 30, 33, 15, 15, 13, 20, 20, 20, 20, 20, 23; page 249 high.
+check: line (0,0 300x20) :: baseline=16
+check: text "p" :: (0,8 10x10)
+check: text "Q" :: (10,0 20x20)
+check: text "r" :: (30,8 10x10)
+check: block div#b1 :: (0,20 300x30)
+check: text "s" :: (0,20 30x30)
+check: text "t" :: (30,25 10x10)
+check: block div#b2 :: (0,50 300x33)
+check: text "v" :: (30,73 10x10)
+check: block div#c1 :: (0,83 300x15)
+check: text "w" :: (0,88 10x10)
+check: text "y" :: (10,83 10x10)
+check: block div#c2 :: (0,98 300x15)
+check: text "m" :: (0,103 10x10)
+check: text "n" :: (10,98 10x10)
+check: block div#c3 :: (0,113 300x13)
+check: text "q" :: (10,116 10x10)
+check: block div#d :: (0,126 300x20)
+check: text "x" :: (0,132 10x10)
+check: text "M" :: (10,126 20x20)
+check: text "T" :: (10,146 20x20)
+check: text "i" :: (0,176 10x10)
+check: text "B" :: (10,166 20x20)
+check: text "j" :: (0,186 10x10)
+check: text "U" :: (10,186 20x20)
+check: text "k" :: (30,186 10x10)
+check: text "l" :: (0,216 10x10)
+check: text "V" :: (10,206 20x20)
+check: block div#h :: (0,226 300x23)
+check: text "1" :: (0,239 10x10)
+check: text "2" :: (10,226 20x20)
+check: text "3" :: (30,231 10x10)
+check: block body :: (0,0 400x249)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+div { width: 300px }
+.big { font-size: 20px; line-height: 20px }
+.small { font-size: 10px; line-height: 10px }
+</style>
+<div id="a">p<span class="big">Q</span>r</div>
+<div id="b1" style="font:30px/30px Ahem">s<span class="small" style="vertical-align:super">t</span></div>
+<div id="b2" style="font:30px/30px Ahem">u<span class="small" style="vertical-align:sub">v</span></div>
+<div id="c1">w<span style="vertical-align:5px">y</span></div>
+<div id="c2">m<span style="vertical-align:50%">n</span></div>
+<div id="c3">o<span style="vertical-align:-3px">q</span></div>
+<div id="d">x<span class="big" style="vertical-align:middle">M</span></div>
+<div id="e1">h<span class="big" style="vertical-align:text-top">T</span></div>
+<div id="e2">i<span class="big" style="vertical-align:text-bottom">B</span></div>
+<div id="f1">j<span class="big" style="vertical-align:top">U</span>k</div>
+<div id="f2">l<span class="big" style="vertical-align:bottom">V</span></div>
+<div id="h">1<span class="big" style="vertical-align:5px">2<span class="small" style="vertical-align:3px">3</span></span></div>

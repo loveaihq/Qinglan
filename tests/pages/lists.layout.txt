@@ -1,0 +1,127 @@
+viewport 300x500
+block html (0,0 300x280)
+  block body (0,0 300x280)
+    block ul#ua (0,0 300x20)
+      block li (40,0 260x10)
+        marker "• " (20,0 20x10)
+        line (40,0 260x10) baseline=8
+          text "one" (40,0 30x10)
+      block li (40,10 260x10)
+        marker "• " (20,10 20x10)
+        line (40,10 260x10) baseline=18
+          text "two" (40,10 30x10)
+    block ol#ob (0,20 300x20)
+      block li (40,20 260x10)
+        marker "1. " (10,20 30x10)
+        line (40,20 260x10) baseline=28
+          text "a" (40,20 10x10)
+      block li (40,30 260x10)
+        marker "2. " (10,30 30x10)
+        line (40,30 260x10) baseline=38
+          text "b" (40,30 10x10)
+    block ol#oc (0,40 300x20)
+      block li (40,40 260x10)
+        marker "5. " (10,40 30x10)
+        line (40,40 260x10) baseline=48
+          text "c" (40,40 10x10)
+      block li (40,50 260x10)
+        marker "6. " (10,50 30x10)
+        line (40,50 260x10) baseline=58
+          text "d" (40,50 10x10)
+    block ol#od (0,60 300x30)
+      block li (40,60 260x10)
+        marker "3. " (10,60 30x10)
+        line (40,60 260x10) baseline=68
+          text "e" (40,60 10x10)
+      block li (40,70 260x10)
+        marker "2. " (10,70 30x10)
+        line (40,70 260x10) baseline=78
+          text "f" (40,70 10x10)
+      block li (40,80 260x10)
+        marker "1. " (10,80 30x10)
+        line (40,80 260x10) baseline=88
+          text "g" (40,80 10x10)
+    block ol#oe (0,90 300x20)
+      block li (40,90 260x10)
+        marker "10. " (0,90 40x10)
+        line (40,90 260x10) baseline=98
+          text "h" (40,90 10x10)
+      block li (40,100 260x10)
+        marker "9. " (10,100 30x10)
+        line (40,100 260x10) baseline=108
+          text "i" (40,100 10x10)
+    block ol#of (0,110 300x20)
+      block li (40,110 260x10)
+        marker "20. " (0,110 40x10)
+        line (40,110 260x10) baseline=118
+          text "j" (40,110 10x10)
+      block li (40,120 260x10)
+        marker "21. " (0,120 40x10)
+        line (40,120 260x10) baseline=128
+          text "k" (40,120 10x10)
+    block ol#og (0,130 300x90)
+      block li (40,130 260x10)
+        marker "a. " (10,130 30x10)
+        line (40,130 260x10) baseline=138
+          text "1" (40,130 10x10)
+      block li (40,140 260x10)
+        marker "B. " (10,140 30x10)
+        line (40,140 260x10) baseline=148
+          text "2" (40,140 10x10)
+      block li (40,150 260x10)
+        marker "iii. " (-10,150 50x10)
+        line (40,150 260x10) baseline=158
+          text "3" (40,150 10x10)
+      block li (40,160 260x10)
+        marker "IV. " (0,160 40x10)
+        line (40,160 260x10) baseline=168
+          text "4" (40,160 10x10)
+      block li (40,170 260x10)
+        marker "五、" (20,170 20x10)
+        line (40,170 260x10) baseline=178
+          text "5" (40,170 10x10)
+      block li (40,180 260x10)
+        marker "06. " (0,180 40x10)
+        line (40,180 260x10) baseline=188
+          text "6" (40,180 10x10)
+      block li (40,190 260x10)
+        marker "▪ " (20,190 20x10)
+        line (40,190 260x10) baseline=198
+          text "7" (40,190 10x10)
+      block li (40,200 260x10)
+        marker "◦ " (20,200 20x10)
+        line (40,200 260x10) baseline=208
+          text "8" (40,200 10x10)
+      block li#o9 (40,210 260x10)
+        line (40,210 260x10) baseline=218
+          text "9" (40,210 10x10)
+    block ul#oi (0,220 300x10)
+      block li (40,220 260x10)
+        line (40,220 260x10) baseline=228
+          marker "• " (40,220 20x10)
+          text "in" (60,220 20x10)
+    block ul#nested (0,230 300x20)
+      block li (40,230 260x20)
+        marker "• " (20,230 20x10)
+        block (anonymous) (40,230 260x10)
+          line (40,230 260x10) baseline=238
+            text "nn" (40,230 20x10)
+        block ul (40,240 260x10)
+          block li (80,240 220x10)
+            marker "◦ " (60,240 20x10)
+            line (80,240 220x10) baseline=248
+              text "mm" (80,240 20x10)
+    block ul#ug (0,250 300x0)
+      block li (40,250 260x0)
+        marker "• " (20,250 20x10)
+    block ol#oh (0,250 300x20)
+      block li (40,250 260x20)
+        marker "1. " (-20,250 60x20)
+        line (40,250 260x20) baseline=266
+          text "big" (40,250 60x20)
+    block ul#oj (0,270 300x10)
+      block li (40,270 260x10)
+        marker "• " (20,270 20x10)
+        block p (40,270 260x10)
+          line (40,270 260x10) baseline=278
+            text "para" (40,270 40x10)

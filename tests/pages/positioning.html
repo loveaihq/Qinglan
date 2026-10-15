@@ -1,0 +1,57 @@
+<!--
+viewport: 300x300
+Positioning (CSS2 9.3, 9.6, 10.3.7, 10.3.8, 10.6.4, 10.6.5). Font 10px/10px Ahem, body margin 0, viewport 300x300.
+Relative boxes keep their space in the flow and move by left/top (or -right/-bottom). Absolute boxes leave the flow; their
+containing block is the padding box of the nearest positioned ancestor, else the initial containing block (the viewport
+size at the page origin). Fixed boxes use the viewport.
+
+ra  relative left 10 top 5: normal position (0,0) -> (10,5); it still takes 20 of height. Its text moves with it.
+rb  relative right 10 bottom 5: moves left 10 and up 5: normal position (0,20) -> (-10,15).
+rc  a relative span: only "y" moves (+5,+3): x (0,40), y (15,43), z (20,40).
+cb  relative, margin 10 0 10 10, padding 5, border 2, content 100x60: border box (10,60) 114x74 (60 = 50 + margin 10).
+    Padding box: origin (12,62), 110x70.
+abs1 left 10, top 4, width auto: shrink-to-fit "abc" = 30 (available 110-10 = 100): (12+10, 62+4) = (22,66) 30x10.
+abs2 right 0, bottom 0, width 20, height 10: x = 110-20 = 90 -> 102, y = 70-10 = 60 -> 122.
+abs3 left 10, right 20, top 0, height 5, width auto: width = 110 - 10 - 20 = 80: (22,62) 80x5.
+cb2 relative, 100x40 at y = 60 + 74 + margin 10 = 144. Inside: a block "h" (10 high), then abs4 with no offsets: its static position is
+    where it would have been in the flow: after the block, (0,10) in cb2 -> (0,154), shrink-to-fit "s" = 10.
+plain (y=184, 20 high, not positioned): its absolute children use the initial containing block 300x300.
+ab5 left 5 top 7 width 30 height 10: (5,7). ab6 left 10% top 10% (of 300): (30,30), width 20 height 10.
+ab7 left 0 right 0 width 100 margin auto: (300-100)/2 = 100 each side: (100,0).
+fx  fixed right 10 bottom 10 width 40 height 20: x = 300-10-40 = 250, y = 300-10-20 = 270.
+Paint order: ab5 has z-index -1: painted before the flow (paint-below). The others in document order for z-index auto/0:
+ra rb cb abs1 abs2 abs3 cb2 abs4 fx, then z-index 1 (ab7), then 2 (ab6).
+The page is 184 + 20 = 204 high (absolute boxes take no room).
+check: block div#ra :: (10,5 50x20) [relative]
+check: text "r" :: (10,5 10x10)
+check: block div#rb :: (-10,15 50x20) [relative]
+check: text "q" :: (-10,15 10x10)
+check: text "x" :: (0,40 10x10)
+check: text "y" :: (15,43 10x10)
+check: text "z" :: (20,40 10x10)
+check: block div#cb :: (10,60 114x74) [relative]
+check: block div#abs1 :: (22,66 30x10) [absolute]
+check: block div#abs2 :: (102,122 20x10) [absolute]
+check: block div#abs3 :: (22,62 80x5) [absolute]
+check: block div#cb2 :: (0,144 100x40) [relative]
+check: block span#abs4 :: (0,154 10x10) [absolute]
+check: block div#ab5 :: (5,7 30x10) [absolute]
+check: block div#ab6 :: (30,30 20x10) [absolute]
+check: block div#ab7 :: (100,0 100x10) [absolute]
+check: block div#fx :: (250,270 40x20) [fixed]
+check: block body :: (0,0 300x204)
+check: paint-below div#ab5 :: absolute z=-1
+check: paint-above div#fx :: fixed z=0
+check: paint-above div#ab7 :: absolute z=1
+check: paint-above div#ab6 :: absolute z=2
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+</style>
+<div id="ra" style="position:relative;left:10px;top:5px;width:50px;height:20px">r</div>
+<div id="rb" style="position:relative;right:10px;bottom:5px;width:50px;height:20px">q</div>
+<div id="rc">x<span style="position:relative;left:5px;top:3px">y</span>z</div>
+<div id="cb" style="position:relative;margin:10px 0 10px 10px;padding:5px;border:2px solid;width:100px;height:60px"><div id="abs1" style="position:absolute;left:10px;top:4px">abc</div><div id="abs2" style="position:absolute;right:0;bottom:0;width:20px;height:10px"></div><div id="abs3" style="position:absolute;left:10px;right:20px;top:0;height:5px"></div></div>
+<div id="cb2" style="position:relative;width:100px;height:40px"><div style="height:10px">h</div><span id="abs4" style="position:absolute">s</span></div>
+<div id="plain" style="height:20px"><div id="ab5" style="position:absolute;left:5px;top:7px;width:30px;height:10px;z-index:-1">e</div><div id="ab6" style="position:absolute;left:10%;top:10%;width:20px;height:10px;z-index:2">p</div><div id="ab7" style="position:absolute;left:0;right:0;top:0;width:100px;margin:0 auto;height:10px;z-index:1">m</div><div id="fx" style="position:fixed;right:10px;bottom:10px;width:40px;height:20px">f</div></div>

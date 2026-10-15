@@ -1,0 +1,41 @@
+<!--
+viewport: 400x300
+dpr: 2
+image: s9 200x100
+srcset and sizes (HTML 4.8.4.3) at device pixel ratio 2 and a viewport 400 wide. Candidates: every srcset entry, plus src as
+1x when no entry is 1x; a w descriptor is divided by the source size from `sizes` (default 100vw) to get a density. The
+smallest density >= 2 is chosen, else the largest. The dump shows the chosen source and its density.
+
+s1  1x, 2x, 3x -> 2x.png, density 2.
+s2  b.png 1.5x, c.png 3x, src a.png (1x) -> smallest >= 2 is c.png (3).
+s3  400w, 800w with sizes "(max-width: 500px) 200px, 400px": the viewport is 400 <= 500, so 200px: 400/200 = 2, 800/200 = 4 ->
+    s-400.png (2).
+s4  100w, 300w with sizes 50vw = 200px: densities 0.5 and 1.5, none >= 2 -> the largest, w-300.png (1.5).
+s5  only src: only.png (1).
+s6  no source at all: an image with no source (no request).
+s7  "x.png, y.png 2x": x.png has no descriptor (1x) -> y.png (2).
+s8  "bad.png 100w 2x" is invalid (w and x together) and dropped -> ok.png (2).
+s9  hi.png 2x chosen (src lo.png is the 1x one); loaded with 200x100 pixels: the natural size is 200/2 x 100/2 = 100x50 CSS px.
+check: replaced img#s1 :: [image src=2x.png d=2]
+check: replaced img#s2 :: [image src=c.png d=3]
+check: replaced img#s3 :: [image src=s-400.png d=2]
+check: replaced img#s4 :: [image src=w-300.png d=1.5]
+check: replaced img#s5 :: [image src=only.png d=1]
+check: replaced img#s6 :: 0x0)
+check: replaced img#s7 :: [image src=y.png d=2]
+check: replaced img#s8 :: [image src=ok.png d=2]
+check: replaced img#s9 :: 100x50) [image src=hi.png d=2]
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+</style>
+<div><img id="s1" src="1x.png" srcset="1x.png 1x, 2x.png 2x, 3x.png 3x"></div>
+<div><img id="s2" src="a.png" srcset="b.png 1.5x, c.png 3x"></div>
+<div><img id="s3" src="s.png" srcset="s-400.png 400w, s-800.png 800w" sizes="(max-width: 500px) 200px, 400px"></div>
+<div><img id="s4" srcset="w-100.png 100w, w-300.png 300w" sizes="50vw"></div>
+<div><img id="s5" src="only.png"></div>
+<div><img id="s6"></div>
+<div><img id="s7" srcset="x.png, y.png 2x"></div>
+<div><img id="s8" srcset="bad.png 100w 2x, ok.png 2x"></div>
+<div><img id="s9" src="lo.png" srcset="hi.png 2x"></div>

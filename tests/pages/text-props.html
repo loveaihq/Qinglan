@@ -1,0 +1,63 @@
+<!--
+viewport: 400x400
+Text properties: text-align: justify (css-text-3 7.3, 8.4), text-indent (7.2), letter-spacing and word-spacing (8.1, 8.2),
+text-transform (2.1), tab-size (7.3). Font 10px/10px Ahem (every glyph is 10 wide), body margin 0.
+
+j1  width 100: "aa bb cc" is 80 wide, adding " dd" would make 110: break. Justified: free 20 shared by the 2 spaces (+10 each): the
+    fragment is 100 wide. The last line "dd ee" is not justified: 50 wide.
+j2  width 95, CJK: 9 characters fit (90), the 10th would reach 100. Free 5 is shared by the 8 gaps between the 9 characters:
+    fragment 95 wide. The last line has 6 characters = 60, not justified.
+ti1 width 100, text-indent 30: line 1 has 70: "ab cd" (50) fits, " ef" would reach 80: line 1 starts at x=30. Line 2 at 0.
+ti2 padding-left 30, text-indent -20 (hanging): line 1 starts at 30-20 = 10 with room 100+20: "ij kl mn op" (110) fits on one line.
+ti3 text-indent 10% of the 100 wide content = 10.
+ti4 centred with indent 20: the text (20 wide) is centred in the 80 left after the indent: (80-20)/2 = 30 + indent 20 = 50.
+ls  letter-spacing 2px: 3 letters of 12 = 36.
+ws  word-spacing 5px: "x y" = 30 + 5 = 35.
+tt1 uppercase; tt2 capitalize ("Hello World" is 110 wide, so it wraps in 100: two lines); tt3 capitalize does not restart inside a word across an element boundary (h|ello);
+tt4 full-width maps ASCII to the fullwidth forms (U+FF41 ...).
+tab1 white-space:pre; tab-size 4: tab stops every 40: "a" 10, tab to 40, "b": fragment 50 wide. tab2 tab-size 20px: "c" 10, tab
+    to 20, "d": 30. tab3 default 8 (80): "e", tab to 80, "f": 90.
+Heights: 20, 20, 20, 10 (x6), 20 (tt2), then 10 each; page 190 high.
+check: text "aa bb cc" :: (0,0 100x10)
+check: text "dd ee" :: (0,10 50x10)
+check: text "中文汉字测试一二三" :: (0,20 95x10)
+check: text "四五六七八九" :: (0,30 60x10)
+check: text "ab cd" :: (30,40 50x10)
+check: text "ef gh" :: (0,50 50x10)
+check: block div#ti2 :: (0,60 130x10)
+check: text "ij kl mn op" :: (10,60 110x10)
+check: text "qr" :: (10,70 20x10)
+check: text "st" :: (50,80 20x10)
+check: text "uvw" :: (0,90 36x10)
+check: text "x y" :: (0,100 35x10)
+check: text "AB CD" :: (0,110 50x10)
+check: text "Hello" :: (0,120 50x10)
+check: text "World" :: (0,130 50x10)
+check: text "H" :: (0,140 10x10)
+check: text "ello" :: (10,140 40x10)
+check: text "ａｂ１" :: (0,150 30x10)
+check: text "a\tb" :: (0,160 50x10)
+check: text "c\td" :: (0,170 30x10)
+check: text "e\tf" :: (0,180 90x10)
+check: block body :: (0,0 400x190)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+div { width: 100px }
+</style>
+<div id="j1" style="text-align:justify">aa bb cc dd ee</div>
+<div id="j2" style="text-align:justify;width:95px">中文汉字测试一二三四五六七八九</div>
+<div id="ti1" style="text-indent:30px">ab cd ef gh</div>
+<div id="ti2" style="padding-left:30px;text-indent:-20px">ij kl mn op</div>
+<div id="ti3" style="text-indent:10%">qr</div>
+<div id="ti4" style="text-indent:20px;text-align:center">st</div>
+<div id="ls" style="letter-spacing:2px">uvw</div>
+<div id="ws" style="word-spacing:5px">x y</div>
+<div id="tt1" style="text-transform:uppercase">ab cd</div>
+<div id="tt2" style="text-transform:capitalize">hello world</div>
+<div id="tt3" style="text-transform:capitalize">h<b>ello</b></div>
+<div id="tt4" style="text-transform:full-width">ab1</div>
+<div id="tab1" style="white-space:pre;tab-size:4">a	b</div>
+<div id="tab2" style="white-space:pre;tab-size:20px">c	d</div>
+<div id="tab3" style="white-space:pre">e	f</div>

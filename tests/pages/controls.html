@@ -1,0 +1,75 @@
+<!--
+viewport: 400x300
+Form controls, placeholder boxes and <details> (L1 task 10; HTML 15.3.10, 15.4, 15.5). Font 10px/10px Ahem, body margin 0,
+the controls' UA font is overridden to the same 10px. Controls are inline-blocks with the UA border and padding; their text is
+made from the attributes. A text field is `size` (default 20) characters wide (here "0" = 10), a text area cols x rows, a
+button / submit is as wide as its text. Their content is clipped, and a text field or select keeps its text's baseline (a
+text area sits on its bottom edge, CSS2 10.8.1).
+
+t1  text input, 20 chars: content 200 + padding 2+2 + border 2+2 = 208 wide; 10 + 1+1 + 2+2 = 16 high; "hi" at (2+2, 2+1).
+    Baseline 3 + 8 = 11 below the top: the line is 11 + max(2, 5) = 16 high.
+t2  size=5 with a placeholder: 50 + 8 = 58 wide; the placeholder text "name" sits where a value would.
+btn button "go": 20 + padding 6+6 + border 2+2 = 36 wide, 16 high; text at (2+6, 2+1).
+sub input type=submit without value shows "Submit": 60 + 16 = 76 wide.
+cb/rd check box and radio: 13x13 with margin 3 3 3 4, replaced, so the baseline is the bottom margin edge: margin box 20x19:
+    the line is 19 + 2 = 21 high; cb at (4,3), rd at x = 20 + 4 = 24.
+ta  textarea cols 10 rows 2: 100 + padding 2+2 + border 1+1 = 106 wide; 2 * 10 + 4 + 2 = 26 high; bottom-edge baseline: the line is
+    26 + 2 = 28 high. Text "ab" at (1+2, 1+2).
+sel select showing the selected option "two": 30 + border 1+1 = 32 wide, 12 high; text at (1,1).
+fr  iframe: 300x150 + border 2 = 304x154 grey placeholder; the line is 154 + 2 = 156 high. vd video 300x150 (line 152). cv canvas
+    with width=50 height=20 (line 22). au audio with controls 300x54 (line 56). ob object and em embed 300x150 each: 600 does not fit
+    in 400, so two lines (152 each). mt meter 80x16 and pg progress 160x16 side by side (line 18).
+dt  details is always open: the summary is a list item with an inside marker (the open triangle "▾ "): marker 20 wide, then "sum";
+    the rest of the content below.
+Positions: t1 0, t2 16, btn 32, sub 48, cb/rd 64, ta 85, sel 113, fr 125, vd 281, cv 433, au 455, ob+em 511 (two lines), mt+pg 815,
+details 833 (20 high); page 853 high.
+check: block div#a :: (0,0 400x16)
+check: inline-block input#t1 :: (0,0 208x16) [clip]
+check: text "hi" :: (4,3 20x10)
+check: inline-block input#t2 :: (0,16 58x16) [clip]
+check: text "name" :: (4,19 40x10)
+check: inline-block button#btn :: (0,32 36x16)
+check: text "go" :: (8,35 20x10)
+check: inline-block input#sub :: (0,48 76x16)
+check: text "Submit" :: (8,51 60x10)
+check: block div#e :: (0,64 400x21)
+check: replaced input#cb :: (4,67 13x13) [check]
+check: replaced input#rd :: (24,67 13x13) [check]
+check: block div#f :: (0,85 400x28)
+check: inline-block textarea#ta :: (0,85 106x26) [clip]
+check: text "ab" :: (3,88 20x10)
+check: inline-block select#sel :: (0,113 32x12) [clip]
+check: text "two" :: (1,114 30x10)
+check: replaced iframe#fr :: (0,125 304x154) [placeholder:iframe]
+check: replaced video#vd :: (0,281 300x150) [placeholder:video]
+check: replaced canvas#cv :: (0,433 50x20) [placeholder:canvas]
+check: replaced audio#au :: (0,455 300x54) [placeholder:audio]
+check: replaced object#ob :: (0,511 300x150) [placeholder:object]
+check: replaced embed#em :: (0,663 300x150) [placeholder:embed]
+check: replaced meter#mt :: (0,815 80x16) [control:meter]
+check: replaced progress#pg :: (80,815 160x16) [control:progress]
+check: block details#dt :: (0,833 400x20)
+check: marker "▾ " :: (0,833 20x10)
+check: text "sum" :: (20,833 30x10)
+check: text "body text" :: (0,843 90x10)
+check: block body :: (0,0 400x853)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+input, button, select, textarea { font: 10px/10px Ahem }
+</style>
+<div id="a"><input id="t1" type="text" value="hi"></div>
+<div id="b"><input id="t2" type="text" placeholder="name" size="5"></div>
+<div id="c"><button id="btn">go</button></div>
+<div id="d"><input id="sub" type="submit"></div>
+<div id="e"><input id="cb" type="checkbox"><input id="rd" type="radio"></div>
+<div id="f"><textarea id="ta" cols="10" rows="2">ab</textarea></div>
+<div id="g"><select id="sel"><option>one<option selected>two</select></div>
+<div id="h1"><iframe id="fr" src="x.html"></iframe></div>
+<div id="h2"><video id="vd"></video></div>
+<div id="h3"><canvas id="cv" width="50" height="20"></canvas></div>
+<div id="h4"><audio id="au" controls></audio></div>
+<div id="h5"><object id="ob"></object><embed id="em"></div>
+<div id="h6"><meter id="mt"></meter><progress id="pg"></progress></div>
+<details id="dt"><summary id="sm">sum</summary>body text</details>

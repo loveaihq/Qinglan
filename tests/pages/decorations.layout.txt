@@ -1,0 +1,39 @@
+viewport 300x300
+block html (0,0 300x80)
+  block body (0,0 300x80)
+    block div#a (0,0 300x10)
+      line (0,0 300x10) baseline=8
+        text "abc" (0,0 30x10)
+          underline (0,9 30x1) solid #000000
+    block div#b (0,10 300x10)
+      line (0,10 300x10) baseline=18
+        text "def" (0,10 30x10)
+          line-through (0,15 30x1) solid #000000
+    block div#c (0,20 300x10)
+      line (0,20 300x10) baseline=28
+        text "ghi" (0,20 30x10)
+          overline (0,20 30x1) solid #000000
+    block div#d (0,30 300x10)
+      line (0,30 300x10) baseline=38
+        text "a" (0,30 10x10)
+          underline (0,39 10x1) solid #000000
+        text "b" (10,30 10x10)
+          underline (10,39 10x1) solid #000000
+        inline-block span (20,30 10x10)
+          line (20,30 10x10) baseline=38
+            text "c" (20,30 10x10)
+    block div#e (0,40 300x10)
+      line (0,40 300x10) baseline=48
+        text "j" (0,40 10x10)
+          underline (0,49 10x3) wavy #ff0000
+    block div#f (0,50 300x10)
+      line (0,50 300x10) baseline=58
+        text "kl" (0,50 20x10)
+          underline (0,59 20x1) solid #000000
+          line-through (0,55 20x1) solid #000000
+    block div#g (0,60 300x20)
+      line (0,60 300x20) baseline=76
+        text "m" (0,68 10x10)
+          underline (0,77 10x1) solid #000000
+        text "n" (10,60 20x20)
+          underline (10,78 20x1) solid #000000

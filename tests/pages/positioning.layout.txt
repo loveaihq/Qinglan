@@ -1,0 +1,53 @@
+viewport 300x300
+block html (0,0 300x204)
+  block body (0,0 300x204)
+    block div#ra (10,5 50x20) [relative]
+      line (10,5 50x10) baseline=13
+        text "r" (10,5 10x10)
+    block div#rb (-10,15 50x20) [relative]
+      line (-10,15 50x10) baseline=23
+        text "q" (-10,15 10x10)
+    block div#rc (0,40 300x10)
+      line (0,40 300x10) baseline=48
+        text "x" (0,40 10x10)
+        text "y" (15,43 10x10)
+        text "z" (20,40 10x10)
+    block div#cb (10,60 114x74) [relative]
+      block div#abs1 (22,66 30x10) [absolute]
+        line (22,66 30x10) baseline=74
+          text "abc" (22,66 30x10)
+      block div#abs2 (102,122 20x10) [absolute]
+      block div#abs3 (22,62 80x5) [absolute]
+    block div#cb2 (0,144 100x40) [relative]
+      block div (0,144 100x10)
+        line (0,144 100x10) baseline=152
+          text "h" (0,144 10x10)
+      block (anonymous) (0,154 100x0)
+        block span#abs4 (0,154 10x10) [absolute]
+          line (0,154 10x10) baseline=162
+            text "s" (0,154 10x10)
+    block div#plain (0,184 300x20)
+      block div#ab5 (5,7 30x10) [absolute]
+        line (5,7 30x10) baseline=15
+          text "e" (5,7 10x10)
+      block div#ab6 (30,30 20x10) [absolute]
+        line (30,30 20x10) baseline=38
+          text "p" (30,30 10x10)
+      block div#ab7 (100,0 100x10) [absolute]
+        line (100,0 100x10) baseline=8
+          text "m" (100,0 10x10)
+      block div#fx (250,270 40x20) [fixed]
+        line (250,270 40x10) baseline=278
+          text "f" (250,270 10x10)
+paint-below div#ab5 absolute z=-1
+paint-above div#ra relative z=0
+paint-above div#rb relative z=0
+paint-above div#cb relative z=0
+paint-above div#abs1 absolute z=0
+paint-above div#abs2 absolute z=0
+paint-above div#abs3 absolute z=0
+paint-above div#cb2 relative z=0
+paint-above span#abs4 absolute z=0
+paint-above div#fx fixed z=0
+paint-above div#ab7 absolute z=1
+paint-above div#ab6 absolute z=2

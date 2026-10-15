@@ -152,3 +152,49 @@ fn zhwiki_parse_and_style() {
         assert!(m <= 150.0, "far too slow: median {m:.1} ms");
     }
 }
+
+/// Layout of the same page with the test font at 1280 wide (1b acceptance: <= 100 ms, release, plugged in).
+/// Run with: `cargo test --release -p qinglan-engine --test perf zhwiki_layout -- --nocapture`
+#[test]
+fn zhwiki_layout() {
+    use qinglan_engine::css::style_document_with;
+    use qinglan_engine::layout::{LayoutOptions, layout_document};
+    use qinglan_engine::platform::{Platform, TestPlatform};
+
+    let dir = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/corpus/local/zhwiki"));
+    let Ok(bytes) = std::fs::read(dir.join("page-local.html")) else {
+        println!("perf: tests/corpus/local/zhwiki/page-local.html not found, skipped");
+        return;
+    };
+    let base = Url::parse("http://zh.example/", None).unwrap();
+    let decoded = decode_document(&bytes, None, &BasicPlatform);
+    let mut doc = parse_document(decoded.text);
+    let platform = TestPlatform;
+    let sopts = StyleOptions { viewport_w: 1280.0, viewport_h: 1000.0, ..StyleOptions::default() };
+    let out = style_document_with(&mut doc, Some(&base), &mut DirLoader(dir.clone()), &sopts, Some(&platform as &dyn Platform));
+    let opts = LayoutOptions { viewport_w: 1280.0, viewport_h: 1000.0, ..LayoutOptions::default() };
+    let mut boxes = Series::new("box tree");
+    for _ in 0..RUNS {
+        let t = Instant::now();
+        let tree = qinglan_engine::layout::build_box_tree(&doc, &out.tree);
+        boxes.values.push(ms(t.elapsed()));
+        assert!(!tree.boxes.is_empty());
+    }
+    boxes.print();
+    let mut layout = Series::new("layout");
+    let mut info = (0, 0, 0u64, false);
+    for _ in 0..RUNS {
+        let t = Instant::now();
+        let res = layout_document(&doc, &out.tree, &platform, &opts);
+        layout.values.push(ms(t.elapsed()));
+        info = (res.lines.len(), res.fragments.len(), res.work, res.incomplete);
+    }
+    println!("perf: zhwiki layout (test font, 1280 wide), {RUNS} runs (goal: median <= 100 ms, release)");
+    layout.print();
+    println!("perf: {} lines, {} fragments, {} work units of {}, incomplete: {}", info.0, info.1, info.2, qinglan_engine::layout::DEFAULT_WORK_BUDGET, info.3);
+    assert!(!info.3, "the work budget must not cut the Chinese Wikipedia article");
+    if !cfg!(debug_assertions) {
+        let m = layout.median();
+        assert!(m <= 200.0, "far too slow: median {m:.1} ms");
+    }
+}

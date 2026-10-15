@@ -1,0 +1,11 @@
+<!--
+viewport: 200x100
+Canvas background (CSS2 14.2): the root element's background covers the whole canvas. Here html has one (blue), so the canvas
+is blue and comes from the root; the body keeps painting its own red background over its own box.
+The body is empty with the UA margin 8: body (8,8 184x0); its top and bottom margins collapse through it into one margin of 8 (CSS2 8.3.1), which the root (a new formatting context) contains: html is 8 high.
+check: canvas #0000ff :: (from root)
+check: block html :: (0,0 200x8)
+check: block body :: (8,8 184x0)
+-->
+<!doctype html>
+<html style="background:#00f"><body style="background:#f00"></body></html>

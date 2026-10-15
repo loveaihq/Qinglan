@@ -1,0 +1,4 @@
+viewport 200x100
+canvas #0000ff (from root)
+block html (0,0 200x8)
+  block body (8,8 184x0)

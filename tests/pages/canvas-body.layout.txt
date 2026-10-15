@@ -1,0 +1,6 @@
+viewport 200x100
+canvas #ff0000 (from body)
+block html (0,0 200x26)
+  block body (8,8 184x10)
+    line (8,8 184x10) baseline=16
+      text "hi" (8,8 20x10)

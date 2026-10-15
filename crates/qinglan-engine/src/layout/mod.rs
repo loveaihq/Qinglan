@@ -1,41 +1,73 @@
-//! Layout (layer 1, step 1b-1): the box tree, block layout and basic inline layout.
+//! Layout (layer 1, steps 1b-1 and 1b-2): the box tree, block layout, inline layout, replaced
+//! elements, lists, positioning and work metering.
 //!
 //! Coordinates are [`LayoutUnit`]s (1/64 px). A block box's `x`/`y` are relative to the border box of
-//! its parent; lines and text fragments are relative to the border box of the block container that
-//! owns them. [`dump::dump_layout`] prints absolute positions.
+//! its parent block; lines, text fragments and atomic inlines (`inline-block`, images) are relative to
+//! the border box of the block container that owns them; out-of-flow boxes (`position: absolute |
+//! fixed`) are relative to the block container they sit in in the tree (their static-position
+//! parent). [`dump::dump_layout`] prints absolute positions; [`LayoutResult::page_pos`] gives them for
+//! one box.
 //!
-//! What 1b-1 does: block widths, heights, min/max, percentages, `box-sizing`, margin collapsing,
-//! `overflow` clipping flags, anonymous blocks, and inline formatting with white-space processing,
-//! line breaking, `line-height`, the strut, `text-align: left/center/right` and `<br>`.
-//! What 1b-2 adds (the code is arranged for it): `vertical-align`, inline box padding/border/margin,
-//! `justify`, `text-indent`, `letter-spacing`, `word-spacing`, `inline-block`, replaced elements, lists,
-//! positioning, form controls and work metering.
+//! What it does: block widths, heights, min/max/fit-content, percentages, `box-sizing`, margin
+//! collapsing, `overflow` clipping flags, anonymous blocks, inline formatting (white space, line
+//! breaking, `line-height`, `vertical-align`, inline box edges, `text-align` incl. `justify`,
+//! `text-indent`, spacing, `text-transform`, decorations, `tab-size`), atomic inlines, images with
+//! `srcset`, lists, relative / absolute / fixed positioning with paint-order data, the canvas
+//! background, form controls and placeholder boxes, and a per-page work budget.
 
 pub mod block;
 pub mod boxtree;
 pub mod dump;
+pub mod image;
 pub mod inline;
+pub mod intrinsic;
+pub mod lists;
+pub mod position;
+pub mod replaced;
 pub mod units;
 
 use std::rc::Rc;
 
 use crate::css::cascade::StyleTree;
-use crate::html::atoms::FxHashMap;
+use crate::css::color::Color;
+use crate::css::types::{Position, TextDecorationStyle};
+use crate::html::atoms::{FxHashMap, a};
 use crate::html::dom::Document;
 use crate::platform::{Glyph, Platform};
 
 pub use boxtree::{BoxId, BoxKind, BoxTree, NO_BOX, build_box_tree};
+pub use image::{ImageRequest, ImageSizes, ImageState};
 pub use units::LayoutUnit;
+
+/// Layout work allowed per page, in work units (about one per glyph cluster, a few per line and per
+/// box). A page that needs more is laid out as far as the budget goes; see [`LayoutResult::incomplete`].
+/// A 2.4 MB Chinese Wikipedia article uses about a tenth of it.
+pub const DEFAULT_WORK_BUDGET: u64 = 20_000_000;
+
+/// Inline formatting contexts nested in one another (an `inline-block` in a line of an `inline-block`
+/// in a line ...) are laid out recursively with big stack frames; deeper ones are left empty.
+/// (Nested blocks are bounded by `boxtree::MAX_BOX_DEPTH`.) Page threads have 8 MB of stack in
+/// release builds; the limit also keeps a 1 MB debug main thread safe.
+pub const MAX_PARAGRAPH_DEPTH: u32 = 24;
+
+/// Characters of text shaped per page (a character costs about 130 bytes while its paragraph is laid
+/// out, so this keeps hostile pages -- 10 MB without a space -- near 130 MB). Text beyond it is dropped
+/// and the layout is flagged incomplete. The Chinese Wikipedia article has about a fifth of it.
+pub const MAX_SHAPED_CHARS: u64 = 1_000_000;
 
 #[derive(Clone, Copy, Debug)]
 pub struct LayoutOptions {
     pub viewport_w: f32,
     pub viewport_h: f32,
+    /// Device pixels per CSS px (picks the `srcset` candidate).
+    pub dpr: f32,
+    /// Work units allowed for this page.
+    pub work_budget: u64,
 }
 
 impl Default for LayoutOptions {
     fn default() -> Self {
-        LayoutOptions { viewport_w: 1280.0, viewport_h: 1000.0 }
+        LayoutOptions { viewport_w: 1280.0, viewport_h: 1000.0, dpr: 1.0, work_budget: DEFAULT_WORK_BUDGET }
     }
 }
 
@@ -51,6 +83,8 @@ pub struct BoxOut {
     pub clip: bool,
     /// The lines of the block's inline formatting context: `LayoutResult::lines[a..b]`.
     pub lines: (u32, u32),
+    /// The list marker of an outside-marker list item: `LayoutResult::markers[m - 1]`, 0 for none.
+    pub marker: u32,
 }
 
 /// One line box. Positions are relative to the border box of the owning block.
@@ -71,14 +105,22 @@ pub struct Line {
 #[derive(Clone, Copy, Debug)]
 pub enum FragKind {
     /// A piece of text from one text box on one line: bytes `start..end` of `LayoutResult::texts[text]`,
-    /// shaped into `LayoutResult::glyphs[glyphs.0..glyphs.1]`.
-    Text { text: u32, start: u32, end: u32, glyphs: (u32, u32) },
+    /// shaped into `LayoutResult::glyphs[glyphs.0..glyphs.1]` (advances include letter- and
+    /// word-spacing and justification), with the decoration lines `LayoutResult::decorations[decor.0..decor.1]`.
+    Text { text: u32, start: u32, end: u32, glyphs: (u32, u32), decor: (u32, u32) },
+    /// The text of an inside list marker (same fields as `Text`).
+    Marker { text: u32, start: u32, end: u32, glyphs: (u32, u32) },
     /// The forced break itself (zero width).
     Br,
+    /// An atomic inline (`inline-block`, image ...): its box is `box_id`, positioned in `LayoutResult::boxes`.
+    Atomic,
+    /// The border box of an inline element on this line, for its background and border;
+    /// `first` / `last`: this line holds the start / end of the element (the edges are drawn there).
+    InlineBox { first: bool, last: bool },
 }
 
-/// A text fragment (the content area of the text: font ascent + descent high) or a `<br>`.
-/// Positions are relative to the border box of the block that owns the line.
+/// A text fragment (the content area of the text: font ascent + descent high), a `<br>`, an atomic
+/// inline or an inline element's box. Positions are relative to the border box of the block that owns the line.
 #[derive(Clone, Copy, Debug)]
 pub struct Fragment {
     pub box_id: BoxId,
@@ -89,21 +131,88 @@ pub struct Fragment {
     pub h: LayoutUnit,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DecorKind {
+    Underline,
+    Overline,
+    LineThrough,
+}
+
+/// One decoration line of a text fragment: a rectangle `w` wide and `thickness` high at (`x`, `y`)
+/// (owner block coordinates), drawn in `style` and `color`.
+#[derive(Clone, Copy, Debug)]
+pub struct Decoration {
+    pub kind: DecorKind,
+    pub style: TextDecorationStyle,
+    pub color: Color,
+    pub x: LayoutUnit,
+    pub y: LayoutUnit,
+    pub w: LayoutUnit,
+    pub thickness: LayoutUnit,
+}
+
+/// A positioned box in the order it is painted (L1 task 10): `below` before the normal flow
+/// (`z-index` < 0), `above` after it (`z-index` auto / 0 in document order, then positive ones).
+#[derive(Clone, Copy, Debug)]
+pub struct Positioned {
+    pub box_id: BoxId,
+    pub position: Position,
+    pub z_index: i32,
+}
+
+/// The canvas background (CSS2 14.2): the colour and the box it came from (that box does not paint it again).
+#[derive(Clone, Copy, Debug)]
+pub struct Canvas {
+    pub color: Color,
+    pub from: BoxId,
+}
+
 pub struct LayoutResult {
     pub tree: BoxTree,
-    /// Parallel to `tree.boxes`; only block boxes get positions.
+    /// Parallel to `tree.boxes`; every block-level, atomic and replaced box gets a position.
     pub boxes: Vec<BoxOut>,
     pub lines: Vec<Line>,
     pub fragments: Vec<Fragment>,
     pub glyphs: Vec<Glyph>,
     /// The text of every text item after white-space processing (what fragments point into).
     pub texts: Vec<String>,
+    pub decorations: Vec<Decoration>,
+    /// Outside list markers (see `BoxOut::marker`), relative to the border box of their list item.
+    pub markers: Vec<Fragment>,
+    /// Out-of-flow boxes: (block container they are positioned in, the box), in document order.
+    pub oof: Vec<(BoxId, BoxId)>,
+    pub below: Vec<Positioned>,
+    pub above: Vec<Positioned>,
+    pub canvas: Option<Canvas>,
+    /// The images the page wants (see [`image`]).
+    pub images: Vec<ImageRequest>,
     pub viewport: (LayoutUnit, LayoutUnit),
+    /// The work budget ran out: the rest of the page was not laid out (1c shows
+    /// "页面太复杂，只显示了一部分").
+    pub incomplete: bool,
+    /// Work units used.
+    pub work: u64,
 }
 
 impl LayoutResult {
     pub fn box_out(&self, id: BoxId) -> BoxOut {
         self.boxes.get(id as usize).copied().unwrap_or_default()
+    }
+
+    /// Top-left corner of the border box of `id` in page coordinates (for `position: fixed` boxes:
+    /// viewport coordinates at scroll position 0).
+    pub fn page_pos(&self, id: BoxId) -> (LayoutUnit, LayoutUnit) {
+        let (mut x, mut y) = (LayoutUnit::ZERO, LayoutUnit::ZERO);
+        let mut cur = id;
+        let mut steps = 0;
+        while cur != NO_BOX && steps < 100_000 {
+            let o = self.box_out(cur);
+            x += o.x;
+            y += o.y;
+            cur = self.tree.layout_parent(cur);
+            steps += 1;
+        }
+        (x, y)
     }
 }
 
@@ -115,6 +224,25 @@ pub(crate) struct ResolvedFont {
     /// Half-leading above and below the content area for the element's `line-height`.
     pub lead_top: LayoutUnit,
     pub lead_bottom: LayoutUnit,
+    /// Height of an "x" and advance of "0" (`ex`, `ch`).
+    pub x_height: LayoutUnit,
+    pub zero_adv: LayoutUnit,
+    /// Decoration line positions, px: underline below the baseline, strike-through above it.
+    pub underline_offset: f32,
+    pub underline_thickness: f32,
+    pub strike_offset: f32,
+    pub strike_thickness: f32,
+}
+
+/// An out-of-flow box waiting for its containing block to be finished (position.rs).
+pub(crate) struct Pending {
+    pub id: BoxId,
+    /// The block container the box sits in; `(sx, sy)` is the static position in its coordinates.
+    pub owner: BoxId,
+    pub sx: LayoutUnit,
+    pub sy: LayoutUnit,
+    /// The containing block: a positioned box, or `None` for the initial containing block.
+    pub cb: Option<BoxId>,
 }
 
 pub(crate) struct Layouter<'a> {
@@ -126,35 +254,136 @@ pub(crate) struct Layouter<'a> {
     pub fragments: Vec<Fragment>,
     pub glyphs: Vec<Glyph>,
     pub texts: Vec<String>,
-    pub fonts: FxHashMap<(usize, Option<Rc<str>>), Rc<ResolvedFont>>,
-    /// Per box: the number of the last line the box contributed to (see `inline.rs`).
-    pub stamp: Vec<u32>,
+    pub decorations: Vec<Decoration>,
+    pub markers: Vec<Fragment>,
+    /// Keyed by the addresses of the shared font group and the language string of the style.
+    pub fonts: FxHashMap<(usize, usize), Rc<ResolvedFont>>,
+    /// Per box: does the box or an ancestor it passes decoration lines down from declare any?
+    pub decorated: Vec<bool>,
+    /// Per box: (number of the last line the box was seen on, its entry in that line) -- see `inline.rs`.
+    pub stamp: Vec<(u32, u32)>,
     pub line_no: u32,
     pub viewport: (LayoutUnit, LayoutUnit),
+    pub work: u64,
+    pub budget: u64,
+    pub exhausted: bool,
+    /// Paragraphs already shaped while measuring (inline.rs).
+    pub paras: FxHashMap<BoxId, inline::Prepared>,
+    /// Min-content and max-content widths of boxes (intrinsic.rs).
+    pub widths: FxHashMap<BoxId, (LayoutUnit, LayoutUnit)>,
+    pub pending: Vec<Pending>,
+    pub cb_stack: Vec<BoxId>,
+    pub oof_list: Vec<(BoxId, BoxId)>,
+    pub scratch: Vec<BoxId>,
+    pub images: &'a ImageSizes,
+    /// Nesting of inline formatting contexts being laid out or measured (see `MAX_PARAGRAPH_DEPTH`).
+    pub depth: u32,
+    /// Characters that may still be shaped on this page.
+    pub text_left: u64,
+    /// Text was dropped because of the page's text allowance.
+    pub truncated: bool,
 }
 
-/// Lay out a styled document. The platform supplies fonts, shaping and line-break opportunities.
+impl Layouter<'_> {
+    /// Count `n` work units. Returns false once the budget is used up.
+    pub(crate) fn charge(&mut self, n: u64) -> bool {
+        self.work = self.work.saturating_add(n);
+        if self.work > self.budget {
+            self.exhausted = true;
+        }
+        !self.exhausted
+    }
+}
+
+/// Lay out a styled document with no image sizes known. The platform supplies fonts, shaping and
+/// line-break opportunities.
 pub fn layout_document(doc: &Document, styles: &StyleTree, platform: &dyn Platform, opts: &LayoutOptions) -> LayoutResult {
-    let tree = build_box_tree(doc, styles);
+    layout_document_with(doc, styles, platform, opts, &ImageSizes::new())
+}
+
+/// Lay out a styled document; `images` holds the image sizes the host has learned so far.
+pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn Platform, opts: &LayoutOptions, images: &ImageSizes) -> LayoutResult {
+    let env = boxtree::BuildEnv { viewport_w: opts.viewport_w, viewport_h: opts.viewport_h, dpr: opts.dpr, images };
+    let tree = boxtree::build_box_tree_with(doc, styles, &env);
     let viewport = (LayoutUnit::from_f32(opts.viewport_w).max0(), LayoutUnit::from_f32(opts.viewport_h).max0());
-    let (boxes, lines, fragments, glyphs, texts) = {
-        let n = tree.boxes.len();
-        let mut l = Layouter {
-            doc,
-            tree: &tree,
-            platform,
-            out: vec![BoxOut::default(); n],
-            lines: Vec::new(),
-            fragments: Vec::new(),
-            glyphs: Vec::new(),
-            texts: Vec::new(),
-            fonts: FxHashMap::default(),
-            stamp: vec![0; n],
-            line_no: 0,
-            viewport,
-        };
-        l.layout_root();
-        (l.out, l.lines, l.fragments, l.glyphs, l.texts)
+    let n = tree.boxes.len();
+    let mut l = Layouter {
+        doc,
+        tree: &tree,
+        platform,
+        out: vec![BoxOut::default(); n],
+        lines: Vec::new(),
+        fragments: Vec::new(),
+        glyphs: Vec::new(),
+        texts: Vec::new(),
+        decorations: Vec::new(),
+        markers: Vec::new(),
+        fonts: FxHashMap::default(),
+        decorated: inline::decorated_boxes(&tree),
+        stamp: vec![(0, 0); n],
+        line_no: 0,
+        viewport,
+        work: 0,
+        budget: opts.work_budget,
+        exhausted: false,
+        paras: FxHashMap::default(),
+        widths: FxHashMap::default(),
+        pending: Vec::new(),
+        cb_stack: Vec::new(),
+        oof_list: Vec::new(),
+        scratch: Vec::new(),
+        images,
+        depth: 0,
+        text_left: (opts.work_budget / 2).min(MAX_SHAPED_CHARS),
+        truncated: false,
     };
-    LayoutResult { tree, boxes, lines, fragments, glyphs, texts, viewport }
+    l.layout_root();
+    let (boxes, lines, fragments, glyphs, texts, decorations, markers, oof, work, incomplete) =
+        (l.out, l.lines, l.fragments, l.glyphs, l.texts, l.decorations, l.markers, l.oof_list, l.work, l.exhausted || l.truncated);
+    let canvas = canvas_background(doc, &tree);
+    let (below, above) = paint_order(&tree);
+    let images = tree.images.clone();
+    LayoutResult { tree, boxes, lines, fragments, glyphs, texts, decorations, markers, oof, below, above, canvas, images, viewport, incomplete, work }
+}
+
+/// CSS2 14.2: the root element's background covers the canvas; when it has none (transparent), the
+/// `body`'s does, and then the `body` does not paint it again.
+fn canvas_background(doc: &Document, tree: &BoxTree) -> Option<Canvas> {
+    let bg_of = |id: BoxId| -> Option<Color> {
+        let s = &tree.get(id).style;
+        let c = s.misc.background_color.resolve(s.text.color);
+        (c.a != 0).then_some(c)
+    };
+    let root = tree.root;
+    if let Some(color) = bg_of(root) {
+        return Some(Canvas { color, from: root });
+    }
+    if tree.get(root).anonymous {
+        return None;
+    }
+    let body = tree.get(root).children.iter().copied().find(|&c| {
+        let b = tree.get(c);
+        b.kind == BoxKind::Block && !b.anonymous && doc.is_html_element(b.node, a::BODY)
+    })?;
+    bg_of(body).map(|color| Canvas { color, from: body })
+}
+
+/// Positioned boxes in painting order (L1 task 10): `z-index` < 0 first, then auto / 0 in document order,
+/// then positive ones. The full stacking order is layer 2.
+fn paint_order(tree: &BoxTree) -> (Vec<Positioned>, Vec<Positioned>) {
+    let mut all: Vec<(i32, u32, Positioned)> = Vec::new();
+    for (i, b) in tree.boxes.iter().enumerate() {
+        if !matches!(b.kind, BoxKind::Block | BoxKind::InlineBlock | BoxKind::Replaced) {
+            continue;
+        }
+        let pos = b.style.boxs.position;
+        if matches!(pos, Position::Static | Position::Sticky) {
+            continue;
+        }
+        let z = b.style.boxs.z_index.unwrap_or(0);
+        all.push((z, b.order, Positioned { box_id: i as BoxId, position: pos, z_index: z }));
+    }
+    all.sort_by_key(|&(z, order, p)| (z, order, p.box_id));
+    let (neg, rest): (Vec<_>, Vec<_>) = all.into_iter().partition(|(z, ..)| *z < 0);
+    (neg.into_iter().map(|t| t.2).collect(), rest.into_iter().map(|t| t.2).collect())
 }

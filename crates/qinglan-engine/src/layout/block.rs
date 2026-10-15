@@ -1,5 +1,6 @@
 //! Block layout: widths (CSS2 10.3.3), min/max (10.4, 10.7), heights (10.6.3), percentages (10.2, 10.5),
-//! `box-sizing` (css-sizing-3) and margin collapsing (CSS2 8.3.1).
+//! `box-sizing` (css-sizing-3), intrinsic-size keywords (css-sizing-3 3), margin collapsing (CSS2 8.3.1),
+//! relative positioning (CSS2 9.3.2) and list markers (css-lists-3 3).
 //!
 //! A block is laid out knowing only its containing block's width (and height when definite); its own
 //! position is set by the parent afterwards. That works because margin collapsing can be described
@@ -8,12 +9,13 @@
 //! whether its own margins collapse through it (`through`); the parent then merges margins between
 //! siblings and places the children.
 
-use super::boxtree::{BoxId, LayoutBox};
+use super::boxtree::{BoxId, BoxKind, Control, LayoutBox};
 use super::units::{LayoutUnit as LU, Margin};
-use super::{BoxOut, Layouter};
-use crate::css::computed::BoxStyle;
-use crate::css::types::{BoxSizing, Dim, Display, Overflow};
+use super::{BoxOut, Fragment, FragKind, Layouter};
+use crate::css::computed::{BoxStyle, slant_of};
+use crate::css::types::{BoxSizing, Dim, Display, ListStylePosition, Overflow, Position};
 use crate::css::values::Lp;
+use crate::platform::FontQuery;
 
 pub(crate) struct BlockResult {
     /// Border-box height (the width is in `out[id].w`).
@@ -28,9 +30,37 @@ pub(crate) struct BlockResult {
     pub top_only: Margin,
     /// An empty block whose top and bottom margins are adjoining (CSS2 8.3.1 last paragraphs).
     pub through: bool,
+    /// The `position: relative` offset (CSS2 9.3.2), added to the box's position by whoever places it.
+    pub rel: (LU, LU),
 }
 
-fn lp_has_percent(l: &Lp) -> bool {
+/// The edges and size specifications of a block (see `block_geometry`).
+pub(crate) struct Geom {
+    pad: [LU; 4],
+    bor: [LU; 4],
+    h_extra: LU,
+    v_extra: LU,
+    m_top: LU,
+    m_bot: LU,
+    content_w: LU,
+    ml: LU,
+    spec_h: Option<LU>,
+    min_h: LU,
+    max_h: Option<LU>,
+    repl: Option<(LU, LU)>,
+}
+
+/// How a block is laid out beyond the ordinary rules.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Flow {
+    pub root: bool,
+    /// Content width fixed by the caller (atomic inlines, out-of-flow boxes).
+    pub forced_w: Option<LU>,
+    /// Content height fixed by the caller (out-of-flow boxes with `top` and `bottom`).
+    pub forced_h: Option<LU>,
+}
+
+pub(crate) fn lp_has_percent(l: &Lp) -> bool {
     match l {
         Lp::Len(..) => false,
         Lp::Pct(_) => true,
@@ -38,9 +68,9 @@ fn lp_has_percent(l: &Lp) -> bool {
     }
 }
 
-/// A size property as a length; `None` for `auto`, `none`, the intrinsic-size keywords (not laid out
-/// in 1b-1: they act like `auto`) and for percentages without a definite base.
-fn resolve_dim(d: &Dim, base: Option<LU>) -> Option<LU> {
+/// A size property as a length; `None` for `auto`, `none`, the intrinsic-size keywords (see
+/// `Layouter::kw_size`) and for percentages without a definite base.
+pub(crate) fn resolve_dim(d: &Dim, base: Option<LU>) -> Option<LU> {
     match d {
         Dim::Lp(l) if !lp_has_percent(l) => Some(LU::from_f32(l.resolve(0.0))),
         Dim::Lp(l) => base.map(|b| LU::from_f32(l.resolve(b.to_f32()))),
@@ -49,7 +79,7 @@ fn resolve_dim(d: &Dim, base: Option<LU>) -> Option<LU> {
 }
 
 /// A margin; `None` for `auto`.
-fn resolve_margin(d: &Dim, base: LU) -> Option<LU> {
+pub(crate) fn resolve_margin(d: &Dim, base: LU) -> Option<LU> {
     match d {
         Dim::Auto => None,
         Dim::Lp(l) => Some(LU::from_f32(l.resolve(base.to_f32()))),
@@ -57,12 +87,12 @@ fn resolve_margin(d: &Dim, base: LU) -> Option<LU> {
     }
 }
 
-fn pad_px(l: &Lp, base: LU) -> LU {
+pub(crate) fn pad_px(l: &Lp, base: LU) -> LU {
     LU::from_f32(l.resolve(base.to_f32())).max0()
 }
 
 /// Border widths are whole px, and a thin border does not vanish (like Blink).
-fn border_px(w: f32) -> LU {
+pub(crate) fn border_px(w: f32) -> LU {
     if w >= 1.0 {
         LU::from_f32(w.floor())
     } else if w > 0.0 {
@@ -82,11 +112,11 @@ fn overflow_bfc(bs: &BoxStyle) -> bool {
 /// Boxes that start a new block formatting context: their margins do not collapse with their
 /// children's (CSS2 9.4.1, 8.3.1).
 fn establishes_bfc(bx: &LayoutBox, bs: &BoxStyle) -> bool {
-    overflow_bfc(bs) || bs.display == Display::FlowRoot || bx.fallback.is_some()
+    overflow_bfc(bs) || bs.display == Display::FlowRoot || bx.fallback.is_some() || bx.oof || matches!(bx.kind, BoxKind::InlineBlock | BoxKind::Replaced)
 }
 
 /// CSS2 10.3.3 and 10.4: content width and the two horizontal margins.
-fn solve_width(cb: LU, w: Option<LU>, ml: Option<LU>, mr: Option<LU>, extra: LU, min: LU, max: Option<LU>) -> (LU, LU, LU) {
+pub(crate) fn solve_width(cb: LU, w: Option<LU>, ml: Option<LU>, mr: Option<LU>, extra: LU, min: LU, max: Option<LU>) -> (LU, LU, LU) {
     let inner = |w: Option<LU>| -> (LU, LU, LU) {
         match w {
             None => {
@@ -126,65 +156,61 @@ fn solve_width(cb: LU, w: Option<LU>, ml: Option<LU>, mr: Option<LU>, extra: LU,
     r
 }
 
+/// The `position: relative` offset (CSS2 9.3.2): `left` wins over `right`, `top` over `bottom`;
+/// percentages refer to the containing block (vertical ones only when its height is definite).
+fn relative_offset(bs: &BoxStyle, cb_w: LU, cb_h: Option<LU>) -> (LU, LU) {
+    if bs.position != Position::Relative {
+        return (LU::ZERO, LU::ZERO);
+    }
+    let get = |d: &Dim, base: Option<LU>| match d {
+        Dim::Lp(l) if !lp_has_percent(l) => Some(LU::from_f32(l.resolve(0.0))),
+        Dim::Lp(l) => base.map(|b| LU::from_f32(l.resolve(b.to_f32()))),
+        _ => None,
+    };
+    let [top, right, bottom, left] = &bs.inset;
+    let dx = get(left, Some(cb_w)).or_else(|| get(right, Some(cb_w)).map(|v| -v)).unwrap_or(LU::ZERO);
+    let dy = get(top, cb_h).or_else(|| get(bottom, cb_h).map(|v| -v)).unwrap_or(LU::ZERO);
+    (dx, dy)
+}
+
 impl Layouter<'_> {
     pub(super) fn layout_root(&mut self) {
         let root = self.tree.root;
         let (vw, vh) = self.viewport;
-        let r = self.layout_block(root, vw, Some(vh), true);
+        let r = self.layout_block(root, vw, Some(vh), Flow { root: true, ..Flow::default() });
         if let Some(o) = self.out.get_mut(root as usize) {
-            o.x = r.ml;
-            o.y = r.mt.resolve();
+            o.x = r.ml + r.rel.0;
+            o.y = r.mt.resolve() + r.rel.1;
         }
+        self.resolve_pending(None, 0);
     }
 
     /// Lay out the block `id` inside a containing block of content width `cb_w` (and content height
     /// `cb_h` when it is definite). Fills in `out[id]` except for `x`/`y`.
-    pub(super) fn layout_block(&mut self, id: BoxId, cb_w: LU, cb_h: Option<LU>, is_root: bool) -> BlockResult {
+    pub(super) fn layout_block(&mut self, id: BoxId, cb_w: LU, cb_h: Option<LU>, flow: Flow) -> BlockResult {
         let tree = self.tree;
         let bx = tree.get(id);
-        let style = bx.style.clone();
-        let bs: &BoxStyle = &style.boxs;
-        let bd = &style.border;
+        let is_root = flow.root;
 
-        // Edges. Percentages of padding and margins, vertical ones too, refer to the containing
-        // block's width (CSS2 8.3, 8.4).
-        let pad = [pad_px(&bs.padding[0], cb_w), pad_px(&bs.padding[1], cb_w), pad_px(&bs.padding[2], cb_w), pad_px(&bs.padding[3], cb_w)];
-        let bor = [border_px(bd.width[0]), border_px(bd.width[1]), border_px(bd.width[2]), border_px(bd.width[3])];
-        let marg = [
-            resolve_margin(&bs.margin[0], cb_w),
-            resolve_margin(&bs.margin[1], cb_w),
-            resolve_margin(&bs.margin[2], cb_w),
-            resolve_margin(&bs.margin[3], cb_w),
-        ];
-        let h_extra = pad[1] + pad[3] + bor[1] + bor[3];
-        let v_extra = pad[0] + pad[2] + bor[0] + bor[2];
-        let border_box = bs.box_sizing == BoxSizing::BorderBox;
-        let to_cw = |v: LU| if border_box { (v - h_extra).max0() } else { v };
-        let to_ch = |v: LU| if border_box { (v - v_extra).max0() } else { v };
+        if !self.charge(4 + bx.children.len() as u64) {
+            return BlockResult { h: LU::ZERO, ml: LU::ZERO, mt: Margin::default(), mb: Margin::default(), top_only: Margin::default(), through: false, rel: (LU::ZERO, LU::ZERO) };
+        }
+        // The geometry is worked out in a function of its own so that its many temporaries do not
+        // sit in this frame while the children (the recursion) are laid out.
+        let g = self.block_geometry(id, cb_w, cb_h, flow);
 
-        // Width (10.3.3) with min/max (10.4).
-        let spec_w = resolve_dim(&bs.width, Some(cb_w)).map(to_cw);
-        let min_w = resolve_dim(&bs.min_width, Some(cb_w)).map_or(LU::ZERO, to_cw);
-        let max_w = resolve_dim(&bs.max_width, Some(cb_w)).map(to_cw);
-        let (content_w, ml, _mr) = solve_width(cb_w, spec_w, marg[3], marg[1], h_extra, min_w, max_w);
-
-        // Height: a percentage needs a definite containing block height, otherwise it is `auto`
-        // (10.5). Min/max (10.7) apply to the result.
-        let spec_h = resolve_dim(&bs.height, cb_h).map(to_ch);
-        let min_h = resolve_dim(&bs.min_height, cb_h).map_or(LU::ZERO, to_ch);
-        let max_h = resolve_dim(&bs.max_height, cb_h).map(to_ch);
-        let clamp_h = |h: LU| max_h.map_or(h, |m| h.min(m)).max(min_h);
-        let spec_h = spec_h.map(clamp_h);
-
-        let content_left = bor[3] + pad[3];
-        let content_top = bor[0] + pad[0];
-        let m_top = marg[0].unwrap_or(LU::ZERO);
-        let m_bot = marg[2].unwrap_or(LU::ZERO);
+        let positioned = bx.style.boxs.position != Position::Static;
+        if positioned {
+            self.cb_stack.push(id);
+        }
+        let pending_mark = self.pending.len();
 
         // Which margins of this box may collapse with its content (8.3.1).
-        let bfc = is_root || establishes_bfc(bx, bs);
-        let top_collapses = !bfc && bor[0] == LU::ZERO && pad[0] == LU::ZERO;
-        let bottom_collapses = !bfc && bor[2] == LU::ZERO && pad[2] == LU::ZERO && spec_h.is_none() && min_h == LU::ZERO;
+        let bfc = is_root || establishes_bfc(bx, &bx.style.boxs);
+        let top_collapses = !bfc && g.bor[0] == LU::ZERO && g.pad[0] == LU::ZERO;
+        let bottom_collapses = !bfc && g.bor[2] == LU::ZERO && g.pad[2] == LU::ZERO && g.spec_h.is_none() && g.min_h == LU::ZERO;
+        let (content_left, content_top) = (g.bor[3] + g.pad[3], g.bor[0] + g.pad[0]);
+        let (m_top, m_bot) = (g.m_top, g.m_bot);
 
         let mut mt = Margin::from(m_top);
         let mut mb = Margin::from(m_bot);
@@ -192,8 +218,10 @@ impl Layouter<'_> {
         let mut through = false;
         let content_h_auto;
 
-        if bx.inline_children {
-            content_h_auto = self.layout_inline(id, content_w, content_left, content_top);
+        if g.repl.is_some() {
+            content_h_auto = LU::ZERO;
+        } else if bx.inline_children {
+            content_h_auto = self.layout_inline(id, g.content_w, content_left, content_top);
             let has_lines = self.out.get(id as usize).is_some_and(|o| o.lines.1 > o.lines.0);
             if top_collapses && bottom_collapses && !has_lines {
                 through = true;
@@ -209,7 +237,10 @@ impl Layouter<'_> {
             let mut at_top = top_collapses;
             let mut top_margin = Margin::from(m_top);
             for &cid in &bx.children {
-                let r = self.layout_block(cid, content_w, spec_h, false);
+                if self.exhausted {
+                    break;
+                }
+                let r = self.layout_block(cid, g.content_w, g.spec_h, Flow::default());
                 let y;
                 if r.through {
                     // Placed where it would be if it had a bottom border (8.3.1).
@@ -232,8 +263,8 @@ impl Layouter<'_> {
                     strut = r.mb;
                 }
                 if let Some(o) = self.out.get_mut(cid as usize) {
-                    o.x = content_left + r.ml;
-                    o.y = y;
+                    o.x = content_left + r.ml + r.rel.0;
+                    o.y = y + r.rel.1;
                 }
             }
             if at_top {
@@ -265,17 +296,180 @@ impl Layouter<'_> {
             }
         }
 
-        let content_h = match spec_h {
-            Some(h) => h,
-            None => clamp_h(content_h_auto),
-        };
-        let w = content_w + h_extra;
-        let h = content_h + v_extra;
-        let clip = matches!(bs.overflow_x, Overflow::Hidden | Overflow::Clip) || matches!(bs.overflow_y, Overflow::Hidden | Overflow::Clip);
-        if let Some(o) = self.out.get_mut(id as usize) {
-            let lines = o.lines;
-            *o = BoxOut { x: o.x, y: o.y, w, h, clip, lines };
+        self.finish_box(id, &g, content_h_auto, content_top);
+        if positioned {
+            self.cb_stack.pop();
+            self.resolve_pending(Some(id), pending_mark);
         }
-        BlockResult { h, ml, mt, mb, top_only, through }
+        let rel = relative_offset(&bx.style.boxs, cb_w, cb_h);
+        BlockResult { h: self.out.get(id as usize).map_or(LU::ZERO, |o| o.h), ml: g.ml, mt, mb, top_only, through, rel }
+    }
+
+    /// Edges, width and height specifications of block `id` in a containing block `cb_w` wide.
+    fn block_geometry(&mut self, id: BoxId, cb_w: LU, cb_h: Option<LU>, flow: Flow) -> Geom {
+        let tree = self.tree;
+        let bx = tree.get(id);
+        let style = bx.style.clone();
+        let bs: &BoxStyle = &style.boxs;
+        let bd = &style.border;
+
+        // Edges. Percentages of padding and margins, vertical ones too, refer to the containing
+        // block's width (CSS2 8.3, 8.4).
+        let pad = [pad_px(&bs.padding[0], cb_w), pad_px(&bs.padding[1], cb_w), pad_px(&bs.padding[2], cb_w), pad_px(&bs.padding[3], cb_w)];
+        let bor = [border_px(bd.width[0]), border_px(bd.width[1]), border_px(bd.width[2]), border_px(bd.width[3])];
+        let marg = [
+            resolve_margin(&bs.margin[0], cb_w),
+            resolve_margin(&bs.margin[1], cb_w),
+            resolve_margin(&bs.margin[2], cb_w),
+            resolve_margin(&bs.margin[3], cb_w),
+        ];
+        let h_extra = pad[1] + pad[3] + bor[1] + bor[3];
+        let v_extra = pad[0] + pad[2] + bor[0] + bor[2];
+        let border_box = bs.box_sizing == BoxSizing::BorderBox;
+        let to_cw = |v: LU| if border_box { (v - h_extra).max0() } else { v };
+        let to_ch = |v: LU| if border_box { (v - v_extra).max0() } else { v };
+
+        // Replaced elements: the content size comes from the element (CSS2 10.3.2, 10.6.2).
+        let repl = (bx.kind == BoxKind::Replaced).then(|| self.replaced_size(id, cb_w, cb_h));
+
+        // Width (10.3.3) with min/max (10.4). The intrinsic-size keywords (`min-content` ...) give a
+        // content-box size whatever `box-sizing` says.
+        let avail = (cb_w - marg[3].unwrap_or(LU::ZERO) - marg[1].unwrap_or(LU::ZERO) - h_extra).max0();
+        let spec_w = match self.kw_size(id, &bs.width, avail) {
+            Some(v) => Some(v),
+            None => resolve_dim(&bs.width, Some(cb_w)).map(to_cw),
+        };
+        let min_w = match self.kw_size(id, &bs.min_width, avail) {
+            Some(v) => v,
+            None => resolve_dim(&bs.min_width, Some(cb_w)).map_or(LU::ZERO, to_cw),
+        };
+        let max_w = match self.kw_size(id, &bs.max_width, avail) {
+            Some(v) => Some(v),
+            None => resolve_dim(&bs.max_width, Some(cb_w)).map(to_cw),
+        };
+        let (content_w, ml, _mr) = if let Some(fw) = flow.forced_w {
+            (fw, marg[3].unwrap_or(LU::ZERO), marg[1].unwrap_or(LU::ZERO))
+        } else if let Some((rw, _)) = repl {
+            solve_width(cb_w, Some(rw), marg[3], marg[1], h_extra, LU::ZERO, None)
+        } else {
+            solve_width(cb_w, spec_w, marg[3], marg[1], h_extra, min_w, max_w)
+        };
+
+        // Height: a percentage needs a definite containing block height, otherwise it is `auto`
+        // (10.5). Min/max (10.7) apply to the result.
+        let spec_h = resolve_dim(&bs.height, cb_h).map(to_ch);
+        let min_h = resolve_dim(&bs.min_height, cb_h).map_or(LU::ZERO, to_ch);
+        let max_h = resolve_dim(&bs.max_height, cb_h).map(to_ch);
+        let clamp_h = |h: LU| max_h.map_or(h, |m| h.min(m)).max(min_h);
+        let spec_h = match (flow.forced_h, repl) {
+            (Some(h), _) => Some(clamp_h(h)),
+            (None, Some((_, rh))) => Some(rh),
+            (None, None) => spec_h.map(clamp_h),
+        };
+        Geom { pad, bor, h_extra, v_extra, m_top: marg[0].unwrap_or(LU::ZERO), m_bot: marg[2].unwrap_or(LU::ZERO), content_w, ml, spec_h, min_h, max_h, repl }
+    }
+
+    /// Final height, size and flags of block `id` once its content is laid out; list marker.
+    fn finish_box(&mut self, id: BoxId, g: &Geom, content_h_auto: LU, content_top: LU) {
+        let tree = self.tree;
+        let bx = tree.get(id);
+        let bs = &bx.style.boxs;
+        let mut content_h_auto = content_h_auto;
+        // Text fields, selects and text areas are at least their rows high.
+        if !matches!(bx.control, Control::None) {
+            let rf = self.font_for(&bx.style);
+            let line_h = rf.asc + rf.desc + rf.lead_top + rf.lead_bottom;
+            content_h_auto = match bx.control {
+                Control::TextArea(_, rows) => LU::from_raw(line_h.raw() as i64 * rows as i64),
+                _ => content_h_auto.max(line_h),
+            };
+        }
+        let content_h = match g.spec_h {
+            Some(h) => h,
+            None => g.max_h.map_or(content_h_auto, |m| content_h_auto.min(m)).max(g.min_h),
+        };
+        let w = g.content_w + g.h_extra;
+        let h = content_h + g.v_extra;
+        let clip = bx.force_clip
+            || matches!(bx.control, Control::TextArea(..))
+            || matches!(bs.overflow_x, Overflow::Hidden | Overflow::Clip)
+            || matches!(bs.overflow_y, Overflow::Hidden | Overflow::Clip);
+        if let Some(o) = self.out.get_mut(id as usize) {
+            let (lines, marker) = (o.lines, o.marker);
+            *o = BoxOut { x: o.x, y: o.y, w, h, clip, lines, marker };
+        }
+        if bx.ordinal.is_some() {
+            self.layout_marker(id, content_top);
+        }
+    }
+
+    /// The baseline of the first line box in `id`'s subtree, relative to its border box.
+    pub(super) fn first_baseline(&self, id: BoxId) -> Option<LU> {
+        let bx = self.tree.get(id);
+        let o = self.out.get(id as usize)?;
+        if bx.inline_children {
+            let l = self.lines.get(o.lines.0 as usize).filter(|_| o.lines.1 > o.lines.0)?;
+            return Some(l.y + l.baseline);
+        }
+        bx.children.iter().find_map(|&c| {
+            let b = self.first_baseline(c)?;
+            Some(b + self.out.get(c as usize)?.y)
+        })
+    }
+
+    /// The baseline of the last line box in `id`'s subtree, relative to its border box.
+    pub(super) fn last_baseline(&self, id: BoxId) -> Option<LU> {
+        let bx = self.tree.get(id);
+        let o = self.out.get(id as usize)?;
+        if bx.inline_children {
+            let l = self.lines.get((o.lines.1 as usize).checked_sub(1)?).filter(|_| o.lines.1 > o.lines.0)?;
+            return Some(l.y + l.baseline);
+        }
+        bx.children.iter().rev().find_map(|&c| {
+            let b = self.last_baseline(c)?;
+            Some(b + self.out.get(c as usize)?.y)
+        })
+    }
+
+    /// The marker text of list item `id` (css-lists-3 3): the counter in the item's `list-style-type`
+    /// plus its suffix, shaped in the item's font.
+    pub(super) fn marker_shape(&mut self, id: BoxId) -> Option<(String, Vec<crate::platform::Glyph>, LU)> {
+        let bx = self.tree.get(id);
+        let text = super::lists::marker_text(&bx.style.text.list_style_type, bx.ordinal?)?;
+        let rf = self.font_for(&bx.style);
+        let f = &bx.style.font;
+        let q = FontQuery { families: &f.family, weight: f.weight, slant: slant_of(f.style), lang: bx.style.text.lang.as_deref() };
+        let glyphs = self.platform.shape(&text, &q, rf.size);
+        let width = LU::from_f32(glyphs.iter().map(|g| g.advance).sum());
+        Some((text, glyphs, width))
+    }
+
+    /// An outside marker sits just left of the list item's border box, on the baseline of its first
+    /// line (an `inside` marker on an item without inline content of its own is placed the same way).
+    fn layout_marker(&mut self, id: BoxId, content_top: LU) {
+        let bx = self.tree.get(id);
+        let inside = bx.style.text.list_style_position == ListStylePosition::Inside && bx.inline_children;
+        if inside {
+            return;
+        }
+        let Some((text, glyphs, width)) = self.marker_shape(id) else { return };
+        let rf = self.font_for(&bx.style);
+        let baseline = self.first_baseline(id).unwrap_or(content_top + rf.lead_top + rf.asc);
+        let gbase = self.glyphs.len() as u32;
+        self.glyphs.extend_from_slice(&glyphs);
+        let tid = self.texts.len() as u32;
+        let len = text.len() as u32;
+        self.texts.push(text);
+        self.markers.push(Fragment {
+            box_id: id,
+            kind: FragKind::Marker { text: tid, start: 0, end: len, glyphs: (gbase, self.glyphs.len() as u32) },
+            x: -width,
+            y: baseline - rf.asc,
+            w: width,
+            h: rf.asc + rf.desc,
+        });
+        if let Some(o) = self.out.get_mut(id as usize) {
+            o.marker = self.markers.len() as u32;
+        }
     }
 }

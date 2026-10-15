@@ -142,7 +142,7 @@
 - 嵌套上限（防栈溢出）：原先只有组件值嵌套 512，对递归的解析和求值太深（debug 构建 200 层 `:is()` 就崩）。现在另设：选择器列表嵌套 32 层（`:not` 超限整条规则丢掉；`:is`/`:where` 是宽容列表，只丢掉那个选择器，空的 `:is()` 合法但匹配不到任何元素）；函数伪类里的复合选择器最多 16 个（匹配时每个复合递归一次，嵌套列表用小上限，顶层仍是 128）；`@media`、`@supports` 条件（含 `selector()`）括号/函数嵌套 32 层，超限则媒体查询无效、`@supports` 为假（`@import ... supports()` 同理）；`calc()` 一个乘除链最多 32 个因子（乘除链是左深的树，求值和释放都递归）。512 的组件值上限不变，它是兜底。`@media`/`@supports`/`@layer` 块嵌套 32、`calc()` 嵌套 32、`var()` 引用链 64 原来就有。压力测试（`tests/robustness.rs`）在 1 MB 栈的线程上跑 1 万层的各种构造，通过则 CLI 的 debug 构建（Windows 主线程 1 MB）也不会溢出。
 - 嵌套 `<template>`：EOF 时 "in template" 模式要反复"弹出到 template、重置插入模式、重新处理 EOF"（HTML 13.2.6.4.18），原来用递归，每层 template 一个栈帧，debug 构建 600 层就溢出；改成循环，步骤不变。
 - 旧式颜色（HTML 2.3.5 第 6 步）：大于 U+FFFF 的字符换成两个 `0`（不是一个），之后才按 128 个字符截断。`bgcolor="1😀2"` 得 `#100200`。
-- 1a 性能目标（zh.wikipedia 2.4 MB 页面，解析+样式 ≤ 80 ms）原来没有达到（84–95 ms）。2026-10-15 做了“加快样式计算”（见上面“性能”一节），把目标改成解码 + 解析 + 样式的中位数 ≤ 70 ms；这台电脑上中位数约 74 ms（基线约 118 ms），仍未到 70 ms。真正的关口仍然是 1c 的首屏 ≤ 200 ms，目前有富余。
+- 1a 性能目标（zh.wikipedia 2.4 MB 页面，解析+样式 ≤ 80 ms）原来没有达到（84–95 ms）。2026-10-15 做了“加快样式计算”（见上面“性能”一节），把目标改成解码 + 解析 + 样式的中位数 ≤ 70 ms；这台电脑上中位数约 74 ms（基线约 118 ms），开着模拟器时仍未到 70 ms；插电、关掉模拟器后复测中位数 58–60 ms，达标。真正的关口仍然是 1c 的首屏 ≤ 200 ms，目前有富余。
 - `ex`、`ch` 在 1b 之前按 0.5em 算；1b 起用字体度量（x 高度、"0" 的宽度），1b-1 已改（见下）。
 - 怪异模式的 `li { list-style-position: inside }` 那条规则仍然不采用，和浏览器一致。
 
@@ -169,7 +169,7 @@
 ### 盒子树（`layout/boxtree.rs`，任务单第 9 节）
 
 - 按 `display` 生成：`none` 不生成；`contents` 本身不生成、子节点顶替它的位置；`block / list-item / flow-root` 是块；`inline` 是行内盒。SVG / MathML 元素不生成（第 1 层不显示）。
-- **退路**：`flex`、`grid`、`table` 和所有 `table-*`（含 `table-column`、`table-column-group`，不按 CSS2 17.2 当 `none`，照任务单"当 block"）→ 块，盒子上记着原来的 `display`，转储里写 `[display:flex]`；`inline-block`、`inline-flex`、`inline-grid`、`inline-table` → **1b-1 暂时也当块排**（等 1b-2 做了真正的原子行内盒再改），转储里同样有标记；`ruby` / `ruby-text` → 行内；`float` 忽略（1a 的层叠已按 CSS2 9.7 把浮动元素块化，所以浮动的 `span` 是个块）；`position: absolute / fixed` 也先留在正常流里（定位是 1b-2）。
+- **退路**：`flex`、`grid`、`table` 和所有 `table-*`（含 `table-column`、`table-column-group`，不按 CSS2 17.2 当 `none`，照任务单"当 block"）→ 块，盒子上记着原来的 `display`，转储里写 `[display:flex]`；`inline-block`、`inline-flex`、`inline-grid`、`inline-table` → 1b-1 暂时也当块排，**1b-2 起是真正的原子行内盒**（见 1b-2 一节）；`ruby` / `ruby-text` → 行内；`float` 忽略（1a 的层叠已按 CSS2 9.7 把浮动元素块化，所以浮动的 `span` 是个块）；`position: absolute / fixed` 1b-1 先留在正常流里，1b-2 起脱离正常流。
 - 匿名块（CSS2 9.2.1.1）：块容器的子盒里既有块级又有行内级时，每一段连续的行内级盒包进一个匿名块（继承属性来自父盒，其余用初始值）。行内元素里有块级后代时，行内元素被拆成几段（`SplitPart` 记着第一段、最后一段，给 1b-2 的左右边框用）；没有子盒的段不生成（1b-2 里有水平内边距/边框/外边距的要保留，`finish_inline` 里有注）。
 - 只有可折叠空白的文字、和空的行内元素，在块之间不生成匿名块（CSS2 9.2.2.1）；`white-space: pre-line` 里含换行的空白文字要保留（它会渲染成一个空行）。
 - **层数上限 `MAX_BOX_DEPTH` = 256**：嵌套更深的元素不再生成自己的盒（当 `display: contents`），子孙上移。防排版递归爆栈；测试 `deep_nesting_fits_in_one_megabyte_of_stack` 在 1 MB 栈的线程上跑 1500 层。
@@ -179,7 +179,7 @@
 - 单位 `LayoutUnit` = 1/64 px 的 `i32`，加减乘都饱和在 ±2^24 px，1e9px 的恶意长度不会溢出。样式里的 `f32` 长度四舍五入换算；文字宽度按每个字形簇四舍五入到 1/64（测试字体里全是整数，不受影响）。
 - 一个块只需要知道含块宽度（和已定的高度）就能排；它自己的位置由父亲事后定。外边距合并（CSS2 8.3.1）自下向上算：每个块报告上、下边缘露出来的外边距（已经和第一个/最后一个子块合并）和"自己的上下外边距穿过自己"（`through`）；父亲在兄弟之间合并并摆放。覆盖：兄弟、父子（上、下）、空块穿过、负外边距（最大正值加最小负值）、padding / border 隔断、新格式化上下文（`overflow` 非 visible/clip、`flow-root`、各种退路块、根元素）。
 - 空块（`through`）的位置按 8.3.1 末段："像下边框不为零那样"——只算它自己的上外边距，所以 `g1 { margin: 20px 0 30px }` 夹在两块之间时，它在上一块下面 20px 处，而后一块在 30px 处。
-- 宽度 10.3.3：auto 外边距、过约束（ltr：右外边距被忽略）、两个外边距都是 auto 时居中，装不下时左 0、右取余；min/max 10.4（算一遍，超过 max 用 max 再算，小于 min 用 min 再算）；`box-sizing: border-box` 的 width / min / max 先减去 padding + border（不小于 0）。`min-content / max-content / fit-content` 1b-1 当 `auto`（要内在宽度，1b-2 才有）。
+- 宽度 10.3.3：auto 外边距、过约束（ltr：右外边距被忽略）、两个外边距都是 auto 时居中，装不下时左 0、右取余；min/max 10.4（算一遍，超过 max 用 max 再算，小于 min 用 min 再算）；`box-sizing: border-box` 的 width / min / max 先减去 padding + border（不小于 0）。`min-content / max-content / fit-content` 1b-1 当 `auto`，1b-2 起按内在宽度算。
 - 高度 10.6.3、10.5：百分比高度只有含块高度明确（含块 `height` 指定了，或是根的视口）才算，否则当 `auto`；`min-height` 的百分比在含块高度不明确时当 0，`max-height` 当 `none`。边框宽度和 Blink 一样取整（≥ 1 取整，0–1 之间算 1px）。padding 的百分比也是对含块**宽度**。
 - **`overflow`**：`hidden` 和 `clip` 记 `[clip]`（1c 绘制时裁剪）；`auto` / `scroll` 按任务单当 `visible`，内容不丢，不裁剪。但 `hidden / auto / scroll` 仍然**是格式化上下文**（和浏览器一致），子块的外边距不会合并出来；`clip` 不是。
 - 根元素是格式化上下文：它的外边距不和子元素合并。视口高度只用来解析根上的百分比高度（`html { height: 100% }`）。
@@ -192,15 +192,90 @@
 - **断点叠加**：见上"断行分工"。两个相邻单位属于不同文字项时，"任一边允许换行就算允许"（真正的规则看共同祖先的 `white-space`，这是近似）。
 - **行高**：`line-height: normal` = 主字体的上升 + 下降 + 行距，三个数先取整到整 px（和 Blink 一样）；`<数字>` 乘元素自己的字号。半行距 = (行高 − 上升 − 下降) / 2，**上半部分向下取整到整 px**（Blink 的做法，CSS 没规定怎么舍入），下半部分是余数。行盒的高度 = 支柱和这一行里有内容的每个行内盒（包括文字外面的所有行内祖先、`<br>` 自己）的（上升 + 上半行距）最大值 + （下降 + 下半行距）最大值；没有内容的空行内盒不参与（和 Chrome 一致）；不实现怪异模式里"没有文字的行不用支柱"的老规矩。
 - 只有强制换行（`<br>`、保留的换行符）结尾的空行有支柱的高度；末尾的 `<br>` 不再生出一个空行。
-- `text-align`：`left` / `start` / `match-parent` / `justify` / `justify-all` → 靠左（`justify` 要到 1b-2），`right` / `end` → 靠右，`center`。内容比行宽时不居中也不靠右，从行首开始（css-text-3 7.1）。没有右到左排版，`direction` 不影响。居中的偏移 = 空余 / 2（1/64 单位向零取整）。
+- `text-align`：`left` / `start` / `match-parent` / `justify` / `justify-all` → 靠左（`justify` 的拉伸 1b-2 起做），`right` / `end` → 靠右，`center`。内容比行宽时不居中也不靠右，从行首开始（css-text-3 7.1）。没有右到左排版，`direction` 不影响。居中的偏移 = 空余 / 2（1/64 单位向零取整）。
 - 文字片段（转储里的 `text`）的矩形是内容区：高 = 主字体上升 + 下降，底边不含半行距；同一行里同一个文字项的相邻单位合成一个片段。
-- 没做（1b-2）：`vertical-align`（只有 baseline）、行内盒的 padding / border / margin、`justify`、`text-indent`、`letter-spacing`、`word-spacing`、`text-transform`、装饰线、原子行内（`inline-block` 暂时按块）、图片、列表标记、定位、表单控件、**排版工作量计量**（现在只有 `MAX_BOX_DEPTH`；一个 10MB 没有空格的文字现在会整个整形，每个字符约占 100 字节）。
+- 1b-1 当时没做、1b-2 已做完的：`vertical-align`（只有 baseline）、行内盒的 padding / border / margin、`justify`、`text-indent`、`letter-spacing`、`word-spacing`、`text-transform`、装饰线、原子行内（`inline-block` 暂时按块）、图片、列表标记、定位、表单控件、**排版工作量计量**（现在只有 `MAX_BOX_DEPTH`；一个 10MB 没有空格的文字现在会整个整形，每个字符约占 100 字节）。
 
 ### `qinglan-cli layout` 和转储格式
 
 - `qinglan-cli layout <文件> [--width 1280] [--height 1000] [--test-font] [--time]`。不带 `--test-font` 报错退出（"Windows 平台到位前只有 --test-font 能用"）。
 - 转储格式（`layout/dump.rs` 开头有例子）：第一行 `viewport WxH`；之后每个块一行 `block <标签#id.类 | (anonymous)> (x,y WxH)`，坐标是页面坐标下的边框盒，单位 CSS px，去掉多余的 0，最小单位 1/64 = 0.015625；退路块后面加 `[display:flex]` 之类，`overflow: hidden/clip` 加 `[clip]`。块里有行内内容时，下面缩进列出 `line (x,y WxH) baseline=Y`（Y 是基线的页面 y）和它的 `text "…" (x,y WxH)` 片段，强制换行是 `br`（`<br>` 元素）或 `newline`（保留的换行符）。
 - 快照：`tests/pages/*.html` 配 `*.layout.txt`。每个网页开头的 HTML 注释里写着按规范**手算**的关键数字，其中 `check: <行首文字> :: <期望片段>` 的行由测试程序逐条对照转储（手算数字不是从引擎抄来的，所以快照不会只是记录引擎当时的输出）；`viewport: WxH` 设视口。重新生成期望文件：`UPDATE_SNAPSHOTS=1 cargo test -p qinglan-engine --test layout_snapshots`，生成前先确认手算数字没有失败。
+
+## 第 1 层 · 1b-2 行内细节、替换元素、列表、定位、表单、工作量计量
+
+代码：`layout/` 下 `inline.rs`（重写）、`block.rs`、`boxtree.rs`、`intrinsic.rs`、`replaced.rs`、`position.rs`、`lists.rs`、`image.rs`、`dump.rs`；新属性 `tab-size`（`css/` 里，继承，数字或长度）。测试页在 `tests/pages/`，新增 12 个：`vertical-align`、`inline-edges`、`text-props`、`decorations`、`inline-block`、`images`、`srcset`、`lists`、`positioning`、`canvas-root`、`canvas-body`、`controls`；`fallbacks` 改写（inline-block 和 absolute 不再是退路）。每页开头的 `check:` 数字都是按规范手算的（算式写在页首注释里），引擎第一次跑出来和手算不同的只有三处，都是手算错了：`text-props` 的 "Hello World" 在 100 宽里要折行、`canvas-root` 的空 body 上下外边距穿过合并成 8、`lists` 的一个测试用字重名（改了测试，不是引擎）。快照测试的框架新增页首行 `dpr: 2`、`image: <id> WxH`（当作图片头已到）、`broken: <id>`。
+
+### 盒子树的变化
+
+- `inline-block` 和 `inline-flex/grid/table` → `BoxKind::InlineBlock`（原子行内盒，里面是块容器）；`img`、`iframe`、`video`、`audio`（有 `controls` 才显示，UA 样式表已有）、`canvas`、`object`、`embed`、复选框/单选框、`meter`、`progress`、`input type=range/color/image` → `BoxKind::Replaced`（叶子）。其余表单控件（文本框、`textarea`、`select`、`button`、`submit/reset/button/file` 的 `input`）是 `InlineBlock`（UA 样式 `display` 被作者改成块级时是 `Block`），文字由属性合成（`LayoutBox::synth`）：输入框的值（`password` 画成 •），没有值时灰色（#757575）的 `placeholder`；`select` 是被选中的（否则第一个）`option` 的文字；`submit`/`reset` 没有 `value` 时是 "Submit"/"Reset"；`file` 是 "Choose File  No file chosen"。单行文字不换行（`white-space: pre` + `nowrap`），盒子 `[clip]`。
+- 不显示的 `<img>`（没有尺寸、没有加载）且有非空 `alt`：变成包着 alt 文字的行内盒（HTML 15.4.3：尺寸未知时当文字）；有宽或高（属性或 CSS）时仍是替换盒；加载失败或没有 `alt` 的是 0×0 替换盒。
+- `position: absolute | fixed` 的盒子（`oof`）：留在父盒的子列表里，**一律当行内级占位**（`Out::Inline`）。这样它们不会像块级盒一样把行内元素劈开（CSS2 9.2.1.1 只管流内的块），只有占位的一段会生成匿名块（空匿名块高 0、外边距穿过，不影响别的盒子）。
+- 列表项序号在建树时算（HTML 4.4.8）：同一个父元素一个计数器；`<ol start>`、`<ol reversed>`（没有 `start` 时从 `li` 子元素个数倒数）、`<li value>`（`ul`/`menu` 里也认）；`display: none` 的不计；不是 `li` 的 `display: list-item` 也计数（不认 `value`）。计数器只在建树时 O(n) 一遍。
+- 文档序（`LayoutBox::order`，元素的先序编号，被块劈开的行内元素各段共用）用来排绘制顺序。
+- `<details>` 一律展开：UA 样式表本来就不隐藏它的内容，只有 `summary` 的标记（`disclosure-closed`）改画成展开的三角 ▾（"disclosure-open" 同样）。
+
+### 行内排版（`inline.rs`）
+
+- 段落先 `collect` 成项（文字、强制换行、行内盒的起点/终点边、原子行内、定位占位），再 `prepare` 切成单元（文字一簇一个）；这一步不依赖宽度，所以量固有宽度时（`measure_inline`）和排行时（`lay_lines`）共用，量过的段落按块缓存（行内盒边距有百分比时因含块宽不同重做）。
+- **行内盒的 padding / border / margin**：只有水平方向有值的行内盒才产生起点/终点"边"单元（宽度计入行宽，参与折行，终点边粘在前面的字上；断点处起点边归下一行）。被块劈开的行内元素只有第一段有起点边、最后一段有终点边（`SplitPart`）。每个有背景、边框或 padding 的行内盒每行出一个 `inline` 碎片：框 = 内容区（字体上升 + 下降）加上 padding 和 border，所以竖直的 padding/border 不撑行高；有起点/终点边的一行才带 `[first]`/`[last]`（给 1c 决定画不画那一侧的边框）。空的行内盒没有水平边就还是不参与行高。没有子盒的被劈开的段仍然丢掉（带边框的空段不保留，要保留得生成空碎片，第 2 层再说）。
+- **`vertical-align`**：每行建一组"盒子条目"（行内盒、原子行内），算相对根（支柱）基线的偏移：`baseline` 0；`sub`/`super` 用 Blink 的式子（父元素字号 /5 + 1 往下，/3 + 1 往上；规范没规定）；`text-top`：盒顶对父元素内容区顶（偏移 = 父上升 − 盒的 A）；`text-bottom`：盒底对父元素内容区底（盒的 D − 父下降）；`middle`：盒中点对父基线上方 x 高的一半（x 高来自平台度量）；长度向上；百分比是元素自己行高（A + D）的百分比；`top`/`bottom`：先按其他盒子算出行高，比它矮就往下（top）或往上（bottom）撑到够高，再贴边。A/D 是上升/下降加半行距（`line-height` 的一半）。`top`/`bottom` 盒的后代只相对它定位，不参与行高。
+- **原子行内**：`inline-block` 的基线是它最后一行的基线；`overflow` 不是 visible、没有行、替换元素、`textarea` 用下外边距边；文本框和 `select` 虽然内容被裁剪仍用文字基线。原子行内两侧都可断（不管周围是什么字；`nowrap` 里不断）。折行时先把整段里的原子行内排好，宽度才知道。
+- **`text-align: justify`**（css-text-3 7.3, 8.4）：只对折行的行；最后一行和强制换行结尾的行不拉（`justify-all` 全拉）。机会：空格和 U+00A0 之后；中日韩字之间（后一个不是后置标点、前一个不是前置标点）。余量均分，除不尽的 1/64 单位给靠前的机会；字形数组里最后一个字形的前进宽度同步加上，所以只看字形数组就知道每个字画在哪。没有机会（比如一个长单词）不拉。挂在行尾的空格不算。
+- **`text-indent`**：只第一行；百分比取块自己的内容宽；负值（悬挂）往左；制表位从内容盒左边算，不从缩进算；和 `center`/`right` 的关系：缩进后剩下的空间里对齐。`each-line`/`hanging` 关键字 1a 就丢掉了。
+- **`letter-spacing`**：加在每个簇之后（包括行尾，和 Chrome 一样）；**`word-spacing`**：加在空格和 U+00A0 上；都直接加进字形的前进宽度。
+- **`text-transform`**：折叠空白之后、整形之前改文字（所以转储里看到的是改后的文字）：`uppercase`/`lowercase` 用 Rust 的完整大小写映射（不处理土耳其语等语言特例）；`capitalize` 以字母数字为词，跨文字节点/元素连续（`h<b>ello</b>` 只大写 h）；`full-width` 把 ASCII 变成全角（空格变 U+3000）；`full-size-kana` 把小假名变大。
+- **`tab-size`**（css-text-3 7.3）：数字 = 那么多个空格的前进宽度（含字距和词距）；长度直接用。
+- **装饰线**（css-text-decor-3 2）：下划线在基线下 `underline_offset`（取整到整 px），删除线在基线上 `strikeout_offset`，上划线在内容区顶；粗细 = 字体给的粗细取整，至少 1px，`text-decoration-thickness` 优先；位置和粗细用文字碎片自己的字体。线跨整个文字碎片（含空格）。装饰从元素传到它流内后代的文字上（包括块级后代），到原子行内盒、定位盒就停（它们自己的声明照常对自己的内容有效）。同一种线同一颜色只画一次。每条线是 `Decoration`（`x, y, w, thickness`、样式、颜色），挂在文字碎片的 `decor` 区间上。
+- **行内 `position: relative`**：偏移累加到它的碎片和里面的原子行内上（不影响别的盒）。
+
+### 固有宽度、`min-content`/`max-content`/`fit-content`、收缩适应（`intrinsic.rs`）
+
+- `content_widths(盒)` 给内容盒的 min/max-content（按盒缓存）：块容器 = 子盒外宽（margin box）的最大值；行内内容 = 同一份单元算出来的最长不可断段/不换行的最宽一行（含首行 `text-indent` 的固定部分）；文本框/`textarea` = 字符数 × "0" 的宽度；替换元素 = 它的used宽度。`outer_widths` 把固定的 `width`、`min/max-width`、padding、border、margin 算进去，**百分比一律当 `auto`/0**（循环百分比）。
+- 关键字：`width/min-width/max-width` 的 `min-content`/`max-content`/`fit-content` 给的是**内容盒**宽度，和 `box-sizing` 无关；`fit-content` = min(max(min-content, 可用宽度), max-content)。
+- 收缩适应（原子行内、绝对定位盒；CSS2 10.3.5、10.3.7、10.3.9）= 同一公式，可用宽度 = 含块宽 − 外边距 − padding − border；之后 min/max-width 再夹一次。
+
+### 替换元素（`replaced.rs`）
+
+- 尺寸：CSS2 10.3.2 / 10.6.2：`width`/`height` 都给了就用；只给一个的用宽高比算另一个（没有比例就用固有尺寸，再没有就用默认）；都是 auto 时用固有尺寸，并按 CSS2 10.4 的"约束违反表"（9 种情况）在 min/max 之间保持比例；宽高比 = 固有宽/高，没加载时用 `width`/`height` 两个属性（都有且 > 0）的比。默认尺寸 300×150（`audio` 高 54，`canvas` 取 `width`/`height` 属性，未加载的图片 0×0）；`box-sizing: border-box` 的宽高减去 padding 和 border。`iframe` 有 UA 的 2px 边框，所以框是 304×154。
+- `check box / radio`：13×13（UA 样式表改成 `margin: 3px 3px 3px 4px`——1a 写成了 padding，不符合 HTML 15.5；这是 1b-2 对 `ua.css` 唯一的改动）；`meter` 80×16，`progress` 160×16，`range` 129×16，`color` 50×27。
+- **图片 API（给 1c）**：`layout_document_with(doc, styles, platform, opts, &ImageSizes)`（`layout_document` = 没有任何图片信息）；`LayoutOptions { dpr, .. }` 决定 `srcset` 选哪张。`LayoutResult::images` 是 `Vec<ImageRequest { node, src, density }>`：每个有来源的 `<img>`/`<input type=image>` 一条，`src` 是页面里写的原文（1c 用文档的 base URL 解析），`density` 是这个来源的像素密度。1c 拿到图片头后 `ImageSizes::set_loaded(node, 像素宽, 像素高)`（失败 `set_broken(node)`，返回值是"有没有变化"）再重新排版；自然尺寸 = 像素 / density。按 DOM 节点编号做键，因为盒子编号每次排版都重建；1c 自己做节流和滚动锚定，可以用 `LayoutResult::page_pos(box)` 找视口第一个元素。没有 `ImageSizes` 条目的图片 = 还没到。
+- **`srcset`/`sizes`**（HTML 4.8.4.3，`image.rs`）：候选 = `srcset` 各项 + `src`（没有 1x 候选时按 1x 加进去）；`w` 描述符除以 `sizes` 求出的来源宽（按顺序第一个条件成立的项，没有条件的项，默认 100vw；条件用 1a 的媒体查询求值，视口宽高 + dpr，长度用 `parse_length`，`calc()` 里不能有百分比）；`w` 和 `x` 同时写的项丢掉，描述符不认识的丢掉；最多 256 项。选法：密度 ≥ dpr 的最小者，没有就选最大者。**不做** `<picture>`/`<source>`，不看 `loading`（1c 可以自己读 DOM）。
+
+### 列表（`lists.rs`、`block.rs`）
+
+- 标记文字 = 计数器 + 后缀（css-counter-styles-3）：`disc` "• "、`circle` "◦ "、`square` "▪ "（符号也当文字，Windows 平台直接画那个字形；测试平台里每个字符 1em）；`decimal`/`lower-alpha`/`upper-alpha`/`lower-roman`/`upper-roman`/`lower-greek` "N. "；`decimal-leading-zero` "01. "；`cjk-decimal` "一〇、" 这类（后缀 、）；`none` 没有标记；字符串样式原样；不认识的计数器名按十进制；字母/罗马数字超出范围（≤ 0、罗马 > 3999）退回十进制；`disclosure-*` 见上。
+- **外标记**：标记框右边贴着列表项的**边框盒**左边（CSS lists 3 的"外"）；竖直方向对齐列表项第一行的基线（沿子孙块往下找第一个行；找不到——空列表项——就放在内容区顶部，用标记自己字体的支柱，列表项高度不变）；用列表项自己的字体（所以大字号列表项的标记也大）。结果放在 `LayoutResult::markers`，`BoxOut::marker` 指过去，位置相对列表项边框盒（可以是负的）。**内标记**是该项第一个行内（文字碎片类型 `Marker`），列表项里全是块时（没有自己的行内内容）当外标记放。
+- 不做 `::marker` 的样式（1a 只解析）、`list-style-image`（没解析）。
+
+### 定位（`position.rs`、`block.rs`）
+
+- **`relative`**：块和原子行内在被父盒摆放时加上偏移（`BlockResult::rel`），不影响流和外边距合并；`left` 优先于 `right`，`top` 优先于 `bottom`；百分比的竖直偏移只在含块高度明确时算。
+- **`absolute`/`fixed`**（CSS2 9.6、10.3.7、10.3.8、10.6.4、10.6.5）：占位所在的行或匿名块给出**静态位置**（在行里 = 占位处的 x 和行顶；在匿名块里 = 块的内容区左上角），排队等包含块排完再排：含块 = 最近的定位祖先的 padding 盒（`cb_stack`），没有就是初始含块（视口大小，在页面原点），`fixed` 永远是视口。水平/竖直方程各 8 种自动值的组合照 10.3.7/10.6.4 写；auto 外边距两侧相等（水平方向装不下时左 0）；宽高 auto 且两侧都给了 → 填满；`width: auto` 收缩适应（可用宽度按规范用 `left`/`right` 剩下的）；`min/max-width` 用 10.4 的"算一遍、超了用边界再算"。排好后位置换算成相对静态位置所在块的边框盒（`LayoutResult::oof` 记着 `(块, 盒)`），所以转储和绘制都按普通的"相对父块"走。
+- 选择：行内 `position: relative` 的元素**不当**绝对定位的含块（最近的定位**块级**祖先才是）——要当含块得算行内盒的 padding 盒，多段时更复杂，留给以后；`fixed` 盒的坐标是滚动位置 0 时的视口坐标，1c 画的时候加滚动偏移；`sticky` 在 1a 已当 `relative`。
+- **绘制顺序数据**：`LayoutResult::below`（`z-index` < 0，按 z 再按文档序）和 `above`（auto/0 按文档序，然后正数从小到大），元素是定位的块、原子行内、替换盒（`position != static`）。1c：先画 `below`，再画正常流，再画 `above`；`fixed` 的盒子 `position == Fixed`，用 `page_pos` 取位置再加滚动偏移。完整的层叠上下文留到第 2 层。
+- **画布背景**（CSS2 14.2）：`LayoutResult::canvas = Some(Canvas { color, from })`：根元素有不透明背景就用它，否则用 `body` 的；`from` 那个盒子不再画自己的背景。`currentColor` 按那个元素自己的 `color`。
+
+### 表单控件和占位框的尺寸
+
+- 文本框：宽 = `size`（默认 20）× "0" 的宽度（元素自己的字体），再加 padding 和 border（UA 样式表是 `border-box`，但宽度是 auto 时不受影响）；高 = 一行 + padding + border。`textarea` = `cols`（20）×"0" 宽，`rows`（2）× 行高（内容多了也不撑高，裁剪）。`select`、`button`、`submit` 等收缩到文字宽。数值上限 1 万。不能操作，不画输入光标。
+- 占位框里的文字（"iframe"、"video" 等）和灰色的底由 1c 画，布局只给出 `ReplacedKind`；`iframe` 的地址在 DOM 的 `src` 里（1c 点击时读）。
+
+### 工作量计量和递归上限
+
+- `Layouter::charge`：每个块计 4 + 子盒数，每段文字计字节数（整形前），每行计 4 + 行里的单元数，每个固有宽度计 2，每个定位盒计 8。预算 `DEFAULT_WORK_BUDGET` = 2000 万单位（`LayoutOptions::work_budget` 可改）。中文维基长条目用约 49 万（2.5%）；用完以后：不再排新的块和行，已经排好的保留；`LayoutResult::incomplete = true`（转储最后一行 `incomplete`），1c 在页面顶部显示"页面太复杂，只显示了一部分"。预算按"一个单位约 100 纳秒"选的：用满约 2 秒（release），留出余量给 1c 的 5 秒。
+- **文字上限**：每页最多整形 `MAX_SHAPED_CHARS` = 100 万个字符（预算的一半更小时取一半）。一个字符在排版期间约占 130 字节（单元、字形各一份、断点标志等），所以 10 MB 没有空格的文字不会吃掉几个 GB：多出来的文字直接丢掉（已经整形的部分照常排），`incomplete = true`。中文维基长条目的文字量约为上限的五分之一。
+- 嵌套深度：块嵌套仍由 `MAX_BOX_DEPTH`（256）管；原子行内/定位盒会经过 `layout_inline` → `lay_lines` → `layout_atomic` → `layout_block` 这条栈帧很大的链，所以另设 `MAX_PARAGRAPH_DEPTH` = 24：行内格式化上下文嵌套（或绝对定位盒嵌套）超过 24 层，更里面的内容不排（留空）。为了让 256 层纯块嵌套在 1 MB 栈（debug 主线程）里放得下，`layout_block` 拆成了几何计算（`block_geometry`）、内容、收尾（`finish_box`）三个函数，`dump_box` 也拆开了。三个测试在 1 MB 栈线程上跑 1500 层：块、`inline-block`/绝对/相对混合、纯块带定位。
+
+### 性能
+
+- 中文维基长条目，排版（测试字体、宽 1280、release，同一进程里连续 10 次）：1b-2 的中位数 **约 42.4 ms**（连续两次测量的中位数 42.3 和 42.4，每次 10 轮，最慢一轮 51.5），其中建盒子树 8.8 ms；同一台电脑、同一个测试程序跑 1b-1 的提交（461e3a7）是 32.2 ms（30.4–33.4）。慢了约 10 ms（+32%），目标（1b 验收）≤ 100 ms，达标。做过的优化（合计只省约 2 ms）：断点标志在整形后一次算好（不再每个单元二分查找）、原子行内的字段挪到旁表（单元更小）、装饰线继承链先用一遍按盒子的标志筛掉、字体缓存的键用指针（不再复制语言字符串）、没有水平边的行内盒直接跳过算边。剩下的差别分散在更大的盒子结构、每个文字碎片多做的垂直对齐记账上，没有再优化。（测量时没有确认是否插电；CLAUDE.md 要求插电测，1b-3 验收时要按插电重量。）新增测试 `perf` 里的 `zhwiki_layout` 会打印这个中位数、行数和工作量。
+- `qinglan-cli layout` 新增的信息只在转储里，命令行没有新选项（`--dpr`/图片尺寸要到 1c 才有来源）。
+
+### 没做 / 留给后面
+
+- `<picture>`/`<source>`、`loading="lazy"`；行内元素的 `box-decoration-break`（一直按 `slice`）；`text-justify`、`text-align-last`、连字符；`vertical-align` 对表格单元格；`::marker`/`::before`/`::after`；`position: sticky` 的真实行为；行内元素做绝对定位含块；`float`（第 2 层）；`overflow: auto/scroll` 的滚动区域。
+- 开放的问题：Windows 平台的 `x_height`、下划线位置等度量要在 1b-3 核对；`sub`/`super` 用了 Blink 的公式，Firefox 用字体表里的值，两者不同；`select` 的宽度按显示的那一项算，Chrome 按最宽的一项。
 
 ### 来源
 

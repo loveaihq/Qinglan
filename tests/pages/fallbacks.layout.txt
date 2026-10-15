@@ -1,6 +1,6 @@
 viewport 200x300
-block html (0,0 200x134)
-  block body (0,0 200x134)
+block html (0,0 200x104)
+  block body (0,0 200x104)
     block div#flex (0,0 200x20) [display:flex]
       block div#f1 (0,0 200x10)
         line (0,0 200x10) baseline=8
@@ -30,19 +30,19 @@ block html (0,0 200x134)
     block span#fr (0,74 200x10)
       line (0,74 200x10) baseline=82
         text "x" (0,74 10x10)
-    block div#ib (0,84 200x30)
-      block (anonymous) (0,84 200x10)
-        line (0,84 200x10) baseline=92
-          text "before" (0,84 60x10)
-      block span#ibs (0,94 200x10) [display:inline-block]
-        line (0,94 200x10) baseline=102
-          text "mid" (0,94 30x10)
-      block (anonymous) (0,104 200x10)
-        line (0,104 200x10) baseline=112
-          text "after" (0,104 50x10)
-    block div#abs (0,114 200x10)
-      line (0,114 200x10) baseline=122
-        text "abs" (0,114 30x10)
-    block span#iflex (0,124 200x10) [display:inline-flex]
-      line (0,124 200x10) baseline=132
-        text "if" (0,124 20x10)
+    block div#ib (0,84 200x10)
+      line (0,84 200x10) baseline=92
+        text "before" (0,84 60x10)
+        inline-block span#ibs (60,84 30x10)
+          line (60,84 30x10) baseline=92
+            text "mid" (60,84 30x10)
+        text "after" (90,84 50x10)
+    block (anonymous) (0,94 200x10)
+      line (0,94 200x10) baseline=102
+        inline-block span#iflex (0,94 20x10) [display:inline-flex]
+          line (0,94 20x10) baseline=102
+            text "if" (0,94 20x10)
+      block div#abs (0,100 30x10) [absolute]
+        line (0,100 30x10) baseline=108
+          text "abs" (0,100 30x10)
+paint-above div#abs absolute z=0

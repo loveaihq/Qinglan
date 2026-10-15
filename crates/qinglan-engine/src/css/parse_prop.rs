@@ -1051,6 +1051,16 @@ fn parse_longhand(prop: PropId, cvs: &[Cv], items: &[&Cv], q: bool) -> Option<Va
             }
             Some(Value::TextIndent(lp))
         }
+        TabSize => {
+            let it = one_ref?;
+            match it {
+                Cv::Tok(Token::Number { value, .. }) if *value >= 0.0 => Some(Value::TabSize(super::types::TabSize::Spaces(*value as f32))),
+                _ => {
+                    let l = parse_length(it, true)?;
+                    (!l.is_negative_length()).then_some(Value::TabSize(super::types::TabSize::Len(l)))
+                }
+            }
+        }
         TextTransform => kw(one_ref?, super::types::TextTransform::from_keyword).map(Value::TextTransform),
         WhiteSpaceCollapse => kw(one_ref?, super::types::WhiteSpaceCollapse::from_keyword).map(Value::WhiteSpaceCollapse),
         TextWrapMode => kw(one_ref?, super::types::TextWrapMode::from_keyword).map(Value::TextWrapMode),

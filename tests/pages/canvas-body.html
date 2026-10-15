@@ -1,0 +1,10 @@
+<!--
+viewport: 200x100
+Canvas background (CSS2 14.2): html has no background, so the body's (red) is used for the whole canvas and the body does not
+paint it again. The body is 10 high (one line of the 10px font), at (8,8): html = 8 + 10 + 8 = 26.
+check: canvas #ff0000 :: (from body)
+check: block body :: (8,8 184x10)
+check: block html :: (0,0 200x26)
+-->
+<!doctype html>
+<html><body style="background:#f00;font:10px/10px Ahem">hi</body></html>

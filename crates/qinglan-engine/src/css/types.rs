@@ -64,6 +64,22 @@ keyword_enum!(OverflowWrap { Normal = "normal", Anywhere = "anywhere", BreakWord
 keyword_enum!(Direction { Ltr = "ltr", Rtl = "rtl" } default Ltr);
 keyword_enum!(FontStyleKind { Normal = "normal", Italic = "italic", Oblique = "oblique" } default Normal);
 keyword_enum!(ListStylePosition { Outside = "outside", Inside = "inside" } default Outside);
+
+/// `tab-size` (css-text-3 7.3): a number of space advances, or a length.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TabSize {
+    Spaces(f32),
+    Len(Lp),
+}
+
+impl TabSize {
+    pub fn to_css(&self) -> String {
+        match self {
+            TabSize::Spaces(n) => super::values::fmt_num(*n),
+            TabSize::Len(l) => l.to_css(),
+        }
+    }
+}
 keyword_enum!(BorderLineStyle {
     None = "none", Hidden = "hidden", Dotted = "dotted", Dashed = "dashed", Solid = "solid", Double = "double",
     Groove = "groove", Ridge = "ridge", Inset = "inset", Outset = "outset",
@@ -344,6 +360,7 @@ pub enum Value {
     TextDecorationThickness(Option<Lp>),
     ListStyleType(ListStyleType),
     ListStylePosition(ListStylePosition),
+    TabSize(TabSize),
     Cursor(CursorKind),
     /// A property that is parsed and validated but has no effect in layer 1 (`border-radius`, ...).
     Ignored,
@@ -431,6 +448,7 @@ pub enum PropId {
     Cursor,
     ListStyleType,
     ListStylePosition,
+    TabSize,
     VerticalAlign,
     TextDecorationLine,
     TextDecorationStyle,
@@ -476,7 +494,7 @@ impl PropId {
             }
             FontFamily | FontSize | FontWeight | FontStyle | LineHeight | LetterSpacing | WordSpacing => Group::Font,
             Color | TextAlign | TextIndent | TextTransform | WhiteSpaceCollapse | TextWrapMode | WordBreak | OverflowWrap
-            | Direction | Visibility | Cursor | ListStyleType | ListStylePosition => Group::Text,
+            | Direction | Visibility | Cursor | ListStyleType | ListStylePosition | TabSize => Group::Text,
             VerticalAlign | TextDecorationLine | TextDecorationStyle | TextDecorationColor | TextDecorationThickness
             | BackgroundColor => Group::Misc,
             BorderTopLeftRadius | BorderTopRightRadius | BorderBottomRightRadius | BorderBottomLeftRadius => Group::Ignored,
@@ -549,6 +567,7 @@ impl PropId {
             Cursor => "cursor",
             ListStyleType => "list-style-type",
             ListStylePosition => "list-style-position",
+            TabSize => "tab-size",
             VerticalAlign => "vertical-align",
             TextDecorationLine => "text-decoration-line",
             TextDecorationStyle => "text-decoration-style",
@@ -577,7 +596,7 @@ pub const ALL_PROPS: [PropId; PROP_COUNT] = {
         BorderRightStyle, BorderBottomStyle, BorderLeftStyle, BorderTopColor, BorderRightColor, BorderBottomColor,
         BorderLeftColor, FontFamily, FontSize, FontWeight, FontStyle, LineHeight, LetterSpacing, WordSpacing, Color, TextAlign,
         TextIndent, TextTransform, WhiteSpaceCollapse, TextWrapMode, WordBreak, OverflowWrap, Direction, Visibility, Cursor,
-        ListStyleType, ListStylePosition, VerticalAlign, TextDecorationLine, TextDecorationStyle, TextDecorationColor,
+        ListStyleType, ListStylePosition, TabSize, VerticalAlign, TextDecorationLine, TextDecorationStyle, TextDecorationColor,
         TextDecorationThickness, BackgroundColor, BorderTopLeftRadius, BorderTopRightRadius, BorderBottomRightRadius,
         BorderBottomLeftRadius,
     ]

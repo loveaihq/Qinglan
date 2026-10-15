@@ -1,0 +1,53 @@
+<!--
+viewport: 400x400
+image: i2 200x100
+image: i3 40x30
+image: i8 200x100
+image: i9 60x40
+broken: i6
+Replaced images (CSS2 10.3.2, 10.3.4, 10.4, 10.6.2; HTML 15.4.3). `image:` lines above tell layout the pixel size of an image
+as if its header had arrived; `broken:` that it failed. Font 10px/10px Ahem (ascent 8, descent 2), body margin 0, divs 200 wide.
+An inline image sits on the baseline: its margin box bottom is the baseline, so a H high image has A = H, D = 0.
+
+a   not loaded, no size, no alt: 0x0, on the baseline: y = 8 (baseline) - 0. "y" follows at x=10.
+b   loaded 200x100: line above 100, below 2 = 102 high; the image is at the line top (0,10).
+c   loaded 40x30 with width=80 (maps to CSS width): height = 80 * 30/40 = 60. Line 60 + 2 = 62.
+d   not loaded but width=100 height=50: reserves 100x50. Line 52.
+e   not loaded, only height=20: no ratio, no natural width: 0 wide, 20 high. Line 22.
+f   broken, no size, alt text: replaced by its alt text, an inline run "no pic" (60 wide).
+g   not loaded with alt but with width/height: keeps its 30x30 box (HTML 15.4.3). Line 32.
+h   loaded 200x100 with max-width:100% in a 100 wide container: CSS2 10.4 table, w > max-width: width = 100, height =
+    max(100 * 100/200, min-height 0) = 50. Line 52.
+i   display:block with auto margins: block width 60 in 200: margin (200-60)/2 = 70 each side.
+Positions: a 0, b 10, c 112, d 174, e 226, f 248, g 258, h 290, i 342; page 382 high.
+check: replaced img#i1 :: (10,8 0x0) [image src=a.png d=1]
+check: text "y" :: (10,0 10x10)
+check: block div#b :: (0,10 200x102)
+check: line (0,10 200x102) :: baseline=110
+check: replaced img#i2 :: (0,10 200x100) [image src=b.png d=1]
+check: block div#c :: (0,112 200x62)
+check: replaced img#i3 :: (0,112 80x60)
+check: replaced img#i4 :: (0,174 100x50)
+check: replaced img#i5 :: (0,226 0x20)
+check: block div#f :: (0,248 200x10)
+check: text "no pic" :: (0,248 60x10)
+check: replaced img#i7 :: (0,258 30x30)
+check: block div#h :: (0,290 100x52)
+check: replaced img#i8 :: (0,290 100x50)
+check: replaced img#i9 :: (70,342 60x40)
+check: block body :: (0,0 400x382)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+div { width: 200px }
+</style>
+<div id="a">x<img id="i1" src="a.png">y</div>
+<div id="b"><img id="i2" src="b.png"></div>
+<div id="c"><img id="i3" src="c.png" width="80"></div>
+<div id="d"><img id="i4" src="d.png" width="100" height="50"></div>
+<div id="e"><img id="i5" src="e.png" height="20"></div>
+<div id="f"><img id="i6" src="f.png" alt="no pic"></div>
+<div id="g"><img id="i7" src="g.png" alt="x" width="30" height="30"></div>
+<div id="h" style="width:100px"><img id="i8" src="h.png" style="max-width:100%"></div>
+<div id="i"><img id="i9" src="i.png" style="display:block;margin:0 auto"></div>

@@ -1,0 +1,73 @@
+<!--
+viewport: 300x500
+Lists (css-lists-3 3, css-counter-styles-3 6; HTML 4.4.8, 15.3.7). Font 10px/10px Ahem (every glyph 10 wide), body margin 0,
+ul/ol have margin 0 and the UA padding-left 40. An outside marker is text ("counter" + suffix, e.g. "1. " or "• ") whose right
+edge touches the list item's border box on the left; it sits on the baseline of the item's first line (y = line top, since
+marker and text have the same font). Its width is 10 per character. List item k of a list at y0 is at y0 + 10(k-1).
+
+ua  disc: "• " 2 chars: x = 40 - 20 = 20.
+ob  decimal: "1. " 3 chars: x = 10.
+oc  start=5: "5. " "6. ". od reversed with 3 items: "3. " "2. " "1. ". oe reversed start=10: "10. " (x=0) "9. ".
+of  value=20 on the first item: "20. " (4 chars, x=0), the next is "21. ".
+og  list-style-type per item (numbers 1..9): lower-alpha "a. ", upper-alpha "B. ", lower-roman "iii. " (5 chars: x=-10), upper-roman
+    "IV. " (x=0), cjk-decimal "五、" (suffix 、, 2 chars: x=20), decimal-leading-zero "06. ", square "▪ ", circle "◦ ", none: no marker.
+oi  list-style-position:inside: the marker is the first inline of the item: "• " at x=40, then the text at 60.
+nested: the outer item has an anonymous block "nn" and a nested ul (circle by the UA sheet): the inner list is indented by 40 more.
+empty: an empty li still gets its marker on a line of its own height (the item itself stays 0 high).
+big: marker uses the item's font: 20px: "1. " = 60 wide, x = 40 - 60 = -20, aligned with the first line's baseline (16): top 0.
+para: the marker sits next to the first line of the first block inside (the p).
+Positions: ua 0, ob 20, oc 40, od 60, oe 90, of 110, og 130 (9 items), oi 220, nested 230 (20 high), empty 250 (0 high),
+big 250 (20 high), para 270; page 280 high.
+check: marker "• " (20,0 :: 20x10)
+check: text "one" :: (40,0 30x10)
+check: marker "1. " (10,20 :: 30x10)
+check: marker "2. " (10,30 :: 30x10)
+check: marker "5. " (10,40 :: 30x10)
+check: marker "6. " (10,50 :: 30x10)
+check: marker "3. " (10,60 :: 30x10)
+check: marker "2. " (10,70 :: 30x10)
+check: marker "1. " (10,80 :: 30x10)
+check: marker "10. " (0,90 :: 40x10)
+check: marker "9. " (10,100 :: 30x10)
+check: marker "20. " (0,110 :: 40x10)
+check: marker "21. " (0,120 :: 40x10)
+check: marker "a. " (10,130 :: 30x10)
+check: marker "B. " (10,140 :: 30x10)
+check: marker "iii. " (-10,150 :: 50x10)
+check: marker "IV. " (0,160 :: 40x10)
+check: marker "五、" (20,170 :: 20x10)
+check: marker "06. " (0,180 :: 40x10)
+check: marker "▪ " (20,190 :: 20x10)
+check: marker "◦ " (20,200 :: 20x10)
+check: block li#o9 :: (40,210 260x10)
+check: marker "• " (40,220 :: 20x10)
+check: text "in" :: (60,220 20x10)
+check: marker "• " (20,230 :: 20x10)
+check: text "nn" :: (40,230 20x10)
+check: marker "◦ " (60,240 :: 20x10)
+check: text "mm" :: (80,240 20x10)
+check: marker "• " (20,250 :: 20x10)
+check: block ul#ug :: (0,250 300x0)
+check: marker "1. " (-20,250 :: 60x20)
+check: text "big" :: (40,250 60x20)
+check: marker "• " (20,270 :: 20x10)
+check: block body :: (0,0 300x280)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+ul, ol { margin: 0 }
+p { margin: 0 }
+</style>
+<ul id="ua"><li>one</li><li>two</li></ul>
+<ol id="ob"><li>a</li><li>b</li></ol>
+<ol id="oc" start="5"><li>c</li><li>d</li></ol>
+<ol id="od" reversed><li>e</li><li>f</li><li>g</li></ol>
+<ol id="oe" reversed start="10"><li>h</li><li>i</li></ol>
+<ol id="of"><li value="20">j</li><li>k</li></ol>
+<ol id="og"><li style="list-style-type:lower-alpha">1</li><li style="list-style-type:upper-alpha">2</li><li style="list-style-type:lower-roman">3</li><li style="list-style-type:upper-roman">4</li><li style="list-style-type:cjk-decimal">5</li><li style="list-style-type:decimal-leading-zero">6</li><li style="list-style-type:square">7</li><li style="list-style-type:circle">8</li><li id="o9" style="list-style-type:none">9</li></ol>
+<ul id="oi" style="list-style-position:inside"><li>in</li></ul>
+<ul id="nested"><li>nn<ul><li>mm</li></ul></li></ul>
+<ul id="ug"><li></li></ul>
+<ol id="oh"><li style="font-size:20px;line-height:20px">big</li></ol>
+<ul id="oj"><li><p>para</p></li></ul>

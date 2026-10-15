@@ -1,0 +1,31 @@
+viewport 400x400
+block html (0,0 400x382)
+  block body (0,0 400x382)
+    block div#a (0,0 200x10)
+      line (0,0 200x10) baseline=8
+        text "x" (0,0 10x10)
+        replaced img#i1 (10,8 0x0) [image src=a.png d=1]
+        text "y" (10,0 10x10)
+    block div#b (0,10 200x102)
+      line (0,10 200x102) baseline=110
+        replaced img#i2 (0,10 200x100) [image src=b.png d=1]
+    block div#c (0,112 200x62)
+      line (0,112 200x62) baseline=172
+        replaced img#i3 (0,112 80x60) [image src=c.png d=1]
+    block div#d (0,174 200x52)
+      line (0,174 200x52) baseline=224
+        replaced img#i4 (0,174 100x50) [image src=d.png d=1]
+    block div#e (0,226 200x22)
+      line (0,226 200x22) baseline=246
+        replaced img#i5 (0,226 0x20) [image src=e.png d=1]
+    block div#f (0,248 200x10)
+      line (0,248 200x10) baseline=256
+        text "no pic" (0,248 60x10)
+    block div#g (0,258 200x32)
+      line (0,258 200x32) baseline=288
+        replaced img#i7 (0,258 30x30) [image src=g.png d=1]
+    block div#h (0,290 100x52)
+      line (0,290 100x52) baseline=340
+        replaced img#i8 (0,290 100x50) [image src=h.png d=1]
+    block div#i (0,342 200x40)
+      replaced img#i9 (70,342 60x40) [image src=i.png d=1]
