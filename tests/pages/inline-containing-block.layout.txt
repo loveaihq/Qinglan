@@ -1,0 +1,46 @@
+viewport 300x300
+block html (0,0 300x140)
+  block body (0,0 300x140)
+    block div#d1 (0,0 230x30)
+      line (30,20 200x10) baseline=28
+        inline span#s1 (65,16 62x20) [first last]
+        text "ab " (30,20 30x10)
+        text "cd " (71,21 30x10)
+        text "ef" (101,21 20x10)
+        text " gh" (122,20 30x10)
+      block i#o1 (67,18 10x5) [absolute]
+      block i#o2 (115,29 10x5) [absolute]
+      block i#o3 (67,26 29x8) [absolute]
+    block div#d2 (0,30 100x40)
+      line (0,40 100x10) baseline=48
+        inline span#s2 (30,37 44x16) [first]
+        text "xx " (0,40 30x10)
+        text "aaaa" (34,40 40x10)
+      line (0,50 100x10) baseline=58
+        inline span#s2 (0,47 90x16)
+        text "bbbb cccc" (0,50 90x10)
+      line (0,60 100x10) baseline=68
+        inline span#s2 (0,57 44x16) [last]
+        text "dddd" (0,60 40x10)
+      block i#o4 (31,38 5x5) [absolute]
+      block i#o5 (38,67 5x5) [absolute]
+    block div#d3 (0,70 300x20)
+      line (0,80 300x10) baseline=88
+        text "xy" (0,80 20x10)
+        text "z" (20,80 10x10)
+      block u#o6 (23,80 4x4) [absolute]
+    block div#d4 (0,100 200x40) [relative]
+      line (0,100 200x10) baseline=108
+        text "aa" (0,100 20x10)
+        text "bb" (22,100 20x10)
+      block i#o7 (22,100 3x3) [absolute]
+      block i#o8 (0,100 3x3) [absolute]
+paint-above i#o1 absolute z=0
+paint-above i#o2 absolute z=0
+paint-above i#o3 absolute z=0
+paint-above i#o4 absolute z=0
+paint-above i#o5 absolute z=0
+paint-above u#o6 absolute z=0
+paint-above div#d4 relative z=0
+paint-above i#o7 absolute z=0
+paint-above i#o8 absolute z=0

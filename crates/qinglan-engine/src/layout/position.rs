@@ -7,9 +7,12 @@
 //! viewport). The box is laid out when its containing block is finished, because `right`, `bottom`
 //! and percentages need the containing block's size.
 //!
-//! Choices: an inline element with `position: relative` is not a containing block (the nearest
-//! positioned *block-level* ancestor is); a `fixed` box is positioned in viewport coordinates at
-//! scroll position 0 (the host adds the scroll offset when it paints fixed boxes).
+//! A `position: relative` inline element is the containing block of the out-of-flow boxes inside it
+//! (CSS2 10.1 item 4): `inline::lay_lines` works out its padding box from the first and last piece of
+//! the element and calls [`Layouter::layout_oof_in_rect`] once the paragraph is laid out. (An
+//! out-of-flow box inside an inline-block inside such an element still uses the nearest positioned
+//! block-level ancestor.) A `fixed` box is positioned in viewport coordinates at scroll position 0
+//! (the host adds the scroll offset when it paints fixed boxes).
 
 use super::block::{Flow, border_px, lp_has_percent, pad_px, resolve_dim, resolve_margin};
 use super::boxtree::{BoxId, BoxKind, NO_BOX};
@@ -63,34 +66,48 @@ impl Layouter<'_> {
     }
 
     fn layout_oof(&mut self, p: Pending) {
+        self.layout_oof_with(p, None);
+    }
+
+    /// Lay out a box whose containing block is the padding box of a positioned inline element:
+    /// `rect` is that box (x, y, w, h) in the coordinates of the owner block's border box.
+    pub(super) fn layout_oof_in_rect(&mut self, p: Pending, rect: [LU; 4]) {
+        self.layout_oof_with(p, Some(rect));
+    }
+
+    fn layout_oof_with(&mut self, p: Pending, inline_cb: Option<[LU; 4]>) {
         if !self.charge(8) || self.depth >= super::MAX_PARAGRAPH_DEPTH {
             return;
         }
         self.depth += 1;
-        self.layout_oof_inner(p);
+        self.layout_oof_inner(p, inline_cb);
         self.depth -= 1;
     }
 
-    fn layout_oof_inner(&mut self, p: Pending) {
+    fn layout_oof_inner(&mut self, p: Pending, inline_cb: Option<[LU; 4]>) {
         let tree = self.tree;
         let bx = tree.get(p.id);
         let style = bx.style.clone();
         let bs = &style.boxs;
         let bd = &style.border;
 
-        // The containing block: its padding box.
-        let (cw, ch, bl, bt) = match p.cb {
-            Some(c) => {
-                let o = self.out.get(c as usize).copied().unwrap_or_default();
-                let cbd = &tree.get(c).style.border;
-                let b = |i: usize| border_px(cbd.width.get(i).copied().unwrap_or(0.0));
-                ((o.w - b(1) - b(3)).max0(), (o.h - b(0) - b(2)).max0(), b(3), b(0))
+        // The containing block (its padding box) and where the owner of the static position sits in it.
+        let (cw, ch, ox, oy) = match inline_cb {
+            Some([x, y, w, h]) => (w, h, -x, -y),
+            None => {
+                let (cw, ch, bl, bt) = match p.cb {
+                    Some(c) => {
+                        let o = self.out.get(c as usize).copied().unwrap_or_default();
+                        let cbd = &tree.get(c).style.border;
+                        let b = |i: usize| border_px(cbd.width.get(i).copied().unwrap_or(0.0));
+                        ((o.w - b(1) - b(3)).max0(), (o.h - b(0) - b(2)).max0(), b(3), b(0))
+                    }
+                    None => (self.viewport.0, self.viewport.1, LU::ZERO, LU::ZERO),
+                };
+                let (ox, oy) = self.rel_pos(p.owner, p.cb);
+                (cw, ch, ox - bl, oy - bt)
             }
-            None => (self.viewport.0, self.viewport.1, LU::ZERO, LU::ZERO),
         };
-        // Where the owner of the static position sits in the containing block's padding box.
-        let (ox, oy) = self.rel_pos(p.owner, p.cb);
-        let (ox, oy) = (ox - bl, oy - bt);
         let (sx, sy) = (p.sx + ox, p.sy + oy);
 
         let pad = [pad_px(&bs.padding[0], cw), pad_px(&bs.padding[1], cw), pad_px(&bs.padding[2], cw), pad_px(&bs.padding[3], cw)];

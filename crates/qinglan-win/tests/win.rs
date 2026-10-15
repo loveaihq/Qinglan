@@ -372,3 +372,25 @@ fn all_kinds_of_text_keep_the_cluster_invariants() {
     assert!(p.resolve_font(&odd).is_some());
     assert!(p.resolve_font(&FontQuery { families: &[], weight: 1e9, slant: FontSlant::Italic, lang: None }).is_some());
 }
+
+/// A long run is cut into pieces for DirectWrite; the cut must not fall between a character and its
+/// combining mark (the two would end up in different clusters).
+#[test]
+fn long_runs_are_not_cut_inside_a_cluster() {
+    let p = plat();
+    let f = sans();
+    // 8191 letters, then "e" + U+0301 exactly where the first piece would end (8192 units).
+    for filler in ["a", "ab "] {
+        let n = 8191 / filler.len();
+        let mut text = filler.repeat(n);
+        text.push_str(&"a".repeat(8191 - text.len()));
+        text.push_str("e\u{0301}");
+        text.push_str(&"b".repeat(100));
+        let at = text.find('e').unwrap();
+        assert_eq!(text[..at].encode_utf16().count(), 8191);
+        let g: Vec<Glyph> = p.shape(&text, &q(&f, Some("en")), 16.0);
+        let e_mark = at as u32..(at + 3) as u32;
+        assert!(g.iter().any(|x| x.cluster_start == e_mark.start && x.cluster_end == e_mark.end), "{filler:?}: e and U+0301 must share a cluster");
+        assert!(g.iter().all(|x| !(x.cluster_start == e_mark.end - 2 && x.cluster_end == e_mark.end)), "{filler:?}: the mark has a cluster of its own");
+    }
+}

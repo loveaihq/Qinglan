@@ -18,6 +18,7 @@
 //!
 //! `measure_inline` gives the min-content and max-content widths of a paragraph from the same units.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::block::{Flow, border_px, lp_has_percent, pad_px, resolve_margin};
@@ -462,6 +463,40 @@ fn align_of(a: TextAlign) -> Align {
         TextAlign::Center => Align::Center,
         _ => Align::Left,
     }
+}
+
+/// The padding box of one piece of a relatively positioned inline element, in the owner block's coordinates.
+#[derive(Clone, Copy)]
+struct PadRect {
+    l: LU,
+    t: LU,
+    r: LU,
+    b: LU,
+}
+
+/// Where the containing block of an out-of-flow box in a positioned inline element comes from.
+enum InlineCb {
+    /// The element's own pieces (known once all lines are done).
+    Span(BoxId),
+    /// A zero-width box at the placeholder (the element has no piece on this line).
+    At(PadRect),
+}
+
+/// The innermost `position: relative` inline element between `owner` and `block` (CSS2 10.1 item 4: such
+/// an element is the containing block of its absolutely positioned descendants).
+fn relative_inline_ancestor(tree: &super::boxtree::BoxTree, owner: BoxId, block: BoxId) -> Option<BoxId> {
+    let mut b = owner;
+    for _ in 0..300 {
+        if b == block || b == NO_BOX {
+            return None;
+        }
+        let bx = tree.get(b);
+        if bx.kind == BoxKind::Inline && bx.style.boxs.position == Position::Relative {
+            return Some(b);
+        }
+        b = bx.parent;
+    }
+    None
 }
 
 struct Group {
@@ -928,12 +963,18 @@ impl Layouter<'_> {
             Some(p) if !p.pct_edges || p.cbw == content_w => p,
             _ => self.prepare(block, content_w),
         };
-        let h = self.lay_lines(block, prep, content_w, left, top);
+        let (h, inline_oof) = self.lay_lines(block, prep, content_w, left, top);
         self.depth -= 1;
+        // Out-of-flow boxes whose containing block is a positioned inline element of this paragraph.
+        for (p, rect) in inline_oof {
+            self.layout_oof_in_rect(p, rect);
+        }
         h
     }
 
-    fn lay_lines(&mut self, block: BoxId, mut prep: Prepared, content_w: LU, left: LU, top: LU) -> LU {
+    /// Returns the height of the lines, and the out-of-flow boxes that sit in a `position: relative`
+    /// inline element with the padding box of that element (x, y, w, h in this block's coordinates).
+    fn lay_lines(&mut self, block: BoxId, mut prep: Prepared, content_w: LU, left: LU, top: LU) -> (LU, Vec<(Pending, [LU; 4])>) {
         let tree = self.tree;
         let bx = tree.get(block);
         let text_base = self.texts.len() as u32;
@@ -975,6 +1016,12 @@ impl Layouter<'_> {
         let mut widths: Vec<LU> = Vec::new();
         let mut ents: Vec<Ent> = Vec::new();
         let n = prep.units.len();
+        // First and last padding box of every relatively positioned inline element, and the boxes waiting for them.
+        let mut spans: HashMap<BoxId, (PadRect, PadRect)> = HashMap::new();
+        let mut inline_oof: Vec<(Pending, InlineCb)> = Vec::new();
+        // Index of the last unit that is real content: "is there more content after this line" is then a
+        // comparison, not a scan to the end of the paragraph on every line (blank lines in `<pre>`).
+        let last_content = prep.units.iter().rposition(|u| matches!(u.kind, UnitKind::Normal | UnitKind::Tab | UnitKind::Atomic) && !u.collapsible_space);
         loop {
             // Collapsible spaces at the start of a line are removed (4.1.2).
             while prep.units.get(s).is_some_and(|u| u.collapsible_space) {
@@ -1014,7 +1061,17 @@ impl Layouter<'_> {
                     {
                         let fixed = tree.get(it.box_id).style.boxs.position == Position::Fixed;
                         let cb = cb_for_oof(self, fixed);
-                        self.pending.push(Pending { id: it.box_id, owner: block, sx: left + line_indent, sy: top + y, cb });
+                        let (sx, sy) = (left + line_indent, top + y);
+                        let pend = Pending { id: it.box_id, owner: block, sx, sy, cb };
+                        match if fixed { None } else { relative_inline_ancestor(tree, it.owner, block) } {
+                            Some(span) => {
+                                // No line box: the element is empty here, a zero-width box on the strut's baseline.
+                                let rf = self.font_for(&tree.get(span).style);
+                                let t = sy + strut_asc - rf.asc;
+                                inline_oof.push((pend, InlineCb::At(PadRect { l: sx, t, r: sx, b: t + rf.asc + rf.desc })));
+                            }
+                            None => self.pending.push(pend),
+                        }
                     }
                 }
                 s = next;
@@ -1051,7 +1108,7 @@ impl Layouter<'_> {
             // ideographs (CJK); the last line and lines ended by a break are left alone.
             let justify_all = text_align == TextAlign::JustifyAll;
             let wraps = prep.items.get(prep.units.get(s).map_or(0, |u| u.item as usize)).is_none_or(|i| i.wrap);
-            let more = prep.units.get(next..).unwrap_or(&[]).iter().any(|u| matches!(u.kind, UnitKind::Normal | UnitKind::Tab | UnitKind::Atomic) && !u.collapsible_space);
+            let more = last_content.is_some_and(|l| l >= next);
             if (justify_all || (text_align == TextAlign::Justify && !forced && more)) && wraps && free > LU::ZERO {
                 let stop = e - hang_n;
                 let mut opps: Vec<usize> = Vec::new();
@@ -1270,7 +1327,9 @@ impl Layouter<'_> {
             let ox = left + offset;
             for en in ents.iter().filter(|e| !e.atomic) {
                 let cbx = tree.get(en.id);
-                if !paints_box(&cbx.style) {
+                let positioned = cbx.style.boxs.position == Position::Relative;
+                let paints = paints_box(&cbx.style);
+                if !paints && !positioned {
                     continue;
                 }
                 let Some(rf) = en.font.as_ref() else { continue };
@@ -1281,6 +1340,19 @@ impl Layouter<'_> {
                 let x1 = en.last - if en.has_end { m(1) } else { LU::ZERO };
                 let content_top = base_y - en.off - rf.asc;
                 let (pt, pb, bt, bb) = (p(0), p(2), b(0), b(2));
+                if positioned {
+                    // Padding box of this piece (CSS2 10.1 item 4): the border only sits at the ends of the element.
+                    let piece = PadRect {
+                        l: ox + x0 + en.rel.0 + if en.has_start { b(3) } else { LU::ZERO },
+                        t: content_top - pt + en.rel.1,
+                        r: ox + x1 + en.rel.0 - if en.has_end { b(1) } else { LU::ZERO },
+                        b: content_top + rf.asc + rf.desc + pb + en.rel.1,
+                    };
+                    spans.entry(en.id).and_modify(|e| e.1 = piece).or_insert((piece, piece));
+                }
+                if !paints {
+                    continue;
+                }
                 self.fragments.push(Fragment {
                     box_id: en.id,
                     kind: FragKind::InlineBox { first: en.has_start, last: en.has_end },
@@ -1339,7 +1411,17 @@ impl Layouter<'_> {
                     ItemKind::Oof => {
                         let fixed = tree.get(it.box_id).style.boxs.position == Position::Fixed;
                         let cb = cb_for_oof(self, fixed);
-                        self.pending.push(Pending { id: it.box_id, owner: block, sx: ox + g.x, sy: line_top, cb });
+                        let pend = Pending { id: it.box_id, owner: block, sx: ox + g.x, sy: line_top, cb };
+                        match if fixed { None } else { relative_inline_ancestor(tree, it.owner, block) } {
+                            Some(span) if self.stamp.get(span as usize).is_some_and(|sl| sl.0 == ln) => inline_oof.push((pend, InlineCb::Span(span))),
+                            Some(span) => {
+                                // The element has no piece on this line (it is empty): a zero-width box at the placeholder.
+                                let rf = self.font_for(&tree.get(span).style);
+                                let (x, t) = (ox + g.x, base_y - rf.asc);
+                                inline_oof.push((pend, InlineCb::At(PadRect { l: x, t, r: x, b: t + rf.asc + rf.desc })));
+                            }
+                            None => self.pending.push(pend),
+                        }
                     }
                     ItemKind::Start | ItemKind::End => {}
                 }
@@ -1362,7 +1444,23 @@ impl Layouter<'_> {
         if let Some(o) = self.out.get_mut(block as usize) {
             o.lines = (first_line, last_line);
         }
-        y
+        // The containing block of a box in a positioned inline element runs from the top left padding corner
+        // of the element's first piece to the bottom right one of its last piece (CSS2 10.1 item 4; with
+        // left-to-right text, the only direction layer 1 lays out).
+        let rects = inline_oof
+            .into_iter()
+            .map(|(p, cb)| {
+                let (f, l) = match cb {
+                    InlineCb::At(r) => (r, r),
+                    InlineCb::Span(id) => {
+                        let at = PadRect { l: p.sx, t: p.sy, r: p.sx, b: p.sy };
+                        spans.get(&id).copied().unwrap_or((at, at))
+                    }
+                };
+                (p, [f.l, f.t, (l.r - f.l).max0(), (l.b - f.t).max0()])
+            })
+            .collect();
+        (y, rects)
     }
 
     /// The decoration line `sp` for a text fragment at `x` with the baseline at `baseline_y`, `w` wide

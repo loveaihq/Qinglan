@@ -1,0 +1,39 @@
+<!--
+viewport: 300x300
+A `position: relative` inline element is the containing block of its absolutely positioned descendants (CSS2 10.1 item 4):
+from the top left padding corner of its first box to the bottom right padding corner of its last box (left-to-right text).
+Font 10px/10px Ahem (ascent 8, descent 2), body margin 0. The content area of an inline box is 10 high, so its padding box
+reaches the vertical padding above and below it.
+
+d1  one line. padding 20px 0 0 30px: the line is at y=20, text starts at x=30. "ab " = 30..60. s1 has border 2, padding 3px 4px, and
+    left 5 top 1. Start edge 6: "cd " = 66..96, the placeholders sit at 96, "ef" = 96..116, end edge 6 -> border box 60..122,
+    padding box 62..120. Moved by (5,1): x 67..125. y: 20-3+1 = 18 .. 20+10+3+1 = 34. So the containing block is (67,18) 58x16.
+    o1 left 0 top 0 10x5: (67,18). o2 right 0 bottom 0 10x5: (125-10, 34-5) = (115,29).
+    o3 left 0, top 50%, width 50%, height 50%: (67, 18+8) = (67,26), 29x8.
+d2  several lines, width 100, padding-top 10 (lines at y=40, 50, 60). s2: border 1, padding 2px 3px. "xx " = 0..30, start edge 4: "aaaa" = 34..74.
+    "bbbb" does not fit (34+40+10+40 > 100): line 2 is "bbbb cccc" (the placeholders o4 and o5 sit after it) and line 3 is "dddd"
+    (0..40) and the end edge (40..44). First box: padding box starts at x=30+1 = 31, y=40-2 = 38. Last box: ends at x=44-1 = 43,
+    y=60+10+2 = 72. Containing block: (31,38) 12x34. o4 left 0 top 0 5x5: (31,38). o5 right 0 bottom 0 5x5: (43-5, 72-5) = (38,67).
+d3  an empty relative span after "xy" (x=20, line at y=80): its containing block is empty at that point, as high as its content
+    area. o6 left 3 top 0 4x4: (23,80).
+d4  relative block (y=100, margin-top 10 after d3 ends at 90), "aa" = 0..20, then s4 (relative, left 2) holds a plain <b>
+    which holds o7: the nearest positioned ancestor is s4, padding box (22,100): o7 left 0 top 0 3x3 = (22,100).
+    o8 is a direct child of d4: its containing block is d4's padding box (0,100): (0,100).
+check: block i#o1 :: (67,18 10x5)
+check: block i#o2 :: (115,29 10x5)
+check: block i#o3 :: (67,26 29x8)
+check: block i#o4 :: (31,38 5x5)
+check: block i#o5 :: (38,67 5x5)
+check: block u#o6 :: (23,80 4x4)
+check: block i#o7 :: (22,100 3x3)
+check: block i#o8 :: (0,100 3x3)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px Ahem; }
+i, u { display: block; position: absolute; }
+</style>
+<div id="d1" style="width:200px;padding:20px 0 0 30px">ab <span id="s1" style="position:relative;padding:3px 4px;border:2px solid;left:5px;top:1px">cd <i id="o1" style="left:0;top:0;width:10px;height:5px"></i><i id="o2" style="right:0;bottom:0;width:10px;height:5px"></i><i id="o3" style="left:0;top:50%;width:50%;height:50%"></i>ef</span> gh</div>
+<div id="d2" style="width:100px;padding-top:10px">xx <span id="s2" style="position:relative;padding:2px 3px;border:1px solid">aaaa bbbb cccc<i id="o4" style="left:0;top:0;width:5px;height:5px"></i><i id="o5" style="right:0;bottom:0;width:5px;height:5px"></i> dddd</span></div>
+<div id="d3" style="padding-top:10px">xy<span id="s3" style="position:relative"><u id="o6" style="left:3px;top:0;width:4px;height:4px"></u></span>z</div>
+<div id="d4" style="position:relative;width:200px;height:40px;margin-top:10px">aa<span id="s4" style="position:relative;left:2px"><b>bb<i id="o7" style="left:0;top:0;width:3px;height:3px"></i></b></span><i id="o8" style="left:0;top:0;width:3px;height:3px"></i></div>

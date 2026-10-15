@@ -104,10 +104,67 @@ fn decode_unflagged(t: &Entry, bytes: &[u8]) -> String {
     }
 }
 
-/// One character at a time, so that exactly the bad bytes turn into U+FFFD. WHATWG decoders drop
-/// the lead byte of an invalid pair but give a following ASCII byte back; the same is done here.
+/// Bad bytes turn into U+FFFD, everything else decodes as usual. The input is cut into chunks at bytes
+/// below 0x30, which are never part of a multi-byte character in any of these encodings (trail
+/// bytes start at 0x30, and the 4-byte GB18030 form uses digits); a chunk that decodes cleanly goes
+/// through `MultiByteToWideChar` in one call. A chunk with a bad byte is halved again and again, and
+/// only the small piece around the bad byte is decoded one character at a time. (Per-character calls
+/// for the whole page cost about seven times as much as one bulk call.)
 fn decode_slow(t: &Entry, bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len());
+    let mut failures = 0u32;
+    let mut start = 0usize;
+    while start < bytes.len() {
+        let end = safe_cut(bytes, start, CHUNK);
+        decode_range(t, bytes.get(start..end).unwrap_or(&[]), &mut out, &mut failures, 0);
+        start = end;
+    }
+    out
+}
+
+/// Chunk size of the bulk decoding, and the piece size below which a bad chunk is decoded per character.
+const CHUNK: usize = 16 * 1024;
+const LEAF: usize = 512;
+/// After this many failed bulk attempts the input is plainly broken: stop trying and decode per character.
+const MAX_FAILURES: u32 = 256;
+
+/// The first position at least `size` bytes after `start` that is a byte below 0x30 (or the end).
+fn safe_cut(bytes: &[u8], start: usize, size: usize) -> usize {
+    let from = start.saturating_add(size);
+    match bytes.get(from..) {
+        Some(rest) => rest.iter().position(|&b| b < 0x30).map_or(bytes.len(), |p| from + p),
+        None => bytes.len(),
+    }
+}
+
+fn decode_range(t: &Entry, chunk: &[u8], out: &mut String, failures: &mut u32, depth: u32) {
+    if chunk.is_empty() {
+        return;
+    }
+    if *failures < MAX_FAILURES {
+        match sys::multi_byte_to_wide(t.code_page, sys::MB_ERR_INVALID_CHARS, chunk) {
+            Ok(w) => {
+                out.push_str(&String::from_utf16_lossy(&w));
+                return;
+            }
+            Err(_) => *failures += 1,
+        }
+        if chunk.len() > LEAF && depth < 16 {
+            let mid = safe_cut(chunk, 0, chunk.len() / 2);
+            if mid > 0 && mid < chunk.len() {
+                let (a, b) = chunk.split_at(mid);
+                decode_range(t, a, out, failures, depth + 1);
+                decode_range(t, b, out, failures, depth + 1);
+                return;
+            }
+        }
+    }
+    decode_chars(t, chunk, out);
+}
+
+/// One character at a time, so that exactly the bad bytes turn into U+FFFD. WHATWG decoders drop
+/// the lead byte of an invalid pair but give a following ASCII byte back; the same is done here.
+fn decode_chars(t: &Entry, bytes: &[u8], out: &mut String) {
     let mut i = 0usize;
     while let Some(&b) = bytes.get(i) {
         if b < 0x80 {
@@ -140,5 +197,57 @@ fn decode_slow(t: &Entry, bytes: &[u8]) -> String {
         }
         i += used;
     }
-    out
+}
+
+#[cfg(test)]
+#[allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    /// Reference: the whole input one character at a time.
+    fn per_char(name: &str, bytes: &[u8]) -> String {
+        let t = find(name).unwrap();
+        let mut out = String::new();
+        decode_chars(t, bytes, &mut out);
+        out
+    }
+
+    fn gbk_text(n: usize) -> Vec<u8> {
+        // "中文" and an ASCII tail with a space and a newline, repeated.
+        b"\xD6\xD0\xCE\xC4 ab12\n".iter().copied().cycle().take(n).collect()
+    }
+
+    #[test]
+    fn chunked_decoding_matches_the_per_character_reference() {
+        let mut v = gbk_text(200_000);
+        // Bad bytes of every kind: a lone 0xFF, a lead byte before ASCII (below and above 0x30), a bad pair, at the very start and end.
+        for (i, b) in [(0usize, 0xFFu8), (17, 0xFF), (16_383, 0x81), (16_384, 0xFE), (50_001, 0xD6), (99_999, 0x80), (199_999, 0xFF)] {
+            v[i] = b;
+        }
+        v.extend_from_slice(&[0x81]);
+        for name in ["GBK", "gb18030", "Big5", "Shift_JIS", "EUC-KR", "EUC-JP"] {
+            assert_eq!(decode_slow(find(name).unwrap(), &v), per_char(name, &v), "{name}");
+        }
+        // Mostly bad input falls back to per-character decoding and still agrees.
+        let pat = gbk_text(10);
+        let bad: Vec<u8> = (0..300_000u32).map(|i| if i % 7 == 0 { 0xFF } else { pat[(i % 10) as usize] }).collect();
+        assert_eq!(decode_slow(find("GBK").unwrap(), &bad), per_char("GBK", &bad));
+    }
+
+    #[test]
+    fn one_bad_byte_in_a_big_page_costs_about_a_bulk_decode() {
+        let mut v = gbk_text(6_000_000);
+        let clean = {
+            let t0 = std::time::Instant::now();
+            assert!(decode_legacy("GBK", &v).unwrap().chars().all(|c| c != '\u{FFFD}'));
+            t0.elapsed()
+        };
+        v[3_000_004] = 0xFF;
+        let t0 = std::time::Instant::now();
+        let s = decode_legacy("GBK", &v).unwrap();
+        let bad = t0.elapsed();
+        assert_eq!(s.chars().filter(|&c| c == '\u{FFFD}').count(), 1);
+        // Per-character decoding of the page took about seven times as long as the bulk decode.
+        assert!(bad < clean * 4 + std::time::Duration::from_millis(100), "clean {clean:?}, with one bad byte {bad:?}");
+    }
 }

@@ -216,3 +216,40 @@ fn hostile_positioning_does_not_panic() {
     let (dump, _) = lay(html, &TestPlatform);
     assert!(dump.contains("[absolute]") && dump.contains("[fixed]"));
 }
+
+fn blank_lines_page(n: usize, align: &str) -> String {
+    format!("<body style='font:10px Ahem'><pre style='text-align:{align};width:100px'>{}x</pre><p style='text-align:{align};width:100px'>{}</p>", "\n".repeat(n), "<br>".repeat(n))
+}
+
+/// Blank lines (a `<pre>` full of line feeds, trailing `<br>`s) cost the same each, whatever follows them:
+/// 4 times the lines take about 4 times as long, not 16 times.
+#[test]
+fn blank_lines_scale_linearly() {
+    let sizes = qinglan_engine::layout::ImageSizes::new();
+    let time = |n: usize, align: &str| {
+        let html = blank_lines_page(n, align);
+        let t = std::time::Instant::now();
+        let (_, res) = lay_opts(&html, &LayoutOptions::default(), &sizes);
+        assert!(!res.incomplete);
+        assert_eq!(res.lines.len(), 2 * n); // the <pre>'s first line feed is dropped by the parser
+        t.elapsed()
+    };
+    for align in ["justify", "left"] {
+        let small = time(10_000, align);
+        let big = time(40_000, align);
+        assert!(big < small * 8 + std::time::Duration::from_millis(200), "{align}: 10k lines {small:?}, 40k lines {big:?}");
+    }
+}
+
+/// A million blank lines are laid out well inside the time a page may take (release builds; a debug build
+/// gets a tenth of them).
+#[test]
+fn a_million_blank_lines_finish() {
+    let n = if cfg!(debug_assertions) { 100_000 } else { 1_000_000 };
+    let html = format!("<body style='font:10px Ahem'><pre style='text-align:justify'>{}x</pre>", "\n".repeat(n));
+    let t = std::time::Instant::now();
+    let (_, res) = lay_opts(&html, &LayoutOptions::default(), &qinglan_engine::layout::ImageSizes::new());
+    let took = t.elapsed();
+    assert!(res.lines.len() > 1000 || res.incomplete, "{} lines", res.lines.len());
+    assert!(took < std::time::Duration::from_secs(5), "{n} blank lines took {took:?}");
+}

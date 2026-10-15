@@ -603,11 +603,7 @@ impl Inner {
             let end = (ps + pl).min(seg.len());
             let mut s = ps.max(cursor);
             while s < end {
-                let mut e = (s + MAX_RUN_UNITS).min(end);
-                // Never cut a surrogate pair.
-                while e < end && e > s + 1 && seg.get(e).is_some_and(|u| (0xDC00..0xE000).contains(u)) {
-                    e -= 1;
-                }
+                let e = if s + MAX_RUN_UNITS >= end { end } else { run_cut(seg, s, s + MAX_RUN_UNITS) };
                 let t = Instant::now();
                 let shaped = seg.get(s..e).and_then(|sub| dw.shape(sub, &entry.face, size, sa, &q.locale));
                 self.stats.us_shape += t.elapsed().as_micros() as u64;
@@ -623,6 +619,48 @@ impl Inner {
             notdef_run(out, fid, base + cursor, base + seg.len(), map, size);
         }
     }
+}
+
+/// How far back from the limit `run_cut` looks for a good place to cut a long run.
+const CUT_SEARCH: usize = 512;
+
+/// Whether a character joins the character before it (combining marks, variation selectors, joiners,
+/// Hangul medial and final jamo, kana voicing marks): cutting before it would split a cluster.
+fn joins_previous(u: u32) -> bool {
+    matches!(u,
+        0x0300..=0x036F | 0x0483..=0x0489 | 0x0591..=0x05C7 | 0x0610..=0x061A | 0x064B..=0x065F | 0x0670
+        | 0x06D6..=0x06ED | 0x0900..=0x0903 | 0x093A..=0x094F | 0x0E31 | 0x0E34..=0x0E3A | 0x0E47..=0x0E4E
+        | 0x1160..=0x11FF | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x200B..=0x200F | 0x20D0..=0x20FF
+        | 0x3099..=0x309A | 0xA960..=0xA97C | 0xD7B0..=0xD7FF | 0xFE00..=0xFE0F | 0xFE20..=0xFE2F | 0xE0100..=0xE01EF)
+}
+
+/// Where to cut `seg[s..limit]` (the run is longer than one `GetGlyphs` call takes): after a space
+/// if there is one near the limit, otherwise at the last position that neither splits a surrogate pair
+/// nor separates a character from the marks, joiner or variation selector that follow it (or from the
+/// joiner before). Cutting inside a cluster would shape the two halves wrongly. If nothing fits in
+/// `CUT_SEARCH` units, the cut stays at the limit.
+fn run_cut(seg: &[u16], s: usize, limit: usize) -> usize {
+    let lo = (limit.saturating_sub(CUT_SEARCH)).max(s + 1);
+    let ok = |p: usize| {
+        let (cp, _) = decode_unit(seg, p);
+        let prev = seg.get(p.wrapping_sub(1)).copied();
+        !(0xDC00..0xE000).contains(&seg.get(p).copied().unwrap_or(0)) && !joins_previous(cp) && prev != Some(0x200D)
+    };
+    let mut p = limit;
+    while p >= lo {
+        if seg.get(p - 1) == Some(&0x20) && ok(p) {
+            return p;
+        }
+        p -= 1;
+    }
+    p = limit;
+    while p >= lo {
+        if ok(p) {
+            return p;
+        }
+        p -= 1;
+    }
+    limit
 }
 
 /// The code point starting at unit `i` of `units` and how many units it takes.

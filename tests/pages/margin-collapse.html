@@ -17,6 +17,10 @@ H  overflow:hidden starts a formatting context, child margin 25 stays inside: h 
    h1 y=317+25=342, h h=25+10=35.
 I  an empty block inside an empty block: 7, 12 and 9 all collapse through, to 12. i, i1 and i2 all start at
    352+12=364; i2 h=10 ends 374 which is also body and html height.
+J  `height: 0` counts like `auto` for a box's own margins (CSS2 8.3.1: "height of either 0 or auto"): j1 is empty with
+   height 0 and margin 20 0, so it collapses through; j0 ends at 384; j1 sits at 384+20 = 404 (as if it had a bottom border); its margin 20 meets j2's top margin 30 -> 30: j2 at 414, ends 424.
+K  but a `height: 0` box with a child does not merge its bottom margin with the child's (only `auto` does): k is 0 high at 424,
+   its child k1 (10 high, margin-bottom 50) overflows it; k's own margin-bottom 20 separates it from k2: 424+20 = 444, ends 454.
 check: block div#a1 :: (0,0 400x10)
 check: block div#a2 :: (0,40 400x10)
 check: block div#b1 :: (0,50 400x10)
@@ -38,8 +42,14 @@ check: block div#h1 :: (0,342 400x10)
 check: block div#i :: (0,364 400x0)
 check: block div#i1 :: (0,364 400x0)
 check: block div#i2 :: (0,364 400x10)
-check: block body :: (0,0 400x374)
-check: block html :: (0,0 400x374)
+check: block div#j0 :: (0,374 400x10)
+check: block div#j1 :: (0,404 400x0)
+check: block div#j2 :: (0,414 400x10)
+check: block div#k :: (0,424 400x0)
+check: block div#k1 :: (0,424 400x10)
+check: block div#k2 :: (0,444 400x10)
+check: block body :: (0,0 400x454)
+check: block html :: (0,0 400x454)
 -->
 <!doctype html>
 <style>
@@ -61,3 +71,8 @@ body { margin: 0; font: 10px/10px Ahem }
 <div id="h" style="overflow:hidden;margin-top:10px"><div id="h1" style="height:10px;margin-top:25px"></div></div>
 <div id="i" style="margin-top:7px;margin-bottom:9px"><div id="i1" style="margin-top:12px"></div></div>
 <div id="i2" style="height:10px"></div>
+<div id="j0" style="height:10px"></div>
+<div id="j1" style="height:0;margin:20px 0"></div>
+<div id="j2" style="height:10px;margin-top:30px"></div>
+<div id="k" style="height:0;margin-bottom:20px"><div id="k1" style="height:10px;margin-bottom:50px"></div></div>
+<div id="k2" style="height:10px"></div>

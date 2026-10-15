@@ -45,6 +45,8 @@ pub(crate) struct Geom {
     content_w: LU,
     ml: LU,
     spec_h: Option<LU>,
+    /// The computed `height` is `auto` or 0 (CSS2 8.3.1: such a box can collapse through).
+    h_zero_or_auto: bool,
     min_h: LU,
     max_h: Option<LU>,
     repl: Option<(LU, LU)>,
@@ -209,6 +211,9 @@ impl Layouter<'_> {
         let bfc = is_root || establishes_bfc(bx, &bx.style.boxs);
         let top_collapses = !bfc && g.bor[0] == LU::ZERO && g.pad[0] == LU::ZERO;
         let bottom_collapses = !bfc && g.bor[2] == LU::ZERO && g.pad[2] == LU::ZERO && g.spec_h.is_none() && g.min_h == LU::ZERO;
+        // A box's own top and bottom margins collapse when its height is 0 or auto (CSS2 8.3.1); only with `auto`
+        // does the bottom margin also merge with that of the last child.
+        let collapses_through = !bfc && g.bor[2] == LU::ZERO && g.pad[2] == LU::ZERO && g.h_zero_or_auto && g.min_h == LU::ZERO;
         let (content_left, content_top) = (g.bor[3] + g.pad[3], g.bor[0] + g.pad[0]);
         let (m_top, m_bot) = (g.m_top, g.m_bot);
 
@@ -223,7 +228,7 @@ impl Layouter<'_> {
         } else if bx.inline_children {
             content_h_auto = self.layout_inline(id, g.content_w, content_left, content_top);
             let has_lines = self.out.get(id as usize).is_some_and(|o| o.lines.1 > o.lines.0);
-            if top_collapses && bottom_collapses && !has_lines {
+            if top_collapses && collapses_through && !has_lines {
                 through = true;
                 top_only = mt;
                 mt = mt.join(mb);
@@ -272,7 +277,7 @@ impl Layouter<'_> {
                 if top_collapses {
                     top_margin = strut;
                 }
-                if top_collapses && bottom_collapses {
+                if top_collapses && collapses_through {
                     through = true;
                     top_only = top_margin;
                     mt = top_margin.join(Margin::from(m_bot));
@@ -358,6 +363,7 @@ impl Layouter<'_> {
         // Height: a percentage needs a definite containing block height, otherwise it is `auto`
         // (10.5). Min/max (10.7) apply to the result.
         let spec_h = resolve_dim(&bs.height, cb_h).map(to_ch);
+        let h_zero_or_auto = flow.forced_h.is_none() && repl.is_none() && spec_h.is_none_or(|h| h == LU::ZERO);
         let min_h = resolve_dim(&bs.min_height, cb_h).map_or(LU::ZERO, to_ch);
         let max_h = resolve_dim(&bs.max_height, cb_h).map(to_ch);
         let clamp_h = |h: LU| max_h.map_or(h, |m| h.min(m)).max(min_h);
@@ -366,7 +372,7 @@ impl Layouter<'_> {
             (None, Some((_, rh))) => Some(rh),
             (None, None) => spec_h.map(clamp_h),
         };
-        Geom { pad, bor, h_extra, v_extra, m_top: marg[0].unwrap_or(LU::ZERO), m_bot: marg[2].unwrap_or(LU::ZERO), content_w, ml, spec_h, min_h, max_h, repl }
+        Geom { pad, bor, h_extra, v_extra, m_top: marg[0].unwrap_or(LU::ZERO), m_bot: marg[2].unwrap_or(LU::ZERO), content_w, ml, spec_h, h_zero_or_auto, min_h, max_h, repl }
     }
 
     /// Final height, size and flags of block `id` once its content is laid out; list marker.
