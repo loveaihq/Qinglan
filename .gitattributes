@@ -1,0 +1,5 @@
+# Test data must stay byte-exact: no line-ending conversion.
+tests/html5lib/** -text
+tests/wpt-url/** -text
+*.rs text eol=lf
+*.md text eol=lf

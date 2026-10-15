@@ -1,0 +1,767 @@
+//! Computed style: the groups (`Rc`-shared), initial values and the computation of a group from
+//! the cascaded declarations (css-cascade-5 "defaulting", css-values-4 "computed value").
+
+use std::borrow::Cow;
+use std::rc::Rc;
+
+use super::color::{Color, ColorValue};
+use super::syntax::Cv;
+use super::types::*;
+use super::values::{LenCtx, LenUnit, Lp, fmt_num};
+use crate::html::atoms::{Atom, FxHashMap};
+
+/// Custom property values (inherited), keyed by the interned name including the `--`.
+pub type CustomProps = FxHashMap<Atom, Rc<Vec<Cv>>>;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BoxStyle {
+    pub display: Display,
+    pub position: Position,
+    pub float: Float,
+    pub clear: Clear,
+    pub box_sizing: BoxSizing,
+    pub z_index: Option<i32>,
+    pub overflow_x: Overflow,
+    pub overflow_y: Overflow,
+    /// top, right, bottom, left.
+    pub inset: [Dim; 4],
+    pub width: Dim,
+    pub height: Dim,
+    pub min_width: Dim,
+    pub min_height: Dim,
+    pub max_width: Dim,
+    pub max_height: Dim,
+    pub margin: [Dim; 4],
+    pub padding: [Lp; 4],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BorderStyle {
+    /// top, right, bottom, left; 0 where the style is none or hidden.
+    pub width: [f32; 4],
+    pub style: [BorderLineStyle; 4],
+    pub color: [ColorValue; 4],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LineHeight {
+    Normal,
+    /// A multiplier of the element's own font size.
+    Number(f32),
+    Px(f32),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontStyle {
+    pub family: Rc<Vec<FontFamily>>,
+    pub size: f32,
+    /// Set while the size comes from an absolute-size keyword (so that a change to/from monospace re-derives it).
+    pub size_keyword: Option<u8>,
+    pub weight: f32,
+    pub style: FontStyleKind,
+    pub line_height: LineHeight,
+    pub letter_spacing: f32,
+    pub word_spacing: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextStyle {
+    pub color: Color,
+    pub text_align: TextAlign,
+    pub text_indent: Lp,
+    pub text_transform: TextTransform,
+    pub white_space_collapse: WhiteSpaceCollapse,
+    pub text_wrap_mode: TextWrapMode,
+    pub word_break: WordBreak,
+    pub overflow_wrap: OverflowWrap,
+    pub direction: Direction,
+    pub visibility: Visibility,
+    pub cursor: CursorKind,
+    pub list_style_type: ListStyleType,
+    pub list_style_position: ListStylePosition,
+    /// The element's language (nearest `lang` attribute), inherited.
+    pub lang: Option<Rc<str>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MiscStyle {
+    pub vertical_align: VerticalAlign,
+    pub text_decoration_line: TextDecorationLine,
+    pub text_decoration_style: TextDecorationStyle,
+    pub text_decoration_color: ColorValue,
+    pub text_decoration_thickness: Option<Lp>,
+    pub background_color: ColorValue,
+}
+
+/// The computed style of an element.
+#[derive(Clone, Debug)]
+pub struct ComputedStyle {
+    pub boxs: Rc<BoxStyle>,
+    pub border: Rc<BorderStyle>,
+    pub font: Rc<FontStyle>,
+    pub text: Rc<TextStyle>,
+    pub misc: Rc<MiscStyle>,
+    pub custom: Rc<CustomProps>,
+}
+
+impl BoxStyle {
+    pub fn initial() -> BoxStyle {
+        BoxStyle {
+            display: Display::Inline,
+            position: Position::Static,
+            float: Float::None,
+            clear: Clear::None,
+            box_sizing: BoxSizing::ContentBox,
+            z_index: None,
+            overflow_x: Overflow::Visible,
+            overflow_y: Overflow::Visible,
+            inset: [Dim::Auto, Dim::Auto, Dim::Auto, Dim::Auto],
+            width: Dim::Auto,
+            height: Dim::Auto,
+            min_width: Dim::Auto,
+            min_height: Dim::Auto,
+            max_width: Dim::None,
+            max_height: Dim::None,
+            margin: [Dim::ZERO, Dim::ZERO, Dim::ZERO, Dim::ZERO],
+            padding: [Lp::ZERO, Lp::ZERO, Lp::ZERO, Lp::ZERO],
+        }
+    }
+}
+
+impl BorderStyle {
+    pub fn initial() -> BorderStyle {
+        BorderStyle { width: [0.0; 4], style: [BorderLineStyle::None; 4], color: [ColorValue::CurrentColor; 4] }
+    }
+}
+
+impl FontStyle {
+    pub fn initial() -> FontStyle {
+        FontStyle {
+            family: Rc::new(vec![FontFamily::Generic(GenericFamily::Serif)]),
+            size: 16.0,
+            size_keyword: Some(3),
+            weight: 400.0,
+            style: FontStyleKind::Normal,
+            line_height: LineHeight::Normal,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
+        }
+    }
+}
+
+impl TextStyle {
+    pub fn initial() -> TextStyle {
+        TextStyle {
+            color: Color::BLACK,
+            text_align: TextAlign::Start,
+            text_indent: Lp::ZERO,
+            text_transform: TextTransform::None,
+            white_space_collapse: WhiteSpaceCollapse::Collapse,
+            text_wrap_mode: TextWrapMode::Wrap,
+            word_break: WordBreak::Normal,
+            overflow_wrap: OverflowWrap::Normal,
+            direction: Direction::Ltr,
+            visibility: Visibility::Visible,
+            cursor: CursorKind::Auto,
+            list_style_type: ListStyleType::Disc,
+            list_style_position: ListStylePosition::Outside,
+            lang: None,
+        }
+    }
+}
+
+impl MiscStyle {
+    pub fn initial() -> MiscStyle {
+        MiscStyle {
+            vertical_align: VerticalAlign::Baseline,
+            text_decoration_line: TextDecorationLine::NONE,
+            text_decoration_style: TextDecorationStyle::Solid,
+            text_decoration_color: ColorValue::CurrentColor,
+            text_decoration_thickness: None,
+            background_color: ColorValue::Color(Color::TRANSPARENT),
+        }
+    }
+}
+
+impl ComputedStyle {
+    pub fn initial() -> ComputedStyle {
+        ComputedStyle {
+            boxs: Rc::new(BoxStyle::initial()),
+            border: Rc::new(BorderStyle::initial()),
+            font: Rc::new(FontStyle::initial()),
+            text: Rc::new(TextStyle::initial()),
+            misc: Rc::new(MiscStyle::initial()),
+            custom: Rc::new(CustomProps::default()),
+        }
+    }
+
+    /// The text color of the element.
+    pub fn color(&self) -> Color {
+        self.text.color
+    }
+}
+
+/// The winning declaration for each property of one element.
+pub struct Declared<'a> {
+    pub vals: Vec<Option<Cow<'a, Specified>>>,
+    pub mask: u128,
+}
+
+impl<'a> Declared<'a> {
+    pub fn new() -> Declared<'a> {
+        Declared { vals: (0..PROP_COUNT).map(|_| None).collect(), mask: 0 }
+    }
+    pub fn clear(&mut self) {
+        self.vals.fill(None);
+        self.mask = 0;
+    }
+    pub fn set(&mut self, p: PropId, s: Cow<'a, Specified>) {
+        if let Some(slot) = self.vals.get_mut(p.index()) {
+            *slot = Some(s);
+            self.mask |= p.bit();
+        }
+    }
+    pub fn get(&self, p: PropId) -> Option<&Specified> {
+        self.vals.get(p.index()).and_then(|v| v.as_deref())
+    }
+    pub fn touches(&self, bits: u128) -> bool {
+        self.mask & bits != 0
+    }
+}
+
+impl Default for Declared<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Everything that stays the same while a whole document is styled.
+#[derive(Clone, Copy, Debug)]
+pub struct Env {
+    pub viewport_w: f32,
+    pub viewport_h: f32,
+}
+
+/// Resolve "what does this property become" for one declared (or not declared) property:
+/// the CSS-wide keywords, inheritance and the `unset` rule are handled here.
+enum Pick<'a> {
+    Inherit,
+    Initial,
+    Value(&'a Value),
+}
+
+fn pick<'a>(d: &'a Declared<'_>, p: PropId) -> Pick<'a> {
+    match d.get(p) {
+        None => {
+            if p.inherited() { Pick::Inherit } else { Pick::Initial }
+        }
+        Some(Specified::Inherit) => Pick::Inherit,
+        Some(Specified::Initial) => Pick::Initial,
+        Some(Specified::Unset | Specified::Revert | Specified::RevertLayer | Specified::Var(_)) => {
+            if p.inherited() { Pick::Inherit } else { Pick::Initial }
+        }
+        Some(Specified::Value(v)) => Pick::Value(v),
+    }
+}
+
+/// Absolute-size keyword table: standard and monospace-only font families.
+fn keyword_size(idx: u8, mono: bool) -> f32 {
+    const STD: [f32; 8] = [9.0, 10.0, 13.0, 16.0, 18.0, 24.0, 32.0, 48.0];
+    const MONO: [f32; 8] = [9.0, 10.0, 12.0, 13.0, 16.0, 20.0, 26.0, 40.0];
+    let t = if mono { &MONO } else { &STD };
+    t.get(idx as usize).copied().unwrap_or(16.0)
+}
+
+fn is_mono_only(family: &[FontFamily]) -> bool {
+    matches!(family, [FontFamily::Generic(GenericFamily::Monospace)])
+}
+
+pub fn compute_font(parent: &Rc<FontStyle>, d: &Declared<'_>, env: &Env, root_font_size: f32) -> Rc<FontStyle> {
+    if !d.touches(FONT_BITS) {
+        return parent.clone();
+    }
+    let mut f = (**parent).clone();
+    let initial = FontStyle::initial();
+    // font-family first: it decides the keyword size table.
+    match pick(d, PropId::FontFamily) {
+        Pick::Inherit => {}
+        Pick::Initial => f.family = initial.family.clone(),
+        Pick::Value(Value::FontFamily(l)) => f.family = l.clone(),
+        Pick::Value(_) => {}
+    }
+    let mono = is_mono_only(&f.family);
+    let parent_ctx = LenCtx { font_size: parent.size, root_font_size, viewport_w: env.viewport_w, viewport_h: env.viewport_h };
+    match pick(d, PropId::FontSize) {
+        Pick::Inherit => {
+            if let Some(k) = parent.size_keyword {
+                f.size_keyword = Some(k);
+                f.size = keyword_size(k, mono);
+            }
+        }
+        Pick::Initial => {
+            f.size_keyword = Some(3);
+            f.size = keyword_size(3, mono);
+        }
+        Pick::Value(Value::FontSize(spec)) => match spec {
+            FontSizeSpec::Absolute(k) => {
+                f.size_keyword = Some(*k);
+                f.size = keyword_size(*k, mono);
+            }
+            FontSizeSpec::Larger => {
+                f.size_keyword = None;
+                f.size = parent.size * 1.2;
+            }
+            FontSizeSpec::Smaller => {
+                f.size_keyword = None;
+                f.size = parent.size / 1.2;
+            }
+            FontSizeSpec::Lp(l) => {
+                f.size_keyword = None;
+                f.size = match l.compute(&parent_ctx) {
+                    Lp::Len(v, _) => v,
+                    Lp::Pct(p) => parent.size * p / 100.0,
+                    Lp::Calc(c) => c.eval(parent.size),
+                };
+            }
+        },
+        Pick::Value(_) => {}
+    }
+    f.size = f.size.clamp(0.0, 10_000.0);
+    let own = LenCtx { font_size: f.size, ..parent_ctx };
+    match pick(d, PropId::FontWeight) {
+        Pick::Inherit => {}
+        Pick::Initial => f.weight = 400.0,
+        Pick::Value(Value::FontWeight(w)) => {
+            f.weight = match w {
+                FontWeightSpec::Number(n) => *n,
+                FontWeightSpec::Bolder => bolder(parent.weight),
+                FontWeightSpec::Lighter => lighter(parent.weight),
+            }
+        }
+        Pick::Value(_) => {}
+    }
+    match pick(d, PropId::FontStyle) {
+        Pick::Inherit => {}
+        Pick::Initial => f.style = FontStyleKind::Normal,
+        Pick::Value(Value::FontStyle(s)) => f.style = *s,
+        Pick::Value(_) => {}
+    }
+    match pick(d, PropId::LineHeight) {
+        Pick::Inherit => {
+            // A percentage / length line-height is inherited as the computed absolute length.
+        }
+        Pick::Initial => f.line_height = LineHeight::Normal,
+        Pick::Value(Value::LineHeight(l)) => {
+            f.line_height = match l {
+                LineHeightSpec::Normal => LineHeight::Normal,
+                LineHeightSpec::Number(n) => LineHeight::Number(*n),
+                LineHeightSpec::Lp(lp) => match lp.compute(&own) {
+                    Lp::Len(v, _) => LineHeight::Px(v),
+                    Lp::Pct(p) => LineHeight::Px(f.size * p / 100.0),
+                    Lp::Calc(c) => LineHeight::Px(c.eval(f.size)),
+                },
+            }
+        }
+        Pick::Value(_) => {}
+    }
+    for (p, slot) in [(PropId::LetterSpacing, 0usize), (PropId::WordSpacing, 1)] {
+        let cur = match pick(d, p) {
+            Pick::Inherit => None,
+            Pick::Initial => Some(0.0),
+            Pick::Value(Value::Spacing(None)) => Some(0.0),
+            Pick::Value(Value::Spacing(Some(l))) => Some(match l.compute(&own) {
+                Lp::Len(v, _) => v,
+                _ => 0.0,
+            }),
+            Pick::Value(_) => None,
+        };
+        if let Some(v) = cur {
+            if slot == 0 {
+                f.letter_spacing = v;
+            } else {
+                f.word_spacing = v;
+            }
+        }
+    }
+    Rc::new(f)
+}
+
+fn bolder(w: f32) -> f32 {
+    if w < 350.0 {
+        400.0
+    } else if w < 550.0 {
+        700.0
+    } else {
+        900.0
+    }
+}
+
+fn lighter(w: f32) -> f32 {
+    if w < 550.0 {
+        100.0
+    } else if w < 750.0 {
+        400.0
+    } else {
+        700.0
+    }
+}
+
+pub fn compute_text(parent: &Rc<TextStyle>, d: &Declared<'_>, ctx: &LenCtx, lang: Option<&str>) -> Rc<TextStyle> {
+    let lang_changed = lang.is_some_and(|l| parent.lang.as_deref() != Some(l));
+    if !d.touches(TEXT_BITS) && !lang_changed {
+        return parent.clone();
+    }
+    let mut t = (**parent).clone();
+    let init = TextStyle::initial();
+    macro_rules! simple {
+        ($prop:expr, $variant:ident, $field:ident) => {
+            match pick(d, $prop) {
+                Pick::Inherit => {}
+                Pick::Initial => t.$field = init.$field.clone(),
+                Pick::Value(Value::$variant(v)) => t.$field = v.clone(),
+                Pick::Value(_) => {}
+            }
+        };
+    }
+    match pick(d, PropId::Color) {
+        Pick::Inherit => {}
+        Pick::Initial => t.color = init.color,
+        Pick::Value(Value::Color(ColorValue::Color(c))) => t.color = *c,
+        // `currentcolor` for `color` means `inherit`.
+        Pick::Value(Value::Color(ColorValue::CurrentColor)) => {}
+        Pick::Value(_) => {}
+    }
+    simple!(PropId::TextAlign, TextAlign, text_align);
+    match pick(d, PropId::TextIndent) {
+        Pick::Inherit => {}
+        Pick::Initial => t.text_indent = Lp::ZERO,
+        Pick::Value(Value::TextIndent(l)) => t.text_indent = l.compute(ctx),
+        Pick::Value(_) => {}
+    }
+    simple!(PropId::TextTransform, TextTransform, text_transform);
+    simple!(PropId::WhiteSpaceCollapse, WhiteSpaceCollapse, white_space_collapse);
+    simple!(PropId::TextWrapMode, TextWrapMode, text_wrap_mode);
+    simple!(PropId::WordBreak, WordBreak, word_break);
+    simple!(PropId::OverflowWrap, OverflowWrap, overflow_wrap);
+    simple!(PropId::Direction, Direction, direction);
+    simple!(PropId::Visibility, Visibility, visibility);
+    simple!(PropId::Cursor, Cursor, cursor);
+    simple!(PropId::ListStyleType, ListStyleType, list_style_type);
+    simple!(PropId::ListStylePosition, ListStylePosition, list_style_position);
+    if let Some(l) = lang {
+        t.lang = Some(Rc::from(l));
+    }
+    Rc::new(t)
+}
+
+fn blockify(d: Display) -> Display {
+    match d {
+        Display::Inline | Display::InlineBlock | Display::Ruby | Display::RubyText => Display::Block,
+        Display::InlineTable => Display::Table,
+        Display::InlineFlex => Display::Flex,
+        Display::InlineGrid => Display::Grid,
+        Display::TableRowGroup
+        | Display::TableHeaderGroup
+        | Display::TableFooterGroup
+        | Display::TableRow
+        | Display::TableColumnGroup
+        | Display::TableColumn
+        | Display::TableCell
+        | Display::TableCaption => Display::Block,
+        other => other,
+    }
+}
+
+pub fn compute_box(parent: &Rc<BoxStyle>, init_rc: &Rc<BoxStyle>, d: &Declared<'_>, ctx: &LenCtx, is_root: bool) -> Rc<BoxStyle> {
+    if !d.touches(BOX_BITS) && !is_root {
+        return init_rc.clone();
+    }
+    let init = BoxStyle::initial();
+    let mut b = init.clone();
+    macro_rules! simple {
+        ($prop:expr, $variant:ident, $field:ident) => {
+            match pick(d, $prop) {
+                Pick::Inherit => b.$field = parent.$field.clone(),
+                Pick::Initial => {}
+                Pick::Value(Value::$variant(v)) => b.$field = v.clone(),
+                Pick::Value(_) => {}
+            }
+        };
+    }
+    simple!(PropId::Display, Display, display);
+    simple!(PropId::Position, Position, position);
+    simple!(PropId::Float, Float, float);
+    simple!(PropId::Clear, Clear, clear);
+    simple!(PropId::BoxSizing, BoxSizing, box_sizing);
+    simple!(PropId::ZIndex, ZIndex, z_index);
+    simple!(PropId::OverflowX, Overflow, overflow_x);
+    simple!(PropId::OverflowY, Overflow, overflow_y);
+    type DimAccess = (PropId, fn(&mut BoxStyle) -> &mut Dim, fn(&BoxStyle) -> &Dim);
+    let dims: [DimAccess; 14] = [
+        (PropId::Top, |b| &mut b.inset[0], |b| &b.inset[0]),
+        (PropId::Right, |b| &mut b.inset[1], |b| &b.inset[1]),
+        (PropId::Bottom, |b| &mut b.inset[2], |b| &b.inset[2]),
+        (PropId::Left, |b| &mut b.inset[3], |b| &b.inset[3]),
+        (PropId::Width, |b| &mut b.width, |b| &b.width),
+        (PropId::Height, |b| &mut b.height, |b| &b.height),
+        (PropId::MinWidth, |b| &mut b.min_width, |b| &b.min_width),
+        (PropId::MinHeight, |b| &mut b.min_height, |b| &b.min_height),
+        (PropId::MaxWidth, |b| &mut b.max_width, |b| &b.max_width),
+        (PropId::MaxHeight, |b| &mut b.max_height, |b| &b.max_height),
+        (PropId::MarginTop, |b| &mut b.margin[0], |b| &b.margin[0]),
+        (PropId::MarginRight, |b| &mut b.margin[1], |b| &b.margin[1]),
+        (PropId::MarginBottom, |b| &mut b.margin[2], |b| &b.margin[2]),
+        (PropId::MarginLeft, |b| &mut b.margin[3], |b| &b.margin[3]),
+    ];
+    for (p, set, get) in dims {
+        match pick(d, p) {
+            Pick::Inherit => *set(&mut b) = get(parent).clone(),
+            Pick::Initial => {}
+            Pick::Value(Value::Dim(v)) => *set(&mut b) = v.compute(ctx),
+            Pick::Value(_) => {}
+        }
+    }
+    let pads = [PropId::PaddingTop, PropId::PaddingRight, PropId::PaddingBottom, PropId::PaddingLeft];
+    for (i, p) in pads.into_iter().enumerate() {
+        match pick(d, p) {
+            Pick::Inherit => {
+                if let (Some(dst), Some(src)) = (b.padding.get_mut(i), parent.padding.get(i)) {
+                    *dst = src.clone();
+                }
+            }
+            Pick::Initial => {}
+            Pick::Value(Value::Dim(Dim::Lp(l))) => {
+                if let Some(dst) = b.padding.get_mut(i) {
+                    *dst = l.compute(ctx);
+                }
+            }
+            Pick::Value(_) => {}
+        }
+    }
+    // sticky is treated as relative (L1 task sheet).
+    if b.position == Position::Sticky {
+        b.position = Position::Relative;
+    }
+    // CSS2 9.7: absolute positioning and floats blockify the display and cancel the float.
+    if matches!(b.position, Position::Absolute | Position::Fixed) {
+        b.float = Float::None;
+        b.display = blockify(b.display);
+    } else if b.float != Float::None || is_root {
+        b.display = blockify(b.display);
+    }
+    // overflow: if one axis is neither visible nor clip, visible becomes auto and clip becomes hidden.
+    let (ox, oy) = (b.overflow_x, b.overflow_y);
+    let scrollish = |o: Overflow| !matches!(o, Overflow::Visible | Overflow::Clip);
+    if scrollish(ox) || scrollish(oy) {
+        let fix = |o: Overflow| match o {
+            Overflow::Visible => Overflow::Auto,
+            Overflow::Clip => Overflow::Hidden,
+            other => other,
+        };
+        b.overflow_x = fix(ox);
+        b.overflow_y = fix(oy);
+    }
+    Rc::new(b)
+}
+
+pub fn compute_border(parent: &Rc<BorderStyle>, init_rc: &Rc<BorderStyle>, d: &Declared<'_>, ctx: &LenCtx) -> Rc<BorderStyle> {
+    if !d.touches(BORDER_BITS) {
+        return init_rc.clone();
+    }
+    let mut b = BorderStyle::initial();
+    let widths = [PropId::BorderTopWidth, PropId::BorderRightWidth, PropId::BorderBottomWidth, PropId::BorderLeftWidth];
+    let styles = [PropId::BorderTopStyle, PropId::BorderRightStyle, PropId::BorderBottomStyle, PropId::BorderLeftStyle];
+    let colors = [PropId::BorderTopColor, PropId::BorderRightColor, PropId::BorderBottomColor, PropId::BorderLeftColor];
+    for i in 0..4 {
+        let (Some(&wp), Some(&sp), Some(&cp)) = (widths.get(i), styles.get(i), colors.get(i)) else { continue };
+        let style = match pick(d, sp) {
+            Pick::Inherit => parent.style.get(i).copied().unwrap_or(BorderLineStyle::None),
+            Pick::Initial => BorderLineStyle::None,
+            Pick::Value(Value::BorderStyle(s)) => *s,
+            Pick::Value(_) => BorderLineStyle::None,
+        };
+        // The computed width is 0 when the style is none or hidden; 3px (medium) otherwise by default.
+        let width = if matches!(style, BorderLineStyle::None | BorderLineStyle::Hidden) {
+            0.0
+        } else {
+            match pick(d, wp) {
+                Pick::Inherit => parent.width.get(i).copied().unwrap_or(3.0),
+                Pick::Initial => 3.0,
+                Pick::Value(Value::BorderWidth(BorderWidthSpec::Kw(k))) => match k {
+                    BorderWidthKw::Thin => 1.0,
+                    BorderWidthKw::Medium => 3.0,
+                    BorderWidthKw::Thick => 5.0,
+                },
+                Pick::Value(Value::BorderWidth(BorderWidthSpec::Lp(l))) => match l.compute(ctx) {
+                    Lp::Len(v, _) => v.max(0.0),
+                    _ => 0.0,
+                },
+                Pick::Value(_) => 3.0,
+            }
+        };
+        let color = match pick(d, cp) {
+            Pick::Inherit => parent.color.get(i).copied().unwrap_or(ColorValue::CurrentColor),
+            Pick::Initial => ColorValue::CurrentColor,
+            Pick::Value(Value::Color(c)) => *c,
+            Pick::Value(_) => ColorValue::CurrentColor,
+        };
+        if let (Some(w), Some(s), Some(c)) = (b.width.get_mut(i), b.style.get_mut(i), b.color.get_mut(i)) {
+            *w = width;
+            *s = style;
+            *c = color;
+        }
+    }
+    Rc::new(b)
+}
+
+pub fn compute_misc(parent: &Rc<MiscStyle>, init_rc: &Rc<MiscStyle>, d: &Declared<'_>, ctx: &LenCtx) -> Rc<MiscStyle> {
+    if !d.touches(MISC_BITS) {
+        return init_rc.clone();
+    }
+    let mut m = MiscStyle::initial();
+    match pick(d, PropId::VerticalAlign) {
+        Pick::Inherit => m.vertical_align = parent.vertical_align.clone(),
+        Pick::Initial => {}
+        Pick::Value(Value::VerticalAlign(v)) => {
+            m.vertical_align = match v {
+                VerticalAlign::Lp(l) => VerticalAlign::Lp(l.compute(ctx)),
+                other => other.clone(),
+            }
+        }
+        Pick::Value(_) => {}
+    }
+    match pick(d, PropId::TextDecorationLine) {
+        Pick::Inherit => m.text_decoration_line = parent.text_decoration_line,
+        Pick::Initial => {}
+        Pick::Value(Value::TextDecorationLine(v)) => m.text_decoration_line = *v,
+        Pick::Value(_) => {}
+    }
+    match pick(d, PropId::TextDecorationStyle) {
+        Pick::Inherit => m.text_decoration_style = parent.text_decoration_style,
+        Pick::Initial => {}
+        Pick::Value(Value::TextDecorationStyle(v)) => m.text_decoration_style = *v,
+        Pick::Value(_) => {}
+    }
+    match pick(d, PropId::TextDecorationColor) {
+        Pick::Inherit => m.text_decoration_color = parent.text_decoration_color,
+        Pick::Initial => {}
+        Pick::Value(Value::Color(v)) => m.text_decoration_color = *v,
+        Pick::Value(_) => {}
+    }
+    match pick(d, PropId::TextDecorationThickness) {
+        Pick::Inherit => m.text_decoration_thickness = parent.text_decoration_thickness.clone(),
+        Pick::Initial => {}
+        Pick::Value(Value::TextDecorationThickness(v)) => m.text_decoration_thickness = v.as_ref().map(|l| l.compute(ctx)),
+        Pick::Value(_) => {}
+    }
+    match pick(d, PropId::BackgroundColor) {
+        Pick::Inherit => m.background_color = parent.background_color,
+        Pick::Initial => {}
+        Pick::Value(Value::Color(v)) => m.background_color = *v,
+        Pick::Value(_) => {}
+    }
+    Rc::new(m)
+}
+
+// -----------------------------------------------------------------------------------------------
+// Serialization (for `qinglan-cli style` and tests)
+
+fn px(v: f32) -> String {
+    format!("{}px", fmt_num(v))
+}
+
+fn colors(c: ColorValue) -> String {
+    c.to_css()
+}
+
+impl ComputedStyle {
+    /// All properties as (name, serialized computed value), in the order of [`PropId`].
+    pub fn properties(&self) -> Vec<(&'static str, String)> {
+        let b = &self.boxs;
+        let br = &self.border;
+        let f = &self.font;
+        let t = &self.text;
+        let m = &self.misc;
+        let mut v: Vec<(&'static str, String)> = Vec::new();
+        let mut add = |n: PropId, s: String| v.push((n.name(), s));
+        add(PropId::Display, b.display.keyword().into());
+        add(PropId::Position, b.position.keyword().into());
+        add(PropId::Float, b.float.keyword().into());
+        add(PropId::Clear, b.clear.keyword().into());
+        add(PropId::BoxSizing, b.box_sizing.keyword().into());
+        add(PropId::ZIndex, b.z_index.map_or("auto".into(), |z| z.to_string()));
+        add(PropId::OverflowX, b.overflow_x.keyword().into());
+        add(PropId::OverflowY, b.overflow_y.keyword().into());
+        for (i, p) in [PropId::Top, PropId::Right, PropId::Bottom, PropId::Left].into_iter().enumerate() {
+            add(p, b.inset.get(i).map_or(String::new(), Dim::to_css));
+        }
+        add(PropId::Width, b.width.to_css());
+        add(PropId::Height, b.height.to_css());
+        add(PropId::MinWidth, b.min_width.to_css());
+        add(PropId::MinHeight, b.min_height.to_css());
+        add(PropId::MaxWidth, b.max_width.to_css());
+        add(PropId::MaxHeight, b.max_height.to_css());
+        for (i, p) in [PropId::MarginTop, PropId::MarginRight, PropId::MarginBottom, PropId::MarginLeft].into_iter().enumerate() {
+            add(p, b.margin.get(i).map_or(String::new(), Dim::to_css));
+        }
+        for (i, p) in [PropId::PaddingTop, PropId::PaddingRight, PropId::PaddingBottom, PropId::PaddingLeft].into_iter().enumerate() {
+            add(p, b.padding.get(i).map_or(String::new(), Lp::to_css));
+        }
+        for (i, p) in [PropId::BorderTopWidth, PropId::BorderRightWidth, PropId::BorderBottomWidth, PropId::BorderLeftWidth]
+            .into_iter()
+            .enumerate()
+        {
+            add(p, px(br.width.get(i).copied().unwrap_or(0.0)));
+        }
+        for (i, p) in [PropId::BorderTopStyle, PropId::BorderRightStyle, PropId::BorderBottomStyle, PropId::BorderLeftStyle]
+            .into_iter()
+            .enumerate()
+        {
+            add(p, br.style.get(i).map_or(String::new(), |s| s.keyword().into()));
+        }
+        for (i, p) in [PropId::BorderTopColor, PropId::BorderRightColor, PropId::BorderBottomColor, PropId::BorderLeftColor]
+            .into_iter()
+            .enumerate()
+        {
+            add(p, br.color.get(i).map_or(String::new(), |c| colors(*c)));
+        }
+        add(PropId::FontFamily, f.family.iter().map(FontFamily::to_css).collect::<Vec<_>>().join(", "));
+        add(PropId::FontSize, px(f.size));
+        add(PropId::FontWeight, fmt_num(f.weight));
+        add(PropId::FontStyle, f.style.keyword().into());
+        add(
+            PropId::LineHeight,
+            match f.line_height {
+                LineHeight::Normal => "normal".into(),
+                LineHeight::Number(n) => fmt_num(n),
+                LineHeight::Px(p) => px(p),
+            },
+        );
+        add(PropId::LetterSpacing, px(f.letter_spacing));
+        add(PropId::WordSpacing, px(f.word_spacing));
+        add(PropId::Color, t.color.to_css());
+        add(PropId::TextAlign, t.text_align.keyword().into());
+        add(PropId::TextIndent, t.text_indent.to_css());
+        add(PropId::TextTransform, t.text_transform.keyword().into());
+        add(PropId::WhiteSpaceCollapse, t.white_space_collapse.keyword().into());
+        add(PropId::TextWrapMode, t.text_wrap_mode.keyword().into());
+        add(PropId::WordBreak, t.word_break.keyword().into());
+        add(PropId::OverflowWrap, t.overflow_wrap.keyword().into());
+        add(PropId::Direction, t.direction.keyword().into());
+        add(PropId::Visibility, t.visibility.keyword().into());
+        add(PropId::Cursor, t.cursor.keyword().into());
+        add(PropId::ListStyleType, t.list_style_type.to_css());
+        add(PropId::ListStylePosition, t.list_style_position.keyword().into());
+        add(PropId::VerticalAlign, m.vertical_align.to_css());
+        add(PropId::TextDecorationLine, m.text_decoration_line.to_css());
+        add(PropId::TextDecorationStyle, m.text_decoration_style.keyword().into());
+        add(PropId::TextDecorationColor, colors(m.text_decoration_color));
+        add(PropId::TextDecorationThickness, m.text_decoration_thickness.as_ref().map_or("auto".into(), Lp::to_css));
+        add(PropId::BackgroundColor, colors(m.background_color));
+        v.push(("lang", t.lang.as_deref().unwrap_or("").to_string()));
+        v
+    }
+}
+
+#[allow(dead_code)]
+fn _keep(_: LenUnit) {}
