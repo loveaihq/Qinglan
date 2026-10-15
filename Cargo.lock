@@ -15,6 +15,7 @@ name = "qinglan-cli"
 version = "0.1.0"
 dependencies = [
  "qinglan-engine",
+ "qinglan-win",
 ]
 
 [[package]]
@@ -24,3 +25,6 @@ version = "0.1.0"
 [[package]]
 name = "qinglan-win"
 version = "0.1.0"
+dependencies = [
+ "qinglan-engine",
+]

@@ -6,25 +6,31 @@
 //!                                                    print the computed style of every element
 //!
 //! Step 1b commands:
-//!   qinglan-cli layout <file> [--width W] [--height H] [--test-font]
+//!   qinglan-cli layout <file> [--width W] [--height H] [--test-font] [--time]
 //!                                                    print the box tree: position and size of every
 //!                                                    block, the line boxes and the text fragments
+//!
+//! `style` and `layout` use the Windows platform (DirectWrite fonts, legacy encodings) unless
+//! `--test-font` asks for the test platform (every glyph a 1em square, no legacy encodings).
 #![forbid(unsafe_code)]
 
 use std::process::ExitCode;
 use std::time::Instant;
 
-use qinglan_engine::css::{ResourceLoader, StyleOptions, dump::dump_styles, style_document, style_document_with};
+use qinglan_engine::css::{ResourceLoader, StyleOptions, dump::dump_styles, style_document_with};
 use qinglan_engine::encoding::{Encoding, decode_document, decode_stylesheet};
 use qinglan_engine::html::dump::dump_children;
 use qinglan_engine::html::treebuilder::parse_document;
 use qinglan_engine::layout::{LayoutOptions, dump::dump_layout, layout_document};
+use qinglan_engine::layout::FragKind;
 use qinglan_engine::platform::{BasicPlatform, Platform, TestPlatform};
 use qinglan_engine::url::{Url, percent_decode};
+use qinglan_win::WinPlatform;
 
 /// Reads `file:` style sheets from disk, decoding them like the browser will.
-struct FileLoader {
+struct FileLoader<'a> {
     page_encoding: Encoding,
+    platform: &'a dyn Platform,
 }
 
 fn url_to_path(url: &Url) -> Option<std::path::PathBuf> {
@@ -41,11 +47,11 @@ fn url_to_path(url: &Url) -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(p))
 }
 
-impl ResourceLoader for FileLoader {
+impl ResourceLoader for FileLoader<'_> {
     fn load_stylesheet(&mut self, url: &Url) -> Option<String> {
         let path = url_to_path(url)?;
         let bytes = std::fs::read(path).ok()?;
-        Some(decode_stylesheet(&bytes, None, self.page_encoding, &BasicPlatform))
+        Some(decode_stylesheet(&bytes, None, self.page_encoding, self.platform))
     }
 }
 
@@ -54,6 +60,29 @@ fn file_url(path: &str) -> Option<Url> {
     let s = abs.to_string_lossy().replace('\\', "/");
     let s = s.strip_prefix("//?/").unwrap_or(&s);
     Url::parse(&format!("file:///{s}"), None).ok()
+}
+
+/// Glyphs drawn as the font's missing-glyph box (index 0) in the text fragments, and the first few
+/// distinct characters they stand for.
+fn count_notdef(res: &qinglan_engine::layout::LayoutResult) -> (usize, String) {
+    let mut count = 0usize;
+    let mut chars: Vec<char> = Vec::new();
+    for f in &res.fragments {
+        let (text, glyphs) = match f.kind {
+            FragKind::Text { text, glyphs, .. } | FragKind::Marker { text, glyphs, .. } => (text, glyphs),
+            _ => continue,
+        };
+        let Some(gs) = res.glyphs.get(glyphs.0 as usize..glyphs.1 as usize) else { continue };
+        for g in gs.iter().filter(|g| g.glyph == 0) {
+            count += 1;
+            let c = res.texts.get(text as usize).and_then(|t| t.get(g.cluster_start as usize..g.cluster_end as usize)).and_then(|s| s.chars().next());
+            if let Some(c) = c
+                && chars.len() < 8 && !chars.contains(&c) {
+                    chars.push(c);
+                }
+        }
+    }
+    (count, chars.iter().map(|c| format!("U+{:04X}", *c as u32)).collect::<Vec<_>>().join(" "))
 }
 
 fn usage() -> ExitCode {
@@ -101,8 +130,24 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let win;
+    let platform: &dyn Platform = if test_font {
+        &TestPlatform
+    } else {
+        match WinPlatform::new() {
+            Some(p) => {
+                win = p;
+                &win
+            }
+            None if cmd == "dom" => &BasicPlatform,
+            None => {
+                eprintln!("error: DirectWrite is not available; use --test-font");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
     let t0 = Instant::now();
-    let decoded = decode_document(&bytes, None, &BasicPlatform);
+    let decoded = decode_document(&bytes, None, platform);
     if let Some(w) = &decoded.warning {
         eprintln!("warning: {w}");
     }
@@ -119,8 +164,9 @@ fn main() -> ExitCode {
         }
         "style" => {
             let url = file_url(file);
-            let mut loader = FileLoader { page_encoding: encoding };
-            let out = style_document(&mut doc, url.as_ref(), &mut loader, &StyleOptions { viewport_w: width, viewport_h: height, ..StyleOptions::default() });
+            let mut loader = FileLoader { page_encoding: encoding, platform };
+            let sopts = StyleOptions { viewport_w: width, viewport_h: height, ..StyleOptions::default() };
+            let out = style_document_with(&mut doc, url.as_ref(), &mut loader, &sopts, Some(platform));
             let t_style = t0.elapsed();
             print!("{}", dump_styles(&doc, &out.tree));
             if doc.too_large {
@@ -143,17 +189,12 @@ fn main() -> ExitCode {
             }
         }
         "layout" => {
-            if !test_font {
-                eprintln!("error: layout needs a font platform. Only --test-font (1em square glyphs) works until the Windows platform lands.");
-                return ExitCode::FAILURE;
-            }
-            let platform = TestPlatform;
             let url = file_url(file);
-            let mut loader = FileLoader { page_encoding: encoding };
+            let mut loader = FileLoader { page_encoding: encoding, platform };
             let sopts = StyleOptions { viewport_w: width, viewport_h: height, ..StyleOptions::default() };
-            let out = style_document_with(&mut doc, url.as_ref(), &mut loader, &sopts, Some(&platform as &dyn Platform));
+            let out = style_document_with(&mut doc, url.as_ref(), &mut loader, &sopts, Some(platform));
             let t_style = t0.elapsed();
-            let res = layout_document(&doc, &out.tree, &platform, &LayoutOptions { viewport_w: width, viewport_h: height, ..LayoutOptions::default() });
+            let res = layout_document(&doc, &out.tree, platform, &LayoutOptions { viewport_w: width, viewport_h: height, ..LayoutOptions::default() });
             let t_layout = t0.elapsed();
             print!("{}", dump_layout(&doc, &res));
             if doc.too_large {
@@ -163,7 +204,9 @@ fn main() -> ExitCode {
                 eprintln!("warning: style sheet not found: {m}");
             }
             if timing {
+                let (count, samples) = count_notdef(&res);
                 eprintln!("style {:.1} ms, layout {:.1} ms", (t_style - t_parse).as_secs_f64() * 1000.0, (t_layout - t_style).as_secs_f64() * 1000.0);
+                eprintln!(".notdef glyphs after fallback: {count}{}", if count > 0 { format!(" (first characters: {samples})") } else { String::new() });
             }
         }
         _ => return usage(),

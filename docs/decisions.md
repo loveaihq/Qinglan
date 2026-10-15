@@ -198,7 +198,7 @@
 
 ### `qinglan-cli layout` 和转储格式
 
-- `qinglan-cli layout <文件> [--width 1280] [--height 1000] [--test-font] [--time]`。不带 `--test-font` 报错退出（"Windows 平台到位前只有 --test-font 能用"）。
+- `qinglan-cli layout <文件> [--width 1280] [--height 1000] [--test-font] [--time]`。1b-3 起默认用 Windows 平台，`--test-font` 用测试平台。
 - 转储格式（`layout/dump.rs` 开头有例子）：第一行 `viewport WxH`；之后每个块一行 `block <标签#id.类 | (anonymous)> (x,y WxH)`，坐标是页面坐标下的边框盒，单位 CSS px，去掉多余的 0，最小单位 1/64 = 0.015625；退路块后面加 `[display:flex]` 之类，`overflow: hidden/clip` 加 `[clip]`。块里有行内内容时，下面缩进列出 `line (x,y WxH) baseline=Y`（Y 是基线的页面 y）和它的 `text "…" (x,y WxH)` 片段，强制换行是 `br`（`<br>` 元素）或 `newline`（保留的换行符）。
 - 快照：`tests/pages/*.html` 配 `*.layout.txt`。每个网页开头的 HTML 注释里写着按规范**手算**的关键数字，其中 `check: <行首文字> :: <期望片段>` 的行由测试程序逐条对照转储（手算数字不是从引擎抄来的，所以快照不会只是记录引擎当时的输出）；`viewport: WxH` 设视口。重新生成期望文件：`UPDATE_SNAPSHOTS=1 cargo test -p qinglan-engine --test layout_snapshots`，生成前先确认手算数字没有失败。
 
@@ -277,7 +277,61 @@
 - `<picture>`/`<source>`、`loading="lazy"`；行内元素的 `box-decoration-break`（一直按 `slice`）；`text-justify`、`text-align-last`、连字符；`vertical-align` 对表格单元格；`::marker`/`::before`/`::after`；`position: sticky` 的真实行为；行内元素做绝对定位含块；`float`（第 2 层）；`overflow: auto/scroll` 的滚动区域。
 - 开放的问题：Windows 平台的 `x_height`、下划线位置等度量要在 1b-3 核对；`sub`/`super` 用了 Blink 的公式，Firefox 用字体表里的值，两者不同；`select` 的宽度按显示的那一项算，Chrome 按最宽的一项。
 
-### 来源
+## 第 1 层 · 1b-3 Windows 平台（DirectWrite）和老编码
+
+代码在 `crates/qinglan-win/`：`sys/mod.rs`（kernel32：`MultiByteToWideChar` 等）、`sys/dwrite.rs`（DirectWrite 的 COM 声明和安全封装）、`platform.rs`（`WinPlatform`，实现引擎的 `Platform`）、`encodings.rs`（编码名 → 代码页）、`lru.rs`（按字节计数的 LRU）、`fx.rs`（小哈希）。测试在 `crates/qinglan-win/tests/win.rs`（平台）和 `tests/corpus.rs`（真实页面）。
+
+### COM 声明
+
+- 全部手写，没有 `windows` / `windows-sys`。`unsafe` 只在 `sys/`：`sys/dwrite.rs` 和 `sys/mod.rs` 里的 `unsafe {}` 块（数量见报告），另有 1 个 `unsafe fn`（`ComPtr::from_raw`）、一组 COM 回调（`unsafe extern "system" fn`）和 3 个 `unsafe extern` 块；每个块都有 `// SAFETY:`。引擎 `forbid(unsafe_code)` 不变，`qinglan-win` 其余文件 `deny(unsafe_code)`；`qinglan-win` 也加了和引擎一样的 clippy 规则（禁 `unwrap`/`expect`/`panic`/下标越界）。
+- 虚表只声明到用得到的方法，前面的槽位用 `_padN` 补。槽号按 Windows SDK 10.0.26100.0 的 `dwrite.h`、`dwrite_1.h`、`dwrite_2.h` 里方法的出现顺序逐个数过（`IUnknown` 占 0–2），写在 `sys/dwrite.rs` 开头：`IDWriteFactory` 3 GetSystemFontCollection、21 CreateTextAnalyzer、23 CreateGlyphRunAnalysis；`IDWriteFactory2` 26 GetSystemFontFallback（Factory1 占 24、25）；`IDWriteFontCollection` 4/5；`IDWriteFontFamily` 6/7（继承的 FontList 占 3–5）；`IDWriteFont` 3/10/13；`IDWriteFontFace` 8/10/11；`IDWriteTextAnalyzer` 3/6/7/8；`IDWriteGlyphRunAnalysis` 3/4；`IDWriteFontFallback` 3。接口号（IID）从同一份头文件抄。**核对办法**：用脚本从头文件里按顺序抽方法名再对照（脚本没提交）；运行时的核对就是测试——槽位错了会直接崩或返回垃圾，全部测试通过。
+- 自己实现的 COM 对象只有 `IDWriteTextAnalysisSource` 和 `IDWriteTextAnalysisSink`：放在调用方的栈上，只在一次同步调用里使用，所以 `AddRef`/`Release` 什么都不做；`QueryInterface` 只认 `IUnknown` 和自己（DirectWrite 可能会问 `…Source1`，答不认识，它退回基础接口）。
+- `DWriteCreateFactory` 直接要 `IDWriteFactory2`，所以系统要 Windows 8.1 以上；拿不到就 `WinPlatform::new()` 返回 `None`，CLI 报错退出（`--test-font` 仍可用）。
+
+### 字体选择
+
+- 通用字体族：`serif`/`ui-serif` → Times New Roman，`sans-serif`/`system-ui`/`ui-sans-serif`/`ui-rounded` → Segoe UI，`monospace`/`ui-monospace` → Consolas（任务单）；其余自定：`cursive` → Comic Sans MS（再试 Segoe Script），`fantasy` → Impact，`emoji` → Segoe UI Emoji，`math` → Cambria Math，`fangsong` → FangSong（再试 SimSun）。
+- `font-family` 列表里系统有的字体按顺序组成"字体链"；一个都没有时用默认字体（Segoe UI，没有就 Arial、Tahoma、微软雅黑、宋体、集合里第一个）。
+- 中文字体名：先用 `FindFamilyName`。本机实测 `微软雅黑`、`宋体` 直接找得到（和 `Microsoft YaHei` / `SimSun` 是同一个 `FontId`）。`FindFamilyName` 找不到时再试一张很小的对照表（微软雅黑 → Microsoft YaHei、宋体 → SimSun、黑体、楷体、仿宋、隶书、幼圆、微软正黑体、细明体、新细明体、标楷体，以及 メイリオ、ＭＳ ゴシック、맑은 고딕），因为 `FindFamilyName` 认不认本地化名字取决于那台电脑的字体带了哪些名字表。
+- 粗细 1–999 取整后给 `GetFirstMatchingFont`（拉伸固定为正常），`Upright/Oblique/Italic` → 0/1/2。缺粗体或斜体时 DirectWrite 自己加模拟：测试里宋体粗体 `simulations & 1`、斜体 `& 2`，粗体遮罩的墨量比常规多；Segoe UI 有真粗体所以没有模拟。
+- 语言：`lang` 规范成 `zh-Hans`（`zh`、`zh-CN`、`zh-SG`、`zh-Hans-*`）、`zh-Hant`（`zh-TW`、`zh-HK`、`zh-MO`、`zh-Hant-*`）、`ja`、`ko`；其他语言保留"语言-地区"；写得不合规矩的（非字母数字、过长）当没写。没有 `lang` 时用系统默认区域（`GetUserDefaultLocaleName`），再不行 `en-US`。**本机实测**：同样三个汉字"直骨海"，`zh-Hans` → Microsoft YaHei UI，`zh-Hant` → Microsoft JhengHei UI，`ja` → Yu Gothic UI，`ko` → Malgun Gothic；四种语言各选各的字体，`zh-CN` 和 `zh-Hans`、`zh-TW` 和 `zh-Hant` 结果相同。
+- 回退按**字符**决定用哪个字体：先字体链里第一个有这个字符的（`GetGlyphIndices`，按字体缓存），再是系统之前为这个查询选过的回退字体（最多记 4 个，不用再问系统），最后才调 `IDWriteFontFallback::MapCharacters`（单个字符、带元素语言和主字体族名）。每个（查询，字符）的结果缓存。zhwiki 整页只调了 64 次 `MapCharacters`。`MapCharacters` 返回的缩放系数（`scale`）没用。控制字符、零宽/双向格式字符、组合记号、变体选择符跟着前一个字符的字体走。字体表上限 512 个（超了回退到主字体）。
+- `FontId` = 字体表下标；同一个 `IDWriteFontFace` 对象（地址相同）只登记一次。测试 `shape_cache_hits_and_fonts_are_interned` 验证重新整形不会多出字体。
+
+### 整形
+
+- 一段文字按"字体"切成段；每段 `AnalyzeScript` 切成脚本段，每个脚本段 `GetGlyphs` + `GetGlyphPlacements`（自然宽度，不用 GDI 兼容宽度；不开从右到左，引擎没有 bidi）。可打印 ASCII（0x20–0x7E）的段直接用启动时对 "a" 分析一次得到的拉丁文脚本，省一次 `AnalyzeScript`。
+- `clusterMap` 是 16 位，所以一次最多 8192 个 UTF-16 单元，更长的脚本段在不拆代理对的位置切开（切口处的字距调整丢掉，可以接受）。
+- 簇的换算：`clusterMap` 值相同的连续字符是一个簇，拥有从它的值到下一个簇的值之间的字形；字形的 `cluster_start..cluster_end` 是这些字符的字节范围（UTF-16 位置 → 字节位置另外存了一张表）。测试检查簇不倒退、落在字符边界、首尾覆盖整个文字，含代理对和组合记号。
+- DirectWrite 给制表符、换行符的是字体的缺字框（字形 0，宽度非零）；这两类和其他控制字符一律换成空格字形，宽度 0（制表符保留空格宽度；引擎自己按制表位算）。所以这些不算进缺字数。
+- **偏离：汉字、假名、韩文音节、中日韩标点和全角标点（`is_context_free`，不含组合记号）按单个字符整形再缓存**（键：字体、语言、字符；在 100px 下整形一次，前进宽度按字号线性缩放）。这些字符默认没有字距调整、连字、上下文字形，所以结果和整段整形一致；省掉的是 DirectWrite 每次调用的固定开销（zhwiki 冷启动整形约 136 ms → 84 ms）。后面紧跟组合记号/变体选择符的字符不走这条路。取舍：汉字之间的 `kern`（字体里有也很少）不会生效。
+- 整形缓存：键 = 查询号 + 字号 + 文字（64 位哈希，命中后还会逐字比较文字，哈希碰撞不会出错）；值是字形数组；LRU，预算 **8 MB**，每项按"文字字节 + 每字形 28 字节 + 96"计。字形缓存：键 = 字体 + 字形号 + 字号 + 4 档，值是灰度遮罩（或"不画"），LRU，预算 **8 MB**，每项按遮罩字节 + 64 计。两个预算用测试 `caches_stay_inside_their_budgets` 检查；单项比预算还大就不存。
+
+### 断行、度量、遮罩
+
+- 断行：整个段落转 UTF-16，`AnalyzeLineBreakpoints` 一次，每个 UTF-16 单元一个字节（`DWRITE_LINE_BREAKPOINT`：低 2 位 before，2–3 位 after；0 中立、1 可断、2 不可断、3 必须断）。两个单元之间能断 = 两边都不是"不可断"，且至少一边是"可断/必须断"；代理对中间不断；返回字节位置。`word-break`/`overflow-wrap`/`white-space` 仍由引擎叠加。测试：空格后、汉字之间可断；逗号、句号前不断，逗号后可断。
+- 度量来自 `DWRITE_FONT_METRICS`（设计单位 × 字号 / `designUnitsPerEm`）：上升、下降、行距（负的当 0）；x 高 = `xHeight`（0 表示字体没有，给 `None`）；"0" 的前进宽度 = "0" 字形的设计前进宽度（字体没有 "0" 给 `None`）。**符号约定**：DirectWrite 的 `underlinePosition`/`strikethroughPosition` 是线的上边相对基线、向上为正（下划线通常是负数）；接口要"下划线向下的距离、删除线向上的距离"，所以 `underline_offset = -underlinePosition`，`strikeout_offset = strikethroughPosition`。Segoe UI 100px：上升 107.9、下降 25.1、x 高 50、"0" 宽 53.9、下划线偏移 8.7（粗 5.8）、删除线偏移 25.9（粗 5.0）。1b-2 留下的"x_height、下划线位置要核对"到此核对过：测试里 "0" 的整形宽度 = `zero_advance`，其余量级合理。
+- 遮罩：`CreateGlyphRunAnalysis`（渲染模式 NATURAL_SYMMETRIC，测量模式 NATURAL，笔位 x = 档数/4），取 ClearType 3x1 纹理（每像素 3 字节），三个条纹的平均值当灰度覆盖率。`left`/`top` 直接用纹理边界（已含 4 档的小数位）。宽或高超过 4096、字号超过 1024 不画。
+
+### 老编码
+
+- 引擎传来 WHATWG 编码名（不区分大小写）→ 代码页：`gbk`/`gb2312`/`gb18030` → 54936，`big5` → 950，`shift_jis` → 932，`euc-kr` → 949，`euc-jp` → **20932**（任务单没写；`MultiByteToWideChar` 对 51932 返回参数错误，本机实测，20932 能用），`iso-2022-jp` → 50220，`ibm866` 866，`iso-8859-2…8/13/15` → 28592…28598/28603/28605，`iso-8859-8-i` 38598，`koi8-r` 20866，`koi8-u` 21866，`macintosh` 10000，`x-mac-cyrillic` 10007，`windows-874/1250…1258`。**Windows 没有的**：`iso-8859-10`、`-14`、`-16`（返回 `None`，引擎退到 windows-1252 并给出警告）。
+- 坏字节 → U+FFFD：先对整段用 `MB_ERR_INVALID_CHARS` 转一遍（合法的页面一次调用）；失败才逐字符重转（双字节编码试 2 字节再试 1 字节，GB18030 在第二字节是数字时先试 4 字节），都不成才写 U+FFFD。无效的"首字节 + 非 ASCII 次字节"吃掉两个字节，其余只吃一个（ASCII 次字节还给后面，和 WHATWG 一致）。`iso-2022-jp` 的代码页不接受任何标志，直接转，坏字节由系统换成默认字符。
+- 和 WHATWG 的已知差别：Windows 的单字节 0x80 在 Big5 里映射成 U+0080（标准是错误）；Big5 没有 HKSCS 扩展；GBK 用 GB18030 代码页（任务单规定），个别码位的映射和标准的 GBK 略有不同。这些在真实页面里极少出现，没有额外处理。
+
+### 命令行
+
+- `qinglan-cli style` 和 `layout` 默认用 Windows 平台（字体度量也进了 `ex`/`ch`；老编码页面、老编码样式表也靠它解码）；`--test-font` 回到测试平台。`dom` 用 Windows 平台只为了解码。`layout --time` 多打印一行 `.notdef glyphs after fallback: N`，N > 0 时附上前几个字符的码位。数的是页面上所有文字片段里字形号为 0（字体的缺字框）的字形。
+
+### 验收数据
+
+- 测试：见报告里的 `cargo test --workspace` 输出；平台测试 18 个（编码样例 GBK/gb2312/gb18030 四字节/Big5/Shift_JIS/半角片假名/EUC-KR/EUC-JP/windows-1251 和坏字节、字体族对应、中文字体名、拉丁/中日韩整形、回退字体、语言选字形、中英混排簇、控制字符、断行、度量、遮罩、粗体斜体模拟、缓存命中与预算、长文本分块），加 LRU 单元测试 3 个，加两个真实页面测试。
+- 中文维基页面（`tests/corpus/local/zhwiki/`，宽 1280，release，**插电：`BatteryStatus` = 2**）：排版（不含解析和样式）**同一进程连续 10 次的中位数约 45–50 ms**；**第一次（冷，整形缓存是空的）约 150–190 ms**；`qinglan-cli layout` 单独跑一次（含字体加载）布局约 150 ms、样式约 37 ms。10 次里后 9 次靠整形缓存（缓存 4.4 MB，没超 8 MB 预算）。冷启动的 ~85 ms 花在 DirectWrite 的整形调用里（`GetGlyphs`+`GetGlyphPlacements`，约 10 000 次，每次 8 µs 左右），选字体只占 3 ms，`AnalyzeScript` 不到 1 ms。验收按任务单写的 10 次中位数算，达标（≤ 100 ms）；冷启动超过 100 ms，如实记下。可能的优化（没做）：按词缓存拉丁文（Blink 的做法），代价是词与空格之间的字距调整（Times New Roman 有）会丢，所以先不做。
+- 缺字框：中文维基页 139 932 个字形，**0 个** `.notdef`；GBK 老网页 4 690 个字形，**0 个**。
+- GBK 老网页：`http://www.zuowen.com/`（作文网首页，2026-10-15 下载，142 KB，`<meta charset=gb2312>`，无 HTTP 头声明；用 GB18030 解码零个 U+FFFD），样式表 5 个，来自 `http://cmsimgs.zuowen.com/zuowen/…`（第 6 个样式表来自 `static-mmb.mmbang.info`，是第三方下载按钮用的，没下载）。放在 `tests/corpus/local/gbk/`（不提交）：`index.html` 原样；`local.html` 只把样式表链接改成相对路径、去掉第三方那条，用于命令行；`URL.txt` 记地址。引擎判断编码结果是 GBK，无警告。
+- 本步没做：`MapCharacters` 返回的 `scale`；从右到左；`font-variation-settings`、`font-feature-settings`；颜色字体（表情只画黑白轮廓）；`@font-face` 网络字体（1c 之后）。
+
+## 来源
 
 - html5lib-tests：分词 `c777c408`（2026-09-29），建树 `9329e646`（2026-06-20，上游已搬到 WPT），MIT，见 `tests/html5lib/LICENSE`、`SOURCE.txt`。
 - WPT `url/resources/urltestdata.json`，BSD-3-Clause，见 `tests/wpt-url/LICENSE.md`。
