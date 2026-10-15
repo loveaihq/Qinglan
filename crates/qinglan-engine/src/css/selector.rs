@@ -19,7 +19,7 @@ pub enum Combinator {
     SubsequentSibling,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum AttrOp {
     Exists,
     Equals,
@@ -30,7 +30,7 @@ pub enum AttrOp {
     Substring,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum CaseSens {
     /// Default: sensitive, except for the HTML attributes with case-insensitive values.
     Default,
@@ -46,6 +46,9 @@ pub struct AttrSel {
     pub op: AttrOp,
     pub value: String,
     pub case: CaseSens,
+    /// The name is one of the HTML attributes whose values are case-insensitive in selectors (HTML 15.2),
+    /// which `CaseSens::Default` honours for HTML elements.
+    pub ci_html: bool,
 }
 
 /// An+B.
@@ -636,10 +639,12 @@ fn parse_attr(inner: &[Cv], ctx: &mut ParseCtx<'_>) -> Option<AttrSel> {
         }
     };
     skip_ws(&mut i);
-    let lower = ctx.atoms.intern(&name.to_ascii_lowercase());
+    let lower_name = name.to_ascii_lowercase();
+    let ci_html = CI_ATTRS.contains(&lower_name.as_str());
+    let lower = ctx.atoms.intern(&lower_name);
     let nm = ctx.atoms.intern(&name);
     if i >= items.len() {
-        return Some(AttrSel { name: nm, lower, op: AttrOp::Exists, value: String::new(), case: CaseSens::Default });
+        return Some(AttrSel { name: nm, lower, op: AttrOp::Exists, value: String::new(), case: CaseSens::Default, ci_html });
     }
     let op = match items.get(i)? {
         c if c.is_delim('=') => {
@@ -689,7 +694,7 @@ fn parse_attr(inner: &[Cv], ctx: &mut ParseCtx<'_>) -> Option<AttrSel> {
     if i != items.len() {
         return None;
     }
-    Some(AttrSel { name: nm, lower, op, value, case })
+    Some(AttrSel { name: nm, lower, op, value, case, ci_html })
 }
 
 // -----------------------------------------------------------------------------------------------
@@ -813,6 +818,36 @@ fn ancestor_keys(compounds: &[Compound], combs: &[Combinator]) -> Vec<u32> {
     }
     keys.truncate(4);
     keys
+}
+
+/// Does the selector depend on the siblings or children of the element?
+pub fn selector_sensitive(sel: &Selector) -> bool {
+    sel.combinators.iter().any(|c| matches!(c, Combinator::NextSibling | Combinator::SubsequentSibling))
+        || sel.compounds.iter().any(|c| c.simples.iter().any(simple_sensitive))
+}
+
+/// Does the simple selector depend on the siblings or children of the element?
+pub fn simple_sensitive(s: &Simple) -> bool {
+    match s {
+        Simple::Pseudo(p) => match p {
+            PseudoClass::FirstChild
+            | PseudoClass::LastChild
+            | PseudoClass::OnlyChild
+            | PseudoClass::FirstOfType
+            | PseudoClass::LastOfType
+            | PseudoClass::OnlyOfType
+            | PseudoClass::NthChild(..)
+            | PseudoClass::NthLastChild(..)
+            | PseudoClass::NthOfType(_)
+            | PseudoClass::NthLastOfType(_)
+            | PseudoClass::Empty
+            | PseudoClass::Disabled
+            | PseudoClass::Enabled => true,
+            PseudoClass::Not(l) | PseudoClass::Is(l) | PseudoClass::Where(l) => l.iter().any(selector_sensitive),
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 // -----------------------------------------------------------------------------------------------
@@ -1002,6 +1037,58 @@ impl<'a> Matcher<'a> {
         self.match_from(sel, last, el)
     }
 
+    /// Could `sel` match `el` if everything that depends on its siblings or children were left out? A superset
+    /// of `matches`: parts that look at siblings count as matching, the rest (the element itself, its ancestors)
+    /// is tested for real. The result only depends on `el` and its ancestors.
+    pub fn may_match_ignoring_siblings(&mut self, sel: &Selector, el: NodeId, ancestors: Option<&AncestorFilter>) -> bool {
+        if sel.pseudo_element.is_some() {
+            return false;
+        }
+        if let Some(b) = ancestors
+            && sel.ancestor_keys.iter().any(|&k| !b.may_contain(k))
+        {
+            return false;
+        }
+        self.budget = MATCH_BUDGET;
+        let last = sel.compounds.len().saturating_sub(1);
+        self.relaxed_from(sel, last, el)
+    }
+
+    fn relaxed_from(&mut self, sel: &Selector, idx: usize, el: NodeId) -> bool {
+        if self.budget == 0 {
+            return true; // out of budget: "maybe" (the real match decides, and gives up the same way)
+        }
+        self.budget -= 1;
+        let Some(compound) = sel.compounds.get(idx) else { return true };
+        if !compound.simples.iter().all(|s| simple_sensitive(s) || self.match_simple(s, el)) {
+            return false;
+        }
+        if idx == 0 {
+            return true;
+        }
+        match sel.combinators.get(idx - 1) {
+            Some(Combinator::Child) => match self.parent_element(el) {
+                Some(p) => self.relaxed_from(sel, idx - 1, p),
+                None => false,
+            },
+            Some(Combinator::Descendant) => {
+                let mut cur = self.parent_element(el);
+                while let Some(p) = cur {
+                    if self.relaxed_from(sel, idx - 1, p) {
+                        return true;
+                    }
+                    if self.budget == 0 {
+                        return true;
+                    }
+                    cur = self.parent_element(p);
+                }
+                false
+            }
+            // Which sibling it is, is not known here.
+            Some(Combinator::NextSibling | Combinator::SubsequentSibling) | None => true,
+        }
+    }
+
     /// Match a selector ignoring its pseudo-element (used for `:not()` etc. arguments, which have none).
     pub fn matches_any(&mut self, list: &[Selector], el: NodeId) -> bool {
         let saved = self.budget;
@@ -1089,6 +1176,11 @@ impl<'a> Matcher<'a> {
         }
     }
 
+    /// Does the attribute selector `a` match `el`? (Cascade: folds the outcome into an element's signature.)
+    pub fn attr_matches(&self, a: &AttrSel, el: NodeId) -> bool {
+        self.match_attr(a, el)
+    }
+
     fn match_attr(&self, a: &AttrSel, el: NodeId) -> bool {
         let doc = self.doc;
         let Some(e) = doc.element(el) else { return false };
@@ -1101,7 +1193,7 @@ impl<'a> Matcher<'a> {
         let ci = match a.case {
             CaseSens::Insensitive => true,
             CaseSens::Sensitive => false,
-            CaseSens::Default => is_html && CI_ATTRS.contains(&doc.atoms.get(a.lower)),
+            CaseSens::Default => is_html && a.ci_html,
         };
         let (hay, needle) = (attr.value.as_str(), a.value.as_str());
         let eq = |x: &str, y: &str| if ci { x.eq_ignore_ascii_case(y) } else { x == y };

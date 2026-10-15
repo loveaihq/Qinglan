@@ -11,7 +11,7 @@ use qinglan_engine::platform::{BasicPlatform, FontQuery, FontSlant, Platform, Te
 fn lay(html: &str, platform: &dyn Platform) -> (String, LayoutResult) {
     let decoded = decode_document(html.as_bytes(), None, &BasicPlatform);
     let mut doc = parse_document(decoded.text);
-    let sopts = StyleOptions { viewport_w: 300.0, viewport_h: 200.0 };
+    let sopts = StyleOptions { viewport_w: 300.0, viewport_h: 200.0, ..StyleOptions::default() };
     let styled = style_document_with(&mut doc, None, &mut NoResources, &sopts, Some(platform));
     let res = layout_document(&doc, &styled.tree, platform, &LayoutOptions { viewport_w: 300.0, viewport_h: 200.0 });
     (dump_layout(&doc, &res), res)

@@ -259,7 +259,10 @@ impl Tokenizer {
 
     fn flush_text(&mut self) {
         if !self.text.is_empty() {
-            let t = std::mem::take(&mut self.text);
+            // Copy to an exactly sized string and keep the buffer: a taken buffer would regrow from nothing
+            // for the next run of text (several reallocations each).
+            let t = self.text.clone();
+            self.text.clear();
             self.queue.push_back(Token::Text(t));
         }
     }
@@ -324,7 +327,8 @@ impl Tokenizer {
             self.attr_value.clear();
             return;
         }
-        let value = std::mem::take(&mut self.attr_value);
+        let value = self.attr_value.clone(); // exactly sized, the buffer is kept (see `flush_text`)
+        self.attr_value.clear();
         self.tag_attrs.push(Attribute { ns: Namespace::None, prefix: super::atoms::a::EMPTY, name, value });
     }
 

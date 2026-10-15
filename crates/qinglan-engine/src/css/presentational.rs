@@ -14,6 +14,8 @@ use crate::html::atoms::{FxHashMap, a};
 use crate::html::dom::{Document, NONE, Namespace, NodeId};
 
 pub struct HintBuilder {
+    /// By attribute atom: does the attribute take part in some presentational hint?
+    relevant_attr: Vec<bool>,
     cache: FxHashMap<String, Option<Rc<DeclBlock>>>,
     next_id: u32,
     body_link: Option<Color>,
@@ -89,26 +91,39 @@ impl HintBuilder {
                 }
             }
         }
-        HintBuilder { cache: FxHashMap::default(), next_id: 0x8000_0000, body_link, quirks: doc.quirks == crate::html::dom::QuirksMode::Quirks }
+        // `href` only matters for the `link` colour of `<body link>`.
+        let mut relevant_attr = vec![false; doc.atoms.len()];
+        for name in [
+            "bgcolor", "text", "marginwidth", "marginheight", "leftmargin", "rightmargin", "topmargin", "bottommargin", "color", "face", "size",
+            "bordercolor", "border", "width", "height", "align", "valign", "nowrap", "hspace", "vspace", "frameborder", "noshade", "type",
+        ]
+        .into_iter()
+        .chain(body_link.map(|_| "href"))
+        {
+            if let Some(at) = doc.atoms.lookup(name)
+                && let Some(slot) = relevant_attr.get_mut(at.0 as usize)
+            {
+                *slot = true;
+            }
+        }
+        HintBuilder {
+            relevant_attr,
+            cache: FxHashMap::default(),
+            next_id: 0x8000_0000,
+            body_link,
+            quirks: doc.quirks == crate::html::dom::QuirksMode::Quirks,
+        }
     }
 
     /// The hint declarations of `el`, if it has any.
     pub fn hints_for(&mut self, doc: &Document, el: NodeId) -> Option<Rc<DeclBlock>> {
         let e = doc.element(el)?;
-        let is_cell = e.ns == Namespace::Html && matches!(doc.atoms.get(e.name), "td" | "th");
+        let is_cell = e.ns == Namespace::Html && matches!(e.name, a::TD | a::TH);
         if e.ns != Namespace::Html || (e.attrs.is_empty() && !is_cell) {
             return None;
         }
         // Cheap rejection: most elements carry no presentational attribute at all.
-        let relevant = e.attrs.iter().any(|x| {
-            x.ns == Namespace::None
-                && matches!(
-                    doc.atoms.get(x.name),
-                    "bgcolor" | "text" | "marginwidth" | "marginheight" | "leftmargin" | "rightmargin" | "topmargin" | "bottommargin"
-                        | "color" | "face" | "size" | "bordercolor" | "border" | "width" | "height" | "align" | "valign" | "nowrap"
-                        | "hspace" | "vspace" | "frameborder" | "noshade" | "href" | "type"
-                )
-        });
+        let relevant = e.attrs.iter().any(|x| x.ns == Namespace::None && self.relevant_attr.get(x.name.0 as usize).copied().unwrap_or(false));
         if !relevant && !is_cell {
             return None;
         }

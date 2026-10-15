@@ -3,21 +3,23 @@
 //! (css-cascade-5, css-variables-1).
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use super::computed::{
     ComputedStyle, CustomProps, Declared, Env, compute_border, compute_box, compute_font, compute_misc, compute_text,
 };
 use super::media::MediaEnv;
 use super::parse_prop::{ParseEnv, parse_declaration};
-use super::selector::{AncestorFilter, Combinator, Matcher, PseudoClass, Selector, Simple};
+use super::selector::{AncestorFilter, AttrOp, AttrSel, CaseSens, Matcher, PseudoClass, Selector, Simple, selector_sensitive};
 use super::stylesheet::{ImportRule, Rule, Stylesheet};
 use super::syntax::{Cv, trim_ws};
 use super::tokenizer::Token;
 use super::types::*;
 use super::values::LenCtx;
 use crate::html::atoms::{Atom, FxHashMap, a};
-use crate::html::dom::{Document, NONE, NodeId};
+use crate::html::dom::{Document, NONE, Namespace, NodeId};
 
 /// Rule count limit per page.
 pub const MAX_RULES: usize = 300_000;
@@ -33,7 +35,7 @@ pub enum Origin {
 }
 
 struct IndexedRule {
-    selector: Selector,
+    selector: Rc<Selector>,
     block: Rc<DeclBlock>,
     origin: Origin,
     layer_node: u32,
@@ -132,8 +134,8 @@ pub struct RuleSet {
     rules: Vec<IndexedRule>,
     normal: Buckets,
     sensitive: Buckets,
-    /// Attribute names tested by some selector.
-    used_attrs: Vec<Atom>,
+    /// The attribute selectors of all rules (each distinct one once).
+    attr_tests: AttrTests,
     layers: LayerTree,
     layer_ord: Vec<u32>,
     next_order: u32,
@@ -151,16 +153,16 @@ impl RuleSet {
             rules: Vec::new(),
             normal: Buckets::default(),
             sensitive: Buckets::default(),
-            used_attrs: Vec::new(),
+            attr_tests: AttrTests::default(),
             layers: LayerTree::new(),
             layer_ord: vec![1],
             next_order: 0,
         }
     }
 
-    /// Attribute names whose values some selector tests (they are part of an element's matching signature).
-    pub fn used_attrs(&self) -> &[Atom] {
-        &self.used_attrs
+    /// The attribute selectors some rule tests (their outcomes are part of an element's matching signature).
+    pub fn attr_tests(&self) -> &[AttrSel] {
+        &self.attr_tests.list
     }
 
     pub fn len(&self) -> usize {
@@ -223,7 +225,7 @@ impl RuleSet {
         }
     }
 
-    fn push(&mut self, sel: &Selector, block: &Rc<DeclBlock>, origin: Origin, layer: u32) {
+    fn push(&mut self, sel: &Rc<Selector>, block: &Rc<DeclBlock>, origin: Origin, layer: u32) {
         // Selectors with a pseudo-element never match an element's own style.
         if sel.pseudo_element.is_some() {
             return;
@@ -232,7 +234,7 @@ impl RuleSet {
         let order = self.next_order;
         self.next_order += 1;
         self.rules.push(IndexedRule { selector: sel.clone(), block: block.clone(), origin, layer_node: layer, order });
-        collect_used_attrs(sel, &mut self.used_attrs);
+        collect_attr_tests(sel, &mut self.attr_tests);
         if selector_sensitive(sel) {
             self.sensitive.add(idx, sel);
         } else {
@@ -242,12 +244,13 @@ impl RuleSet {
 
     /// Indices of the rules that match `el`: those that only depend on the element and its ancestors.
     fn matching_plain(&self, matcher: &mut Matcher<'_>, el: NodeId, name: Atom, is_root: bool, bloom: &AncestorFilter, out: &mut Vec<u32>) {
-        self.normal.gather(&self.rules, matcher, el, name, is_root, bloom, out);
+        self.normal.gather(&self.rules, matcher, el, name, is_root, bloom, false, out);
     }
 
-    /// Indices of the matching rules that depend on siblings or children.
-    fn matching_sensitive(&self, matcher: &mut Matcher<'_>, el: NodeId, name: Atom, is_root: bool, bloom: &AncestorFilter, out: &mut Vec<u32>) {
-        self.sensitive.gather(&self.rules, matcher, el, name, is_root, bloom, out);
+    /// Indices of the rules that look at siblings or children and could match `el`, judging by `el` and its
+    /// ancestors alone. Whether they do match is decided per element (`Matcher::matches`).
+    fn sibling_rules(&self, matcher: &mut Matcher<'_>, el: NodeId, name: Atom, is_root: bool, bloom: &AncestorFilter, out: &mut Vec<u32>) {
+        self.sensitive.gather(&self.rules, matcher, el, name, is_root, bloom, true, out);
     }
 }
 
@@ -330,12 +333,24 @@ impl Buckets {
         }
     }
 
+    /// The rules of the buckets `el` falls into whose selector matches. With `relaxed`, the parts of a selector that
+    /// look at siblings are taken as matching (`Matcher::may_match_ignoring_siblings`).
     #[allow(clippy::too_many_arguments)]
-    fn gather(&self, rules: &[IndexedRule], matcher: &mut Matcher<'_>, el: NodeId, name: Atom, is_root: bool, bloom: &AncestorFilter, out: &mut Vec<u32>) {
+    fn gather(
+        &self,
+        rules: &[IndexedRule],
+        matcher: &mut Matcher<'_>,
+        el: NodeId,
+        name: Atom,
+        is_root: bool,
+        bloom: &AncestorFilter,
+        relaxed: bool,
+        out: &mut Vec<u32>,
+    ) {
         let start = out.len();
         let test = |idx: u32, matcher: &mut Matcher<'_>, out: &mut Vec<u32>| {
             if let Some(r) = rules.get(idx as usize)
-                && matcher.matches(&r.selector, el, Some(bloom))
+                && (if relaxed { matcher.may_match_ignoring_siblings(&r.selector, el, Some(bloom)) } else { matcher.matches(&r.selector, el, Some(bloom)) })
             {
                 out.push(idx);
             }
@@ -384,61 +399,41 @@ impl Buckets {
         if let Some(slice) = out.get_mut(start..) {
             slice.sort_unstable();
         }
-        let tail: Vec<u32> = out.drain(start..).collect();
-        let mut last = None;
-        for i in tail {
-            if last != Some(i) {
-                out.push(i);
-                last = Some(i);
+        if start == 0 {
+            out.dedup();
+        } else {
+            let tail: Vec<u32> = out.drain(start..).collect();
+            let mut last = None;
+            for i in tail {
+                if last != Some(i) {
+                    out.push(i);
+                    last = Some(i);
+                }
             }
         }
     }
 }
 
-/// Does the selector depend on the siblings or children of the element?
-fn selector_sensitive(sel: &Selector) -> bool {
-    sel.combinators.iter().any(|c| matches!(c, Combinator::NextSibling | Combinator::SubsequentSibling))
-        || sel.compounds.iter().any(|c| c.simples.iter().any(simple_sensitive))
+/// Distinct attribute selectors.
+#[derive(Default)]
+struct AttrTests {
+    list: Vec<AttrSel>,
+    seen: FxHashMap<(Atom, AttrOp, CaseSens, String), ()>,
 }
 
-fn simple_sensitive(s: &Simple) -> bool {
-    match s {
-        Simple::Pseudo(p) => match p {
-            PseudoClass::FirstChild
-            | PseudoClass::LastChild
-            | PseudoClass::OnlyChild
-            | PseudoClass::FirstOfType
-            | PseudoClass::LastOfType
-            | PseudoClass::OnlyOfType
-            | PseudoClass::NthChild(..)
-            | PseudoClass::NthLastChild(..)
-            | PseudoClass::NthOfType(_)
-            | PseudoClass::NthLastOfType(_)
-            | PseudoClass::Empty
-            | PseudoClass::Disabled
-            | PseudoClass::Enabled => true,
-            PseudoClass::Not(l) | PseudoClass::Is(l) | PseudoClass::Where(l) => l.iter().any(selector_sensitive),
-            _ => false,
-        },
-        _ => false,
-    }
-}
-
-/// Attribute names a selector reads (including inside `:not()` and `:is()`).
-fn collect_used_attrs(sel: &Selector, out: &mut Vec<Atom>) {
+/// The attribute selectors of `sel` (including inside `:not()` and `:is()`), each distinct one once.
+fn collect_attr_tests(sel: &Selector, out: &mut AttrTests) {
     for c in &sel.compounds {
         for s in &c.simples {
             match s {
                 Simple::Attr(a) => {
-                    for n in [a.name, a.lower] {
-                        if !out.contains(&n) {
-                            out.push(n);
-                        }
+                    if out.seen.insert((a.name, a.op, a.case, a.value.clone()), ()).is_none() {
+                        out.list.push(a.clone());
                     }
                 }
                 Simple::Pseudo(PseudoClass::Not(l) | PseudoClass::Is(l) | PseudoClass::Where(l)) => {
                     for x in l {
-                        collect_used_attrs(x, out);
+                        collect_attr_tests(x, out);
                     }
                 }
                 _ => {}
@@ -474,11 +469,66 @@ pub struct StyleInput<'a> {
     pub env: Env<'a>,
     /// Presentational hints per element (HTML 15.3), built by the caller on demand.
     pub hints: &'a mut dyn FnMut(&Document, NodeId) -> Option<Rc<DeclBlock>>,
+    /// Measure the time spent in each part (see [`CascadeTimings`]).
+    pub profile: bool,
 }
 
 /// The result of styling a document: a style per element node.
 pub struct StyleTree {
     pub styles: Vec<Option<Rc<ComputedStyle>>>,
+    /// Counters and (when `StyleOptions::profile` is set) the time spent in each part of the cascade.
+    pub timings: CascadeTimings,
+}
+
+/// Where the cascade spends its time. The counters are always filled in; the durations only when
+/// profiling was asked for (reading the clock for every element is not free).
+#[derive(Clone, Debug, Default)]
+pub struct CascadeTimings {
+    pub elements: usize,
+    pub match_cache_hits: usize,
+    pub match_cache_misses: usize,
+    /// Elements that took their style straight from the match cache (no entries built).
+    pub fast_hits: usize,
+    pub share_hits: usize,
+    pub share_misses: usize,
+    /// Matching signature of the element.
+    pub signature: Duration,
+    /// Rules that ignore siblings: cache lookup, and selector matching on a miss.
+    pub match_plain: Duration,
+    /// Building and sorting the cascade entries (elements that miss the fast path only).
+    pub entries: Duration,
+    /// Rules that look at siblings or children, matched for every element.
+    pub match_sensitive: Duration,
+    /// Presentational hints and the `style` attribute.
+    pub hints: Duration,
+    /// Style sharing lookup.
+    pub share_lookup: Duration,
+    /// Computed values (declared values, `var()`, the five property groups).
+    pub compute: Duration,
+}
+
+/// A stopwatch that does nothing when profiling is off.
+struct Lap(Option<Instant>);
+
+impl Lap {
+    fn new(on: bool) -> Lap {
+        Lap(on.then(Instant::now))
+    }
+
+    /// Add the time since the last lap to `acc`.
+    fn lap(&mut self, acc: &mut Duration) {
+        if let Some(t) = self.0 {
+            let now = Instant::now();
+            *acc += now - t;
+            self.0 = Some(now);
+        }
+    }
+
+    fn reset(&mut self) {
+        if self.0.is_some() {
+            self.0 = Some(Instant::now());
+        }
+    }
 }
 
 impl StyleTree {
@@ -503,6 +553,90 @@ struct ShareEntry {
 struct PlainMatches {
     ua: Vec<u32>,
     author: Vec<u32>,
+    /// Rules that look at siblings or children and could match this element (the other parts of the selector
+    /// do match); they are run for every element with this signature.
+    sib_ua: Vec<u32>,
+    sib_author: Vec<u32>,
+    /// Styles already computed from these matches alone (no sibling-dependent rule, presentational hint or
+    /// `style` attribute added anything), as (parent style, style): an element with the same signature, the same
+    /// ancestors' signatures and the same parent style gets the same style.
+    styles: RefCell<Vec<(Rc<ComputedStyle>, Rc<ComputedStyle>)>>,
+}
+
+/// Styles remembered per cache entry (entries are shared by many elements; parents rarely differ).
+const MAX_STYLES_PER_ENTRY: usize = 8;
+
+/// What the signature of an element has to include for one attribute name.
+#[derive(Default)]
+struct AttrPlan {
+    /// Mix in the value itself (pseudo-classes read `type`, `lang`, `dir`; too many attribute selectors on one name).
+    value: bool,
+    /// Attribute selectors on this name that look at the value: their outcomes are mixed in.
+    tests: Vec<AttrSel>,
+}
+
+/// Attribute selectors per attribute name whose outcomes are folded into the signature one by one;
+/// with more of them the value itself is hashed (bounds the work per attribute).
+const MAX_TESTS_PER_ATTR: usize = 48;
+
+fn plan_for<'a>(plan_of: &mut [u32], plans: &'a mut Vec<AttrPlan>, at: Atom) -> Option<&'a mut AttrPlan> {
+    let slot = plan_of.get_mut(at.0 as usize)?;
+    if *slot == 0 {
+        *slot = plans.len() as u32;
+        plans.push(AttrPlan::default());
+    }
+    plans.get_mut(*slot as usize)
+}
+
+/// Which attributes an element's signature has to look at, and how. Returns (plan index by atom, plans);
+/// plan 0 is "ignore this attribute".
+///
+/// A rule that ignores siblings can only see an attribute through an attribute selector, `:link` (presence of
+/// `href`), `:checked` (`type`, presence of `checked`/`selected`), `:lang()` and `:dir()` (values). So two
+/// elements whose attribute selectors have the same outcomes match the same rules, whatever the values are.
+fn build_attr_plans(doc: &Document, ua: &RuleSet, author: &RuleSet) -> (Vec<u32>, Vec<AttrPlan>) {
+    let mut plan_of = vec![0u32; doc.atoms.len()];
+    let mut plans = vec![AttrPlan::default()];
+    for t in ua.attr_tests().iter().chain(author.attr_tests()) {
+        for name in [t.name, t.lower] {
+            if let Some(p) = plan_for(&mut plan_of, &mut plans, name)
+                && t.op != AttrOp::Exists
+                && p.tests.len() <= MAX_TESTS_PER_ATTR
+            {
+                p.tests.push(t.clone());
+            }
+            if t.name == t.lower {
+                break;
+            }
+        }
+    }
+    for (implicit, value) in [("href", false), ("checked", false), ("selected", false), ("disabled", false), ("type", true), ("lang", true), ("dir", true)] {
+        if let Some(at) = doc.atoms.lookup(implicit)
+            && let Some(p) = plan_for(&mut plan_of, &mut plans, at)
+        {
+            p.value |= value;
+        }
+    }
+    for p in &mut plans {
+        if p.tests.len() > MAX_TESTS_PER_ATTR {
+            p.tests.clear();
+            p.value = true;
+        }
+    }
+    (plan_of, plans)
+}
+
+/// Fold `bytes` into the hash `h`, eight at a time.
+fn mix_bytes(mut h: u64, bytes: &[u8]) -> u64 {
+    let (chunks, rest) = bytes.as_chunks::<8>();
+    for c in chunks {
+        h = mix(h, u64::from_le_bytes(*c));
+    }
+    let mut last = bytes.len() as u64;
+    for &b in rest {
+        last = (last << 8) | b as u64;
+    }
+    mix(h, last)
 }
 
 /// Cache entries kept at most (memory guard for huge documents).
@@ -513,7 +647,9 @@ fn mix(h: u64, v: u64) -> u64 {
 }
 
 pub fn compute_styles(input: StyleInput<'_>) -> StyleTree {
-    let StyleInput { doc, ua, author, style_attrs, env, hints } = input;
+    let StyleInput { doc, ua, author, style_attrs, env, hints, profile } = input;
+    let mut timings = CascadeTimings::default();
+    let mut lap = Lap::new(profile);
     let n = doc.nodes.len();
     let mut styles: Vec<Option<Rc<ComputedStyle>>> = vec![None; n];
     let mut matcher = Matcher::new(doc);
@@ -524,20 +660,10 @@ pub fn compute_styles(input: StyleInput<'_>) -> StyleTree {
     let mut root_font_size = 16.0f32;
     let mut matched: Vec<u32> = Vec::new();
     let mut entries: Vec<Entry> = Vec::new();
-    // Attribute names that selectors test: their values are part of an element's matching signature.
-    let mut used_attrs: Vec<Atom> = ua.used_attrs().to_vec();
-    for a in author.used_attrs() {
-        if !used_attrs.contains(a) {
-            used_attrs.push(*a);
-        }
-    }
-    for implicit in ["href", "type", "checked", "selected", "disabled", "lang", "dir"] {
-        if let Some(at) = doc.atoms.lookup(implicit)
-            && !used_attrs.contains(&at)
-        {
-            used_attrs.push(at);
-        }
-    }
+    // Which attributes are part of an element's matching signature, and how.
+    let (plan_of, plans) = build_attr_plans(doc, ua, author);
+    let mut sib_ua: Vec<u32> = Vec::new();
+    let mut sib_author: Vec<u32> = Vec::new();
     // Matches of the rules that do not look at siblings, by (ancestor context, element signature).
     let mut match_cache: FxHashMap<(u64, u64), Rc<PlainMatches>> = FxHashMap::default();
     // Depth-first walk over the elements without recursion: one frame per open element.
@@ -575,6 +701,8 @@ pub fn compute_styles(input: StyleInput<'_>) -> StyleTree {
         let is_root = frames.len() == 1;
         let name = elem.name;
         entries.clear();
+        timings.elements += 1;
+        lap.reset();
 
         // The signature of the element: everything the rules that ignore siblings can look at.
         let mut sig = mix(0, elem.ns as u64 + 1);
@@ -583,124 +711,184 @@ pub fn compute_styles(input: StyleInput<'_>) -> StyleTree {
         if let Some(id) = matcher.id_of(el) {
             sig = mix(sig, 0x1_0000_0000 | id.0 as u64);
         }
-        for k in 0..matcher.class_count(el) {
-            if let Some(c) = matcher.class_at(el, k) {
-                sig = mix(sig, 0x2_0000_0000 | c.0 as u64);
-            }
+        for &c in matcher.classes_of(el) {
+            sig = mix(sig, 0x2_0000_0000 | c.0 as u64);
         }
         for at in &elem.attrs {
-            if at.ns == crate::html::dom::Namespace::None && used_attrs.contains(&at.name) {
-                sig = mix(sig, 0x3_0000_0000 | at.name.0 as u64);
-                for b in at.value.bytes() {
-                    sig = mix(sig, b as u64);
-                }
+            if at.ns != Namespace::None {
+                continue;
+            }
+            let Some(plan) = plan_of.get(at.name.0 as usize).filter(|&&i| i != 0).and_then(|&i| plans.get(i as usize)) else { continue };
+            sig = mix(sig, 0x3_0000_0000 | at.name.0 as u64);
+            if plan.value {
+                sig = mix_bytes(sig, at.value.as_bytes());
+            }
+            for t in &plan.tests {
+                sig = mix(sig, 2 + matcher.attr_matches(t, el) as u64);
             }
         }
+        lap.lap(&mut timings.signature);
         let key = (parent_ctx, sig);
         let plain = match match_cache.get(&key) {
-            Some(p) => p.clone(),
+            Some(p) => {
+                timings.match_cache_hits += 1;
+                p.clone()
+            }
             None => {
+                timings.match_cache_misses += 1;
                 matched.clear();
                 ua.matching_plain(&mut matcher, el, name, is_root, &ancestors, &mut matched);
                 let ua_list = matched.clone();
                 matched.clear();
                 author.matching_plain(&mut matcher, el, name, is_root, &ancestors, &mut matched);
-                let p = Rc::new(PlainMatches { ua: ua_list, author: matched.clone() });
+                let author_list = matched.clone();
+                matched.clear();
+                ua.sibling_rules(&mut matcher, el, name, is_root, &ancestors, &mut matched);
+                let sib_ua = matched.clone();
+                matched.clear();
+                author.sibling_rules(&mut matcher, el, name, is_root, &ancestors, &mut matched);
+                let p = Rc::new(PlainMatches { ua: ua_list, author: author_list, sib_ua, sib_author: matched.clone(), styles: RefCell::new(Vec::new()) });
                 if match_cache.len() < MAX_MATCH_CACHE {
                     match_cache.insert(key, p.clone());
                 }
                 p
             }
         };
-        for &i in &plain.ua {
-            if let Some(r) = ua.rules.get(i as usize) {
-                push_entries(&mut entries, r, ua);
+        lap.lap(&mut timings.match_plain);
+        // Rules that look at siblings or children are matched for every element they could apply to.
+        sib_ua.clear();
+        sib_author.clear();
+        for &i in &plain.sib_ua {
+            if let Some(r) = ua.rules.get(i as usize)
+                && matcher.matches(&r.selector, el, Some(&ancestors))
+            {
+                sib_ua.push(i);
             }
         }
-        for &i in &plain.author {
-            if let Some(r) = author.rules.get(i as usize) {
-                push_entries(&mut entries, r, author);
+        for &i in &plain.sib_author {
+            if let Some(r) = author.rules.get(i as usize)
+                && matcher.matches(&r.selector, el, Some(&ancestors))
+            {
+                sib_author.push(i);
             }
         }
-        // Rules that look at siblings or children are matched for every element.
-        matched.clear();
-        ua.matching_sensitive(&mut matcher, el, name, is_root, &ancestors, &mut matched);
-        for &i in &matched {
-            if let Some(r) = ua.rules.get(i as usize) {
-                push_entries(&mut entries, r, ua);
+        lap.lap(&mut timings.match_sensitive);
+        let hint = hints(doc, el);
+        let style_attr = style_attrs.get(el as usize).and_then(Option::as_ref);
+        lap.lap(&mut timings.hints);
+        // Nothing but the cached matches decides the style: the parent style tells which one it is.
+        let simple = sib_ua.is_empty() && sib_author.is_empty() && hint.is_none() && style_attr.is_none();
+        let mut style = None;
+        if simple {
+            style = plain.styles.borrow().iter().find(|(p, _)| Rc::ptr_eq(p, &parent_style)).map(|(_, s)| s.clone());
+        }
+        lap.lap(&mut timings.share_lookup);
+        let style = match style {
+            Some(s) => {
+                timings.fast_hits += 1;
+                s
             }
-        }
-        matched.clear();
-        author.matching_sensitive(&mut matcher, el, name, is_root, &ancestors, &mut matched);
-        for &i in &matched {
-            if let Some(r) = author.rules.get(i as usize) {
-                push_entries(&mut entries, r, author);
-            }
-        }
-        if let Some(h) = hints(doc, el) {
-            entries.push(Entry { key: (RANK_AUTHOR_NORMAL, 0, 0, 0), block: h, important: false, origin: Origin::Author });
-        }
-        if let Some(Some(sa)) = style_attrs.get(el as usize) {
-            entries.push(Entry {
-                key: (RANK_AUTHOR_NORMAL, u32::MAX, u32::MAX, u32::MAX),
-                block: sa.clone(),
-                important: false,
-                origin: Origin::Author,
-            });
-            entries.push(Entry {
-                key: (RANK_AUTHOR_IMPORTANT, 0, u32::MAX, u32::MAX),
-                block: sa.clone(),
-                important: true,
-                origin: Origin::Author,
-            });
-        }
-        entries.sort_by_key(|e| e.key);
-        let lang = doc.attr(el, a::LANG).filter(|l| !l.is_empty()).map(Rc::<str>::from);
-        // Style sharing: same parent style, same declarations in the same order, same language.
-        let parent_ptr = Rc::as_ptr(&parent_style) as usize;
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for e in &entries {
-            h = (h ^ (((e.block.id as u64) << 1) | e.important as u64)).wrapping_mul(0x100_0000_01b3);
-        }
-        if let Some(l) = &lang {
-            for b in l.bytes() {
-                h = (h ^ b as u64).wrapping_mul(0x100_0000_01b3);
-            }
-        }
-        let share_key = (parent_ptr, h);
-        let mut hit = None;
-        if let Some(list) = share.get(&share_key) {
-            for s in list {
-                if s.parent == parent_ptr
-                    && s.lang == lang
-                    && s.ids.len() == entries.len()
-                    && s.ids.iter().zip(entries.iter()).all(|(x, e)| x.0 == e.block.id && x.1 == e.important)
-                {
-                    hit = Some(s.style.clone());
-                    break;
-                }
-            }
-        }
-        let style = match hit {
-            Some(s) => s,
             None => {
-                let s = Rc::new(style_for(
-                    doc,
-                    &entries,
-                    &parent_style,
-                    &init,
-                    &env,
-                    root_font_size,
-                    lang.as_deref(),
-                    is_root,
-                    &mut var_cache,
-                ));
-                share.entry(share_key).or_default().push(ShareEntry {
-                    parent: parent_ptr,
-                    ids: entries.iter().map(|e| (e.block.id, e.important)).collect(),
-                    lang: lang.clone(),
-                    style: s.clone(),
-                });
+                for &i in &plain.ua {
+                    if let Some(r) = ua.rules.get(i as usize) {
+                        push_entries(&mut entries, r, ua);
+                    }
+                }
+                for &i in &plain.author {
+                    if let Some(r) = author.rules.get(i as usize) {
+                        push_entries(&mut entries, r, author);
+                    }
+                }
+                for &i in &sib_ua {
+                    if let Some(r) = ua.rules.get(i as usize) {
+                        push_entries(&mut entries, r, ua);
+                    }
+                }
+                for &i in &sib_author {
+                    if let Some(r) = author.rules.get(i as usize) {
+                        push_entries(&mut entries, r, author);
+                    }
+                }
+                if let Some(h) = hint {
+                    entries.push(Entry { key: (RANK_AUTHOR_NORMAL, 0, 0, 0), block: h, important: false, origin: Origin::Author });
+                }
+                if let Some(sa) = style_attr {
+                    entries.push(Entry {
+                        key: (RANK_AUTHOR_NORMAL, u32::MAX, u32::MAX, u32::MAX),
+                        block: sa.clone(),
+                        important: false,
+                        origin: Origin::Author,
+                    });
+                    entries.push(Entry {
+                        key: (RANK_AUTHOR_IMPORTANT, 0, u32::MAX, u32::MAX),
+                        block: sa.clone(),
+                        important: true,
+                        origin: Origin::Author,
+                    });
+                }
+                entries.sort_by_key(|e| e.key);
+                lap.lap(&mut timings.entries);
+                let lang = doc.attr(el, a::LANG).filter(|l| !l.is_empty()).map(Rc::<str>::from);
+                // Style sharing: same parent style, same declarations in the same order, same language.
+                let parent_ptr = Rc::as_ptr(&parent_style) as usize;
+                let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+                for e in &entries {
+                    h = (h ^ (((e.block.id as u64) << 1) | e.important as u64)).wrapping_mul(0x100_0000_01b3);
+                }
+                if let Some(l) = &lang {
+                    for b in l.bytes() {
+                        h = (h ^ b as u64).wrapping_mul(0x100_0000_01b3);
+                    }
+                }
+                let share_key = (parent_ptr, h);
+                let mut hit = None;
+                if let Some(list) = share.get(&share_key) {
+                    for s in list {
+                        if s.parent == parent_ptr
+                            && s.lang == lang
+                            && s.ids.len() == entries.len()
+                            && s.ids.iter().zip(entries.iter()).all(|(x, e)| x.0 == e.block.id && x.1 == e.important)
+                        {
+                            hit = Some(s.style.clone());
+                            break;
+                        }
+                    }
+                }
+                let s = match hit {
+                    Some(s) => {
+                        timings.share_hits += 1;
+                        s
+                    }
+                    None => {
+                        timings.share_misses += 1;
+                        lap.lap(&mut timings.share_lookup);
+                        let s = Rc::new(style_for(
+                            doc,
+                            &entries,
+                            &parent_style,
+                            &init,
+                            &env,
+                            root_font_size,
+                            lang.as_deref(),
+                            is_root,
+                            &mut var_cache,
+                        ));
+                        lap.lap(&mut timings.compute);
+                        share.entry(share_key).or_default().push(ShareEntry {
+                            parent: parent_ptr,
+                            ids: entries.iter().map(|e| (e.block.id, e.important)).collect(),
+                            lang: lang.clone(),
+                            style: s.clone(),
+                        });
+                        s
+                    }
+                };
+                if simple {
+                    let mut styles = plain.styles.borrow_mut();
+                    if styles.len() < MAX_STYLES_PER_ENTRY {
+                        styles.push((parent_style.clone(), s.clone()));
+                    }
+                }
                 s
             }
         };
@@ -719,7 +907,7 @@ pub fn compute_styles(input: StyleInput<'_>) -> StyleTree {
         let first = if doc.is_template(el) { NONE } else { doc.first_child(el) };
         frames.push(Frame { style, next: first, keys_start, ctx: mix(parent_ctx, sig) });
     }
-    StyleTree { styles }
+    StyleTree { styles, timings }
 }
 
 fn push_entries(entries: &mut Vec<Entry>, r: &IndexedRule, set: &RuleSet) {

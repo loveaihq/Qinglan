@@ -19,6 +19,7 @@ pub mod types;
 pub mod values;
 
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use cascade::{ImportResolver, Origin, RuleSet, StyleInput, StyleTree, compute_styles};
 use computed::Env;
@@ -53,11 +54,13 @@ impl ResourceLoader for NoResources {
 pub struct StyleOptions {
     pub viewport_w: f32,
     pub viewport_h: f32,
+    /// Measure where the time goes (see [`StyleTimings`]); off by default because it reads the clock per element.
+    pub profile: bool,
 }
 
 impl Default for StyleOptions {
     fn default() -> Self {
-        StyleOptions { viewport_w: 1280.0, viewport_h: 1000.0 }
+        StyleOptions { viewport_w: 1280.0, viewport_h: 1000.0, profile: false }
     }
 }
 
@@ -69,6 +72,24 @@ pub struct StyleOutput {
     pub author_rules: usize,
     /// Style sheets that could not be loaded.
     pub missing: Vec<String>,
+    /// Time per phase; the durations are zero unless `StyleOptions::profile` was set.
+    pub timings: StyleTimings,
+}
+
+/// Time spent in the phases of [`style_document`] outside the per-element cascade (which has its own
+/// breakdown in `StyleTree::timings`).
+#[derive(Clone, Debug, Default)]
+pub struct StyleTimings {
+    /// `ResourceLoader` calls for linked sheets.
+    pub load_sheets: Duration,
+    /// Tokenizing and parsing the style sheets (built-in one included).
+    pub parse_sheets: Duration,
+    /// Media queries, `@layer`, selector bucketing: `RuleSet::add_sheet`.
+    pub index_rules: Duration,
+    /// Parsing `style=""` attributes.
+    pub style_attrs: Duration,
+    /// `compute_styles` as a whole.
+    pub cascade: Duration,
 }
 
 enum SourceKind {
@@ -230,16 +251,22 @@ pub fn style_document_with(
     let media_env = MediaEnv::screen(opts.viewport_w, opts.viewport_h);
     let mut var_id = 0u32;
     let mut block_id = 0u32;
+    let mut timings = StyleTimings::default();
+    let mut clock = Clock::new(opts.profile);
 
     // Built-in style sheet.
     let mut ua = RuleSet::new();
     {
         let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks: false, var_id: &mut var_id, block_id: &mut block_id };
         let sheet = parse_stylesheet(UA_CSS, &mut ctx);
+        clock.lap(&mut timings.parse_sheets);
         ua.add_sheet(&sheet, Origin::UserAgent, &media_env, &mut NoImports);
+        clock.lap(&mut timings.index_rules);
         if quirks {
             let q = parse_stylesheet(UA_QUIRKS_CSS, &mut ctx);
+            clock.lap(&mut timings.parse_sheets);
             ua.add_sheet(&q, Origin::UserAgent, &media_env, &mut NoImports);
+            clock.lap(&mut timings.index_rules);
         }
     }
 
@@ -258,6 +285,7 @@ pub fn style_document_with(
         if !mq.matches(&media_env) {
             continue;
         }
+        clock.reset();
         let (text, url) = match src.kind {
             SourceKind::Inline(t) => (t, None),
             SourceKind::Link(u) => match loader.load_stylesheet(&u) {
@@ -268,11 +296,13 @@ pub fn style_document_with(
                 }
             },
         };
+        clock.lap(&mut timings.load_sheets);
         sheets += 1;
         let sheet = {
             let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks, var_id: &mut var_id, block_id: &mut block_id };
             parse_stylesheet(&text, &mut ctx)
         };
+        clock.lap(&mut timings.parse_sheets);
         let chain = vec![url.or_else(|| base.clone()).unwrap_or_else(|| Url::parse("about:blank", None).unwrap_or_else(|_| empty_url()))];
         let mut resolver = Resolver {
             atoms: &mut doc.atoms,
@@ -285,9 +315,12 @@ pub fn style_document_with(
             chain,
         };
         author.add_sheet(&sheet, Origin::Author, &media_env, &mut resolver);
+        // `@import`ed sheets are loaded and parsed inside `add_sheet`; their time lands here, with the indexing.
+        clock.lap(&mut timings.index_rules);
     }
 
     // `style` attributes (memoized by text).
+    clock.reset();
     let mut attr_texts: Vec<(NodeId, String)> = Vec::new();
     for n in 0..doc.nodes.len() as NodeId {
         if let Some(e) = doc.element(n)
@@ -316,6 +349,7 @@ pub fn style_document_with(
         }
     }
 
+    clock.lap(&mut timings.style_attrs);
     let mut hints = presentational::HintBuilder::new(doc);
     let author_rules = author.len();
     let tree = {
@@ -327,9 +361,34 @@ pub fn style_document_with(
             style_attrs: &style_attrs,
             env: Env::new(opts.viewport_w, opts.viewport_h, platform),
             hints: &mut hint_fn,
+            profile: opts.profile,
         })
     };
-    StyleOutput { tree, sheets, author_rules, missing }
+    clock.lap(&mut timings.cascade);
+    StyleOutput { tree, sheets, author_rules, missing, timings }
+}
+
+/// A stopwatch that does nothing when profiling is off.
+struct Clock(Option<Instant>);
+
+impl Clock {
+    fn new(on: bool) -> Clock {
+        Clock(on.then(Instant::now))
+    }
+
+    fn lap(&mut self, acc: &mut Duration) {
+        if let Some(t) = self.0 {
+            let now = Instant::now();
+            *acc += now - t;
+            self.0 = Some(now);
+        }
+    }
+
+    fn reset(&mut self) {
+        if self.0.is_some() {
+            self.0 = Some(Instant::now());
+        }
+    }
 }
 
 struct NoImports;

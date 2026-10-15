@@ -120,7 +120,7 @@ fn main() -> ExitCode {
         "style" => {
             let url = file_url(file);
             let mut loader = FileLoader { page_encoding: encoding };
-            let out = style_document(&mut doc, url.as_ref(), &mut loader, &StyleOptions { viewport_w: width, viewport_h: height });
+            let out = style_document(&mut doc, url.as_ref(), &mut loader, &StyleOptions { viewport_w: width, viewport_h: height, ..StyleOptions::default() });
             let t_style = t0.elapsed();
             print!("{}", dump_styles(&doc, &out.tree));
             if doc.too_large {
@@ -150,7 +150,7 @@ fn main() -> ExitCode {
             let platform = TestPlatform;
             let url = file_url(file);
             let mut loader = FileLoader { page_encoding: encoding };
-            let sopts = StyleOptions { viewport_w: width, viewport_h: height };
+            let sopts = StyleOptions { viewport_w: width, viewport_h: height, ..StyleOptions::default() };
             let out = style_document_with(&mut doc, url.as_ref(), &mut loader, &sopts, Some(&platform as &dyn Platform));
             let t_style = t0.elapsed();
             let res = layout_document(&doc, &out.tree, &platform, &LayoutOptions { viewport_w: width, viewport_h: height });

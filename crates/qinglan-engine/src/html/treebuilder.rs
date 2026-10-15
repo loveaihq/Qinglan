@@ -48,12 +48,17 @@ enum Scope {
 }
 
 /// An entry of the list of active formatting elements (13.2.4.3).
+///
+/// The spec keeps the start tag token with each entry; here the entry has the element and its name, and the
+/// attributes are read from the element when a token is needed (the element's attributes never change:
+/// only `html` and `body` get attributes merged in, and they are not formatting elements). That saves
+/// copying the attributes of every `<a>`, `<b>`, `<i>` ...
 #[derive(Clone)]
 enum Afe {
     Marker,
     /// Position holder used only inside the adoption agency algorithm.
     Bookmark,
-    Entry { node: NodeId, token: TagToken },
+    Entry { node: NodeId, name: Atom },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -215,7 +220,7 @@ impl TreeBuilder {
                 // all white space runs only in the frameset modes, which keep white space but drop text.
                 let fine = matches!(self.mode, Mode::InFrameset | Mode::AfterFrameset | Mode::AfterAfterFrameset);
                 let lead = s.len() - s.trim_start_matches(is_ws_char).len();
-                if !fine && !s.contains('\0') && (lead == 0 || lead == s.len()) {
+                if !fine && !s.contains('\0') && (lead == 0 || lead == s.len() || matches!(self.mode, Mode::InBody)) {
                     self.dispatch_one(Token::Text(s));
                     return;
                 }
@@ -625,6 +630,26 @@ impl TreeBuilder {
         self.insert_node((parent, before), n);
     }
 
+    /// Like `insert_char`, for an owned string: a new text node takes it over instead of copying it.
+    fn insert_char_owned(&mut self, s: String) {
+        let (parent, before) = self.appropriate_place(None);
+        if matches!(self.doc.node(parent).map(|n| &n.data), Some(NodeData::Document) | None) {
+            return;
+        }
+        let prev = if before != NONE { self.doc.prev_sibling(before) } else { self.doc.last_child(parent) };
+        if let Some(node) = self.doc.node_mut(prev)
+            && let NodeData::Text(t) = &mut node.data
+        {
+            t.push_str(&s);
+            return;
+        }
+        if !self.can_alloc() {
+            return;
+        }
+        let n = self.doc.alloc(NodeData::Text(s));
+        self.insert_node((parent, before), n);
+    }
+
     /// "Insert a comment" / "insert a processing instruction"; `target` overrides the location (always appended).
     fn insert_misc(&mut self, data: NodeData, target: Option<NodeId>) {
         let loc = match target {
@@ -669,16 +694,22 @@ impl TreeBuilder {
         self.afe.iter().position(|e| matches!(e, Afe::Entry { node: n, .. } if *n == node))
     }
 
-    fn push_afe(&mut self, node: NodeId, token: TagToken) {
+    /// The start tag the element `node` (an entry of the list of active formatting elements) was created for.
+    fn afe_token(&self, node: NodeId, name: Atom) -> TagToken {
+        TagToken { name, attrs: self.doc.element(node).map(|e| e.attrs.clone()).unwrap_or_default(), self_closing: false }
+    }
+
+    fn push_afe(&mut self, node: NodeId, name: Atom) {
         // Noah's Ark clause: at most three identical entries after the last marker.
         let mut same = 0usize;
         let mut earliest = None;
+        let new_attrs: &[Attribute] = self.doc.element(node).map_or(&[], |e| e.attrs.as_slice());
         for (i, e) in self.afe.iter().enumerate().rev() {
             match e {
                 Afe::Marker => break,
                 Afe::Bookmark => {}
-                Afe::Entry { token: t, .. } => {
-                    if t.name == token.name && Self::same_attrs(&t.attrs, &token.attrs) {
+                Afe::Entry { node: n, name: nm } => {
+                    if *nm == name && Self::same_attrs(self.doc.element(*n).map_or(&[], |e| e.attrs.as_slice()), new_attrs) {
                         same += 1;
                         earliest = Some(i);
                     }
@@ -690,7 +721,7 @@ impl TreeBuilder {
         {
             self.afe.remove(i);
         }
-        self.afe.push(Afe::Entry { node, token });
+        self.afe.push(Afe::Entry { node, name });
     }
 
     fn same_attrs(x: &[Attribute], y: &[Attribute]) -> bool {
@@ -723,14 +754,15 @@ impl TreeBuilder {
         }
         // Create.
         while i < self.afe.len() {
-            let Some(Afe::Entry { token, .. }) = self.afe.get(i).cloned() else {
+            let Some(Afe::Entry { node: old, name }) = self.afe.get(i).cloned() else {
                 i += 1;
                 continue;
             };
-            let (node, pushed) = self.insert_element(token.name, Namespace::Html, token.attrs.clone());
+            let token = self.afe_token(old, name);
+            let (node, pushed) = self.insert_element(token.name, Namespace::Html, token.attrs);
             if pushed {
                 if let Some(slot) = self.afe.get_mut(i) {
-                    *slot = Afe::Entry { node, token };
+                    *slot = Afe::Entry { node, name };
                 }
             } else {
                 // Depth limit: the clone is not on the stack; drop the entry.
@@ -764,7 +796,7 @@ impl TreeBuilder {
             for (i, e) in self.afe.iter().enumerate().rev() {
                 match e {
                     Afe::Marker => break,
-                    Afe::Entry { token, .. } if token.name == subject => {
+                    Afe::Entry { name, .. } if *name == subject => {
                         fe_idx = Some(i);
                         break;
                     }
@@ -775,10 +807,11 @@ impl TreeBuilder {
                 self.any_other_end_tag(subject);
                 return;
             };
-            let (fe, fe_token) = match self.afe.get(fe_idx) {
-                Some(Afe::Entry { node, token }) => (*node, token.clone()),
+            let (fe, fe_name) = match self.afe.get(fe_idx) {
+                Some(Afe::Entry { node, name }) => (*node, *name),
                 _ => return,
             };
+            let fe_token = self.afe_token(fe, fe_name);
             let Some(fe_pos) = self.open.iter().position(|&n| n == fe) else {
                 self.afe.remove(fe_idx);
                 return;
@@ -824,12 +857,12 @@ impl TreeBuilder {
                 };
                 // Replace the node with a fresh element for its token.
                 let token = match self.afe.get(node_afe_idx) {
-                    Some(Afe::Entry { token, .. }) => token.clone(),
+                    Some(Afe::Entry { node: n, name }) => self.afe_token(*n, *name),
                     _ => break,
                 };
-                let new_el = self.create_element(token.name, Namespace::Html, token.attrs.clone());
+                let new_el = self.create_element(token.name, Namespace::Html, token.attrs);
                 if let Some(slot) = self.afe.get_mut(node_afe_idx) {
-                    *slot = Afe::Entry { node: new_el, token };
+                    *slot = Afe::Entry { node: new_el, name: token.name };
                 }
                 if let Some(slot) = self.open.get_mut(node_pos) {
                     *slot = new_el;
@@ -864,10 +897,10 @@ impl TreeBuilder {
             match bm {
                 Some(b) => {
                     if let Some(slot) = self.afe.get_mut(b) {
-                        *slot = Afe::Entry { node: new_el, token: fe_token };
+                        *slot = Afe::Entry { node: new_el, name: fe_name };
                     }
                 }
-                None => self.afe.push(Afe::Entry { node: new_el, token: fe_token }),
+                None => self.afe.push(Afe::Entry { node: new_el, name: fe_name }),
             }
             if let Some(i) = self.open.iter().position(|&n| n == fe) {
                 self.open.remove(i);
@@ -1183,8 +1216,9 @@ impl TreeBuilder {
                     return;
                 }
                 self.reconstruct_afe();
-                self.insert_char(&s);
-                if !is_ws_str(&s) {
+                let ws = is_ws_str(&s);
+                self.insert_char_owned(s);
+                if !ws {
                     self.frameset_ok = false;
                 }
             }
@@ -1320,7 +1354,7 @@ impl TreeBuilder {
                     .rev()
                     .take_while(|e| !matches!(e, Afe::Marker))
                     .find_map(|e| match e {
-                        Afe::Entry { node, token } if token.name == a::A => Some(*node),
+                        Afe::Entry { node, name } if *name == a::A => Some(*node),
                         _ => None,
                     });
                 if let Some(node) = existing {
@@ -1481,10 +1515,10 @@ impl TreeBuilder {
     }
 
     fn insert_formatting(&mut self, t: TagToken) {
-        let copy = t.clone();
-        let (node, pushed) = self.insert_element(t.name, Namespace::Html, t.attrs);
+        let name = t.name;
+        let (node, pushed) = self.insert_element(name, Namespace::Html, t.attrs);
         if pushed {
-            self.push_afe(node, copy);
+            self.push_afe(node, name);
         }
     }
 

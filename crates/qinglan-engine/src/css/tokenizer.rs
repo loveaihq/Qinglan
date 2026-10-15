@@ -140,6 +140,16 @@ impl Lexer {
 
     /// "Consume an ident sequence".
     fn consume_name(&mut self) -> String {
+        // Fast path: a run of name characters, no escape: one exactly sized string.
+        let start = self.pos;
+        let mut end = start;
+        while self.chars.get(end).is_some_and(|&c| is_name(c)) {
+            end += 1;
+        }
+        if self.chars.get(end) != Some(&'\\') {
+            self.pos = end;
+            return self.chars.get(start..end).unwrap_or(&[]).iter().collect();
+        }
         let mut s = String::with_capacity(16);
         loop {
             match self.at(0) {
@@ -494,7 +504,7 @@ pub fn tokenize(input: &str) -> Vec<Token> {
         }
     }
     let mut lx = Lexer { chars, pos: 0 };
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(input.len() / 6 + 16);
     while let Some(t) = lx.next_token() {
         out.push(t);
     }

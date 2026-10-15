@@ -57,7 +57,7 @@ pub fn layout_page(src: &str, vw: f32, vh: f32) -> String {
     let platform = TestPlatform;
     let decoded = decode_document(src.as_bytes(), None, &BasicPlatform);
     let mut doc = parse_document(decoded.text);
-    let sopts = StyleOptions { viewport_w: vw, viewport_h: vh };
+    let sopts = StyleOptions { viewport_w: vw, viewport_h: vh, ..StyleOptions::default() };
     let styled = style_document_with(&mut doc, None, &mut NoResources, &sopts, Some(&platform as &dyn Platform));
     let res = layout_document(&doc, &styled.tree, &platform, &LayoutOptions { viewport_w: vw, viewport_h: vh });
     dump_layout(&doc, &res)

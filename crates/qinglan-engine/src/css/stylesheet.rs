@@ -29,7 +29,8 @@ pub struct SheetCtx<'a> {
 }
 
 pub struct StyleRule {
-    pub selectors: Vec<Selector>,
+    /// Shared with the rule index (`Rc`), so indexing a rule does not copy its selector.
+    pub selectors: Vec<Rc<Selector>>,
     pub block: Rc<DeclBlock>,
 }
 
@@ -137,7 +138,7 @@ fn style_rule(r: RawRule, ctx: &mut SheetCtx<'_>) -> Option<StyleRule> {
         let mut pc = ParseCtx { atoms: ctx.atoms, quirks: ctx.quirks, depth: 0 };
         parse_selector_list(&r.prelude, &mut pc, false, true)?
     };
-    let selectors: Vec<Selector> = selectors.into_iter().filter(|s| s.compounds.len() <= MAX_COMPOUNDS).collect();
+    let selectors: Vec<Rc<Selector>> = selectors.into_iter().filter(|s| s.compounds.len() <= MAX_COMPOUNDS).map(Rc::new).collect();
     if selectors.is_empty() {
         return None;
     }

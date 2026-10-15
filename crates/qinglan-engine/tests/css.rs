@@ -13,7 +13,7 @@ struct Page {
 
 fn page_w(html: &str, width: f32) -> Page {
     let mut doc = parse_document(html.to_string());
-    let out = style_document(&mut doc, None, &mut NoResources, &StyleOptions { viewport_w: width, viewport_h: 800.0 });
+    let out = style_document(&mut doc, None, &mut NoResources, &StyleOptions { viewport_w: width, viewport_h: 800.0, ..StyleOptions::default() });
     Page { doc, tree: out.tree }
 }
 
