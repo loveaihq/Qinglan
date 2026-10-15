@@ -7,10 +7,12 @@
 //!
 //! The trait is object-safe (`&dyn Platform` everywhere) and mentions no Windows types. Sizes are
 //! CSS px as `f32`; the engine converts them to its 1/64 px layout units itself.
-//! Images and the network are added in 1c.
+//! Images ([`image::ImageDecoder`]) and the network ([`crate::net`]) are separate, thread-safe interfaces added in 1c.
 
+pub mod image;
 pub mod test;
 
+pub use image::{DecodedCache, DecodedImage, ImageDecoder, ImageError, ImageInfo, NoImages, is_truncated};
 pub use test::TestPlatform;
 
 use crate::css::types::FontFamily;

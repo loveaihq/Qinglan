@@ -5,6 +5,8 @@
 #![allow(non_snake_case, non_camel_case_types, clippy::upper_case_acronyms)]
 
 pub mod dwrite;
+pub mod wic;
+pub mod winhttp;
 
 pub type HRESULT = i32;
 pub type BOOL = i32;

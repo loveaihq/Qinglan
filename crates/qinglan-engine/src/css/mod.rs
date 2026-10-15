@@ -8,6 +8,7 @@ pub mod cascade;
 pub mod color;
 mod color_names;
 pub mod computed;
+pub mod import_scan;
 pub mod media;
 pub mod parse_prop;
 pub mod presentational;
@@ -103,7 +104,7 @@ struct Source {
 }
 
 /// `<base href>` (HTML 4.2.3 "document base URL").
-fn base_url(doc: &Document, doc_url: Option<&Url>) -> Option<Url> {
+pub fn base_url(doc: &Document, doc_url: Option<&Url>) -> Option<Url> {
     for n in 0..doc.nodes.len() as NodeId {
         if doc.is_html_element(n, a::BASE)
             && let Some(href) = doc.attr(n, a::HREF)
@@ -418,3 +419,24 @@ fn _keep(_: NodeId) -> NodeId {
     NONE
 }
 pub mod dump;
+
+pub use import_scan::scan_imports;
+
+/// The addresses of the `<link rel=stylesheet>` sheets that apply at the viewport in `opts` (their
+/// `media` matches), in document order and resolved against the document base URL: what the network
+/// code fetches before [`style_document`] runs.
+pub fn linked_stylesheets(doc: &Document, doc_url: Option<&Url>, opts: &StyleOptions) -> Vec<Url> {
+    let base = base_url(doc, doc_url);
+    let media_env = MediaEnv::screen(opts.viewport_w, opts.viewport_h);
+    collect_sources(doc, base.as_ref())
+        .into_iter()
+        .filter_map(|s| match s.kind {
+            SourceKind::Link(u) => {
+                let mq = MediaQueryList::parse(&syntax::parse_cvs(&s.media));
+                mq.matches(&media_env).then_some(u)
+            }
+            SourceKind::Inline(_) => None,
+        })
+        .take(MAX_SHEETS)
+        .collect()
+}

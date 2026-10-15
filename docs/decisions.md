@@ -351,3 +351,97 @@
 - 1b 验收第 4 条（中文维基长条目排版 ≤ 100 毫秒）**按冷启动算没有达到**：每次新开进程量，整页排版中位数约 134 毫秒（优化前约 158 毫秒）；同一进程里热缓存的中位数约 45 毫秒，不代表用户第一次打开网页的情况。
 - 剩下的主要是 DirectWrite 自己整形每个字形的开销（约 1.3 微秒 × 约 3.5 万个字形），加上第一次读字体表约 18 毫秒。
 - 用户同意 1b 先到这里，首屏速度在 1c 解决：启动时在后台预热字体，第一次排版先排第一屏，1c 验收改量端到端的冷启动首屏时间（≤ 200 毫秒）。多线程整形留作备用办法。
+
+## 第 1 层 · 1c-1 网络、录制回放、图片解码
+
+代码：引擎（纯 Rust，`forbid(unsafe_code)`）里 `net/`（`mod.rs` 类型和 `Transport`、`policy.rs`、`loader.rs`、`cache.rs`、`content.rs`、`data_url.rs`、`file.rs`、`page.rs`、`blocking.rs`、`replay.rs`）、`lru.rs`（按字节计数的 LRU，响应缓存和解码缓存共用）、`platform/image.rs`（`ImageDecoder`、`DecodedCache`、`is_truncated`）、`css/import_scan.rs`、`css::linked_stylesheets`；`qinglan-win` 里 `sys/winhttp.rs`、`sys/wic.rs`（`unsafe` 只在这两个文件）、`net.rs`（`WinHttpTransport`）、`images.rs`（`WicDecoder`）；`qinglan-cli` 加 `record` 和 `--replay`，`dom`/`style`/`layout` 现在也能吃网址。测试：`crates/qinglan-engine/tests/net.rs`（假传输）、`crates/qinglan-win/tests/net.rs`（本地 HTTP 服务器 + WinHTTP）、`crates/qinglan-win/tests/images.rs`（WIC）、各模块里的单元测试；夹具在 `crates/qinglan-win/tests/fixtures/`（小图片和两个 gzip 文件，共约 110 KB，其中炸弹 100 KB）。
+
+### 分层：策略在引擎，传输在平台
+
+- **`Transport` 是阻塞的**：`fn fetch(&self, &Request) -> Result<Response, NetError>`，`Send + Sync`。任务单写"传输 trait 是异步的"，这里的异步放在 `Loader`：它自己开工作线程（每个请求一个线程，栈 1 MB，最多 16 个同时跑）调 `fetch`，结果通过 `mpsc` 通道送回，并调一次 `wake` 回调（1c-2 里是 `PostMessage`）。这样传输实现（WinHTTP、回放、录制）都很简单，并发上限、优先级、取消都只在一处。界面线程只调 `submit`（不阻塞）和 `poll`（不阻塞）；`wait(超时)` 给命令行和测试用。
+- **`Loader`（`net/loader.rs`）**：`submit(LoadRequest { url, kind, page, use_cache }) -> Result<Ticket, Refusal>`（策略当场拒绝就是 `Err`，不会有事件）；之后每个 ticket 恰好一个 `LoadEvent { ticket, url, result: Result<Arc<Response>, NetError>, from_cache }`。HTTP 4xx/5xx 是 `Ok`（页面显示网站给的内容）。`cancel_all()`：清空队列、给运行中的请求置取消标志、之后到的旧结果一律丢掉。
+- **并发和优先级**：每个主机（协议+主机+端口）≤ 6，总共 ≤ 16；等待队列分三档（页面 > 样式表 > 图片），同档先进先出，某主机满了就跳过它去启动别的；等待加就绪的请求超过 4096 个就拒绝（`Refusal::QueueFull`，防"10 万张图片"）。`file:` 和 `data:` 不占主机名额。
+- **大小上限**由 `ResourceKind` 决定（页面、样式表 16 MB，图片 32 MB），放进 `Request::max_bytes` 交给传输在流式读取时执行；`Loader` 在传输返回后再核对一次（传输忘了也不会放过）。
+- **取消的代价**：运行中的请求不能硬中断（WinHTTP 同步调用），只是每次读之间检查取消标志；结果被丢掉。
+
+### 子资源规则（`policy::plan`，任务单第 13 节）
+
+- `http`/`https`：都可以；**https 页面的 http 子资源**（样式表、图片）拒绝（`MixedContent`）。https 页面里点 http 链接（导航）不算混合内容。
+- `data:`：只能做子资源（`Plan::Data`，不经过传输，`Loader` 当场解码后作为一个就绪事件交出）；当整页打开拒绝（`DataDocument`）。
+- `file:`：用户从地址栏/命令行打开才行；**任何页面里的 `file:` 链接一律不跟**。**偏离/理解**：任务单写"网页里的 `file:` 链接和子资源一律不加载"。如果照字面做，本地保存的网页（包括 `tests/pages`、命令行的 `layout 某.html`）连自己的样式表和图片都读不到，所以做成：**本身是 `file:` 的页面可以加载 `file:` 子资源**（样式表、图片），http(s)/data 页面不行（`LocalFile`）。要改回字面意思只需改 `policy::plan` 里一行。
+- `mailto:` → `Refusal::Mailto`（窗口弹确认再交给系统，1c-2）；`javascript:` → `Refusal::Javascript`（状态栏提示）；其他协议 → `UnsupportedScheme`。
+- `data:` 自己解码（`data_url.rs`）：Fetch 的 "data: URL processor"，百分号解码用 1a 的 `percent_decode`，base64 是 Infra 的 forgiving-base64（去空白、末尾最多两个 `=`、长度模 4 余 1 失败、非法字符失败）；先按长度估算再分配，超上限报 `TooLarge`。MIME 为空时按规范补 `text/plain;charset=US-ASCII`。
+
+### Referer 和请求头
+
+- **Referer**（`policy::referer`，Referrer Policy `strict-origin-when-cross-origin`）：同源 → 页面完整地址（去掉用户名、密码、片段）；跨源 → 只有源（`https://example.com/`）；https 页面请求 http（降级）→ 不发；`file:`/`data:` 页面不发；完整地址超过 4096 字符改发源。"同源"按 `Url::origin()` 比（协议+主机+端口都得一样）。页面本身（用户输入的地址）不带 Referer。
+- 其他请求头：`Accept`（按类型：页面、样式表 `text/css,*/*;q=0.1`、图片列出常见格式）、`User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) qinglan/0.1`（任务单；常量 `net::USER_AGENT`，由传输设置）、`Accept-Encoding: gzip, deflate`（WinHTTP 开了解压就自动加）。**不发 `Accept-Language`**（任务单没写；发了就会泄露系统语言，网站按网址的语言版本也能工作）。不发 Cookie、也不处理 `Set-Cookie`（WinHTTP 的 `DISABLE_FEATURE` 关了 Cookie）。
+
+### 响应缓存（给前进后退）
+
+- `net/cache.rs`：LRU，预算 **16 MB**，按响应体字节加头和地址的估算计；只存 2xx，`Cache-Control` 含 `no-store` 的不存；键是去掉片段的请求地址。**只有 `use_cache: true` 的请求才会读缓存**（前进后退用），普通打开和刷新走网络，但成功的响应总是存进去。单个响应比预算还大就不存。
+
+### 非 HTML 响应（`net/content.rs`，任务单第 13 节）
+
+- 按 `Content-Type` 的媒体类型分：`text/html`、`application/xhtml+xml` → HTML；`text/plain` → 纯文本（`blocking::open` 把它包成 `<pre>`，开头加一个换行，解析器会吞掉它，所以原文的首行换行不丢）；`image/*` → 图片单独显示（造一个只有 `<img src=原地址>` 的页面，图片响应已在缓存里，所以不会下两次）；其他 → `Unsupported { mime }`，窗口显示"第 1 层暂不支持下载"和网址。
+- **没有 `Content-Type`** 时：看开头几个字节（PNG/JPEG/GIF/BMP/ICO/WebP 签名、SVG）→ 图片，否则当 HTML。`file:` 响应没有头，由 `net/file.rs` 按扩展名补 `Content-Type`（`html/htm/xhtml` → HTML，`txt/text/log/md` → 纯文本，`css`，图片格式），不认识的扩展名没有类型，走上面的嗅探，结果多半是 HTML。
+- `application/octet-stream` 不嗅探，直接算"不支持"。
+
+### 发现样式表和图片（`net/page.rs`）
+
+- **样式表**：`css::linked_stylesheets(doc, url, opts)` 复用 1a 的 `collect_sources`（`<link rel=stylesheet>`，`media` 匹配，按文档顺序，相对 `<base>` 解析）。`@import` 用 `css::scan_imports(text)`：**不解析整张样式表**，只手工扫开头（空白、注释、`@charset`、`@layer a, b;`、`@import`），遇到第一条别的规则就停；认 `"x"`、`'x'`、`url(x)`、`url("x")`。这样 200 KB 的样式表也只花几微秒。引擎自己也只认开头的 `@import`，两边一致。
+- 流程：`PageResources::start_sheets` 提交 `<link>`；每个到达的样式表用 `decode_stylesheet`（响应头 charset、BOM、`@charset`、页面编码）解码，再提交它的 `@import`（深度 ≤ 8，总数 ≤ `MAX_SHEETS` = 64，同一地址只取一次，所以 `@import` 循环自然停止）；`sheets_pending() == 0`（或窗口等了 5 秒放弃）后调 `style_document_with(.., &mut resources, ..)`——`PageResources` 实现 `ResourceLoader`，把取到的文本交给样式引擎，没取到的算 `missing`。失败原因（HTTP 404、混合内容、超时……）可用 `failed_sheets()` 查。
+- **图片**：`LayoutResult::images`（1b-2 的 `ImageRequest`）→ `request_images`：`src` 按文档的 base URL 解析，同一地址在途时多个节点共用一次请求，同一节点同一地址不重复请求，**每页最多 2000 个不同图片地址**（超出的当坏图），策略拒绝的（混合内容等）立刻返回节点号让调用方标坏图。到达的图片以 `Update::Image { nodes, result }` 交出，调用方用 `probe_response`（SVG 直接 `Svg` 错误→`alt`；其余交给解码器的 `probe`）+ `apply_probe` 填 `ImageSizes`，再重新排版。
+- `net/blocking.rs` 是同样逻辑的阻塞版（命令行、测试用）：`open`（取页面→分类→解码→解析）、`load_sheets`、`load_images`。窗口（1c-2）不用它，直接用事件。
+
+### WinHTTP（`sys/winhttp.rs`、`net.rs`）
+
+- 函数全部手写声明（`winhttp.h`，SDK 10.0.26100.0）：`WinHttpOpen/Connect/OpenRequest/SendRequest/ReceiveResponse/QueryHeaders/QueryDataAvailable/ReadData/SetOption/SetTimeouts/CloseHandle`。`Handle` 是带 `Drop` 的句柄包装，`unsafe impl Send/Sync`（WinHTTP 句柄可跨线程用，注释里写明）。
+- 会话：`WinHttpOpen` 用 `AUTOMATIC_PROXY`（系统/WPAD/PAC），Windows 8.1 以前退回 `DEFAULT_PROXY`；`ENABLE_HTTP_PROTOCOL = HTTP2`（Windows 10 1607+，设置失败不致命）；`MAX_CONNS_PER_SERVER = 6`。请求：`DISABLE_FEATURE = COOKIES | REDIRECTS | AUTHENTICATION`（关 Cookie、自动重定向、自动认证；设置失败当错误，因为 Cookie 必须关）、`REDIRECT_POLICY = NEVER`、`DECOMPRESSION = ALL`（gzip+deflate 由 WinHTTP 解）、`WINHTTP_FLAG_ESCAPE_DISABLE`（地址已经是规范序列化，不要它再转义）、`CONNECT_RETRIES = 0`、`RECEIVE_RESPONSE_TIMEOUT`。
+- **重定向自己跟**（不用 WinHTTP 的自动重定向）：每一跳都检查——最多 10 次（`TooManyRedirects`，重定向循环 11 次请求后停）、只去 http/https、**https → http 拒绝**（`BadRedirect`）、地址解析失败拒绝；`Response::url` 是最后一跳的地址（片段去掉）。
+- **大小上限数解压后的字节**：`Content-Length` 超上限立刻拒绝（不读正文）；之后每读一块就累加，超了停下报 `TooLarge`。gzip 炸弹测试（100 MB 零，压缩后 100 KB）在 16 MB 处停止，不到 0.1 秒。
+- **读正文要先 `QueryDataAvailable`**：只调 `WinHttpReadData(64 KB)` 时，一个每 100 毫秒发 1 字节的服务器会让这一次读一直等下去（实测，WinHTTP 同步读会等缓冲区填满），总超时就没用了。先问有多少数据（到数据就返回），再按这个数读，每次调用都很短，循环里每次检查总截止时间和取消标志，并把接收超时设成"剩余时间"。
+- **超时**：连接（含域名解析）默认 15 秒，总共 60 秒；`WinHttpConfig { connect_timeout, total_timeout, max_redirects, user_agent }` 可配置（测试里用 1.5 秒）。**已知的怪事**：对一个收了请求就再也不回应的服务器，`WinHttpSendRequest` 本身要约 4.0 秒才返回（与设置的超时无关，实测总时限 1.5 秒和 3 秒都是 4.0 秒），之后 `ReceiveResponse` 立刻按超时失败；所以这种服务器在短总时限下会超出，默认 60 秒下无影响（最多比 60 秒多几秒）。原因没查清。
+- **证书**：不设任何忽略证书的选项；`ERROR_WINHTTP_SECURE_FAILURE`（12175）和各种证书错误码（日期、名称、CA、吊销、用途、通道错误）映射成 `NetError::Tls(说明)`，没有"继续访问"。映射表在 `net::map_error`（有单元测试）；其他错误：12002 → `Timeout`，12007 → `Dns`，12029/12030/12031/12163 → `Connect`，12152 → `Protocol`，12156 → `BadRedirect`，12017 → `Cancelled`，其余 → `Other(代码)`。
+- `unsafe`：本步新增在 `sys/winhttp.rs`（15 个块 + 2 个 `unsafe impl` + 2 个 `extern` 块）和 `sys/wic.rs`（21 个块 + 1 个 `unsafe fn` + 2 个 `extern` 块），每处都有 `SAFETY` 说明。
+
+### 图片（WIC，`sys/wic.rs`、`images.rs`）
+
+- COM 声明手写自 `wincodec.h`：`IWICImagingFactory` 第 4/10/11 槽（`CreateDecoderFromStream`、`CreateFormatConverter`、`CreateBitmapScaler`），`IWICBitmapDecoder` 第 13 槽（`GetFrame`），`IWICBitmapSource` 第 3/7 槽（`GetSize`、`CopyPixels`），转换器和缩放器的 `Initialize` 第 8 槽；槽号逐个数过头文件里的方法顺序，写在文件开头。字节流用 `SHCreateMemStream`（拷贝一份进 `IStream`），省掉 `IWICStream` 的声明。
+- 线程：`WicDecoder` 无状态、`Send + Sync`，每次调用在本线程上 `CoInitializeEx(MULTITHREADED)`（线程局部守卫，线程结束时 `CoUninitialize`；线程已是 STA 时 `RPC_E_CHANGED_MODE` 不处理，WIC 两种都能用）并创建自己的工厂，所以能在工作线程上解码。测试 8 个线程各解 20 次。
+- `probe`（只读头）：`CreateDecoderFromStream`（元数据按需）→ 第 0 帧 → `GetSize`；超过 **1 亿像素**（`MAX_IMAGE_PIXELS`，10000×10000 刚好允许）→ `TooLarge`，不解码。`decode(bytes, w, h)`：第 0 帧（GIF 取第一帧）→ `FormatConverter` 到 `32bppPBGRA`（预乘）→ 目标尺寸不同则 `BitmapScaler`（Fant）→ `CopyPixels`。转换和缩放是 WIC 管线上按需拉行的阶段，大图不会先整幅解出来。请求的目标尺寸超过 1600 万像素（64 MB）就按比例缩小。
+- **只认完整文件**（`platform::image::is_truncated`）：WIC 对截断的文件很宽容（半张 PNG 照样"解"出来，测试里实测），任务单要求截断/损坏显示为坏图，所以解码前先做结构检查——PNG 要走完块到 `IEND`，JPEG 尾部 64 字节内要有 `FFD9`，GIF 要走完块到 `3B`，BMP/WebP 的文件长度不能短于头里写的大小；不认识的格式不判断。损坏的头由 WIC 报错：`UNKNOWNIMAGEFORMAT`/`COMPONENTNOTFOUND`/不支持的像素格式或操作 → `Unsupported`，其余 → `Corrupt`；两种都是坏图。
+- **SVG**：`probe`/`decode` 直接 `ImageError::Svg`（不交给 WIC），页面显示 `alt`。**WebP**：交给 WIC，系统没装解码器时 WIC 报找不到组件 → `Unsupported` → 坏图；**没有 WebP 夹具**（没有能生成它的编码器），测试只覆盖"头对、数据是垃圾"的 WebP 被拒。ICO 取第 0 帧（不挑最大的）；GIF 的尺寸是第一帧的尺寸，不是逻辑屏幕的尺寸（多数 GIF 一样）。
+- **解码缓存**（`platform::image::DecodedCache`）：键 = （地址，目标宽，目标高），LRU，预算 **24 MB**，按像素字节加 64 计，单个比预算大就返回但不存。放在引擎里（纯逻辑，用假解码器测）。1c-2 的懒加载、"离视口两屏才请求、四屏外丢掉解码结果"由窗口调 `remove` 实现，这一步没做。
+
+### 录制和回放（`net/replay.rs`，任务单第 14 节）
+
+- 目录里：每个响应体一个文件（`0001.html`、`0002.css`、`0003.jpg`……，扩展名按类型，未知 `.bin`）和 `index.txt`。索引是文本，块之间空行，`#` 注释；每块的键：`url:`（请求地址，回放按它查）、`final:`（重定向终点，没写就等于 `url`）、`status:`、`body:`（本目录里的文件名，没有这一行 = 空正文）、`header: 名: 值`（可以重复）。认不出的行跳过，同一地址多个块取第一个。手工改索引就能构造恶意响应（巨大的状态码、乱写的头、指向超大文件的 `body`）。
+- `Recorder`（包一个真传输）：每个成功传输的响应存一份，**每个地址只存一次**；网络错误不存（回放时是 404）；**不存 `Set-Cookie`/`Set-Cookie2`**（个人数据，第 1 层也不用）和 `Content-Length`/`Content-Encoding`/`Transfer-Encoding`（正文存的是解压后的，这些头会说谎）。索引是追加写的，中途崩溃也留得下已有的。
+- `ReplayTransport`：**结构上就不联网**——它里面没有别的传输；地址不在索引里 → 404（`text/plain`，"Not in the recording"）。`body:` 只认纯文件名（含 `/`、`\`、`:`、`..` 的拒绝，防止手改索引读到目录外的文件）；文件比 `max_bytes` 大 → `TooLarge`。
+- 命令行：`qinglan-cli record <网址> <目录>` 走完整流程（页面→样式表和 `@import`→样式→排版→排版要的图片）再汇总；`--replay <目录>` 用在 `dom`/`style`/`layout`。`record` 用 1280×1000、dpr 1 排版来决定取哪些图片（`srcset` 的选择、`<img>` 列表）。**1c-2 的 `qinglan.exe --replay` 直接用同一个 `ReplayTransport`**。
+
+### 命令行的变化
+
+- `dom`/`style`/`layout` 的参数现在是"文件或网址"（`http://`、`https://` 开头的是网址）。文件也走新路径：`file:` 页面 + `PageResources`（样式表、`@import`、图片都经过策略和 `Loader`），所以本地页面里的图片现在有尺寸了（以前一律是"还没到"）。`layout` 先排一遍、取排版要的图片、有尺寸后再排第二遍。`--time` 多打印打开、样式表、图片各阶段的耗时。`style`/`layout` 的警告 `style sheet not found` 保留，另加 `style sheet not loaded: 地址 (原因)`。
+- 页面类型：`text/plain` 的 `dom` 输出是 `<pre>` 的树；不支持的类型打印"不支持"并以失败退出。
+
+### 测试
+
+- 引擎（假传输，`tests/net.rs`）：协议/混合内容矩阵、Referer 矩阵、策略在传输之前（被拒的请求传输一次都没被调到）、`data:` 无传输、类型上限（含"传输忘了上限"）、每主机 6/总共 16（峰值计数）、页面和样式表插队、缓存（前进后退命中、刷新不命中、`no-store`/404 不存、预算、LRU 淘汰）、取消丢弃结果且 `wake` 被调、非 HTML 分类（html/纯文本/PDF/图片/`data:` 当整页被拒）、样式表和 `@import` 发现（循环、媒体不匹配、`alternate`、混合内容、各只取一次）、图片（同地址一次请求、SVG/404/坏图/混合内容/传输错误/坏地址都变坏图、`data:` 图片、重复调用不重取）、解码缓存、录制→回放（回放不调被录制的传输）、手改索引的路径穿越和超大文件。
+- WinHTTP + 本地服务器（`qinglan-win/tests/net.rs`）：GET、响应头 charset、请求头（UA、Referer、Accept、Accept-Encoding）、Cookie 不发、gzip、**gzip 炸弹**、重定向链和**重定向循环**、重定向到 ftp 被拒、**永不结束的响应**（4 MB 处停）、**滴答式响应**和**不回应的服务器**（超时）、**Content-Length 1 亿**（立刻拒绝）、连接被拒、取消、`Loader`+WinHTTP 10 个并发请求带 Referer、真传输录制后关掉服务器再回放。
+- WIC（`qinglan-win/tests/images.rs`）：PNG/JPEG/GIF/BMP 头尺寸、各格式解码颜色（PNG/BMP 精确，GIF ±8，JPEG ±60）、预乘（50% 红 → 0,0,128,128）、解到显示尺寸（400×200 → 40×20）和放大、**10 万×10 万的 PNG 头被拒**（`TooLarge`，刚好 1 亿允许、多一行拒绝）、截断的 PNG/GIF/BMP/JPEG、垃圾数据、SVG、假 WebP、把 PNG 每个字节翻转一遍都不 panic、8 线程并发、解码缓存计数。
+
+### 没做 / 留给 1c-2、1c-3
+
+- 窗口、绘制、懒加载（`loading="lazy"`、离视口两屏才请求、四屏外丢弃解码结果）、图片到达的重排节流和滚动锚定、`mailto:` 弹窗、错误页、状态栏提示、`qinglan.exe --replay`/`--bench`、`render`/`bench` 命令、真实网页库（30 个）和对比图。
+- 没做 `<picture>`/`<source>`、`Content-Disposition`、`Content-Type` 以外的 MIME 嗅探、`Range`、HTTP 缓存语义（`ETag`、`max-age`）、代理认证、客户端证书（要客户端证书的网站是 `Tls` 错误）。
+- HTTP/2 只是打开了选项，本地测试服务器说 HTTP/1.1，没有 HTTP/2 的测试；真实网站（维基百科）走的是 WinHTTP 协商的协议，没有单独确认是不是 h2。
+
+### 验收数据（1c-1，2026-10-15）
+
+- `cargo test --workspace`：170 个测试全过（引擎单元 57 + 集成 63 [css 15、html5lib 2、排版 17、net 13、perf 2、robustness 13、wpt_url 1]，win 单元 8 + 集成 42 [corpus 2、images 6、net 11、win 23]）；`cargo clippy --workspace --all-targets` 无警告。
+- **恶意网络测试**（本地服务器，走 WinHTTP，debug 构建）：gzip 炸弹（解压后 100 MB，压缩后 102 KB）在 16 MB 处停，`TooLarge`，< 0.1 秒；重定向循环 11 次请求后 `TooManyRedirects`；永不结束的响应在 4 MB（测试里的上限）处停，`TooLarge`，< 0.1 秒；每 100 毫秒 1 字节的响应在总时限（测试里 1.5 秒）到时 `Timeout`；不回应的服务器 `Timeout`（实际 4.0 秒，见上面"已知的怪事"）；`Content-Length: 100000000` 立刻 `TooLarge`，不读正文；重定向到 `ftp:` 被拒。
+- **图片恶意测试**：PNG 头声称 10 万×10 万 → `TooLarge`，不解码；截断的 PNG/GIF/BMP/JPEG、垃圾字节、假 WebP → 坏图；PNG 每个字节翻转一次（共 136 种）都不 panic。
+- **真实页面**：`qinglan-cli record https://zh.wikipedia.org/wiki/中华人民共和国 tests/corpus/local/zhwiki-rec`（URL 是 `tests/corpus/local/zhwiki/page.html` 里的 canonical 地址；目录 git 忽略）：**146 个响应，正文共 4 840 683 字节**（目录 147 个文件，含索引共约 5.2 MB），实际联网约 20 秒（debug 构建，含排版）。HTTP 200，样式表 26 张（含内联）0 失败，图片 183 个节点：179 个拿到尺寸，4 个是 SVG（坏图，显示 `alt`）。`qinglan-cli layout <同一网址> --replay tests/corpus/local/zhwiki-rec`：退出码 0，转储 31 417 行，缺字框 0，整个进程 1.6 秒（debug；其中打开 188 ms、样式 258 ms、排版 514 ms、图片 166 ms、第二遍排版 324 ms）；两次录制各回放一次，转储逐字节相同。回放时断网也一样（回放传输里没有别的传输）。
+- **证书**（联网抽查，不进测试）：`expired.badssl.com`、`self-signed.badssl.com`、`wrong.host.badssl.com` 都是 `NetError::Tls`（WinHTTP 12175），没有继续的办法。具体原因（过期/名字不对）WinHTTP 同步模式拿不到，只有 12175 这一个代码，所以错误页只能写"证书或 TLS 错误"；要给出具体原因得改用异步的 `WINHTTP_CALLBACK_STATUS_SECURE_FAILURE`，留作以后。
