@@ -43,6 +43,19 @@ impl Cv {
 /// Maximum nesting of blocks and functions; deeper input is flattened (hostile input guard).
 const MAX_NESTING: usize = 512;
 
+/// Maximum nesting of `@media` and `@supports` conditions (parentheses and functions, including
+/// `selector()` in `@supports`); deeper conditions are invalid (media query: `not all`; supports: false).
+pub const MAX_CONDITION_NESTING: usize = 32;
+
+/// True if blocks and functions in `cvs` nest deeper than `limit` levels. It stops descending at the limit,
+/// so its own recursion is at most `limit` deep whatever the input.
+pub fn nests_deeper_than(cvs: &[Cv], limit: usize) -> bool {
+    cvs.iter().any(|c| match c {
+        Cv::Func(_, items) | Cv::Block(_, items) => limit == 0 || nests_deeper_than(items, limit.saturating_sub(1)),
+        Cv::Tok(_) => false,
+    })
+}
+
 /// Build the component value tree for a token list.
 pub fn component_values(tokens: Vec<Token>) -> Vec<Cv> {
     // Iterative construction with an explicit stack.

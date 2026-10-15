@@ -156,6 +156,10 @@ fn invalid() -> MediaQuery {
 }
 
 fn parse_query(cvs: &[Cv]) -> MediaQuery {
+    // Conditions nested deeper than the cap are invalid; this also bounds the recursion below.
+    if super::syntax::nests_deeper_than(cvs, super::syntax::MAX_CONDITION_NESTING) {
+        return invalid();
+    }
     let items: Vec<&Cv> = cvs.iter().filter(|c| !c.is_ws()).collect();
     if items.is_empty() {
         return invalid();
@@ -485,6 +489,13 @@ mod tests {
 
     fn m(q: &str, w: f32) -> bool {
         MediaQueryList::parse(&parse_cvs(q)).matches(&MediaEnv::screen(w, 800.0))
+    }
+
+    #[test]
+    fn condition_nesting_cap() {
+        let nest = |n: usize| format!("{}min-width: 1px{}", "(".repeat(n), ")".repeat(n));
+        assert!(m(&nest(32), 100.0));
+        assert!(!m(&nest(33), 100.0));
     }
 
     #[test]

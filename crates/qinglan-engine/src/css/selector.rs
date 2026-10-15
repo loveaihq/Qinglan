@@ -159,11 +159,31 @@ pub struct ParseCtx<'a> {
     pub atoms: &'a mut Interner,
     /// Quirks mode: class and id names match ASCII case-insensitively.
     pub quirks: bool,
+    /// Selector lists currently open: 0 at the start, 1 while the top-level list is parsed.
+    pub depth: usize,
 }
 
+/// Maximum nesting of selector lists inside `:is()`, `:where()`, `:not()` and `:nth-child(... of S)`; a
+/// selector that nests deeper is invalid. Keeps parsing and matching recursion shallow (docs/decisions.md).
+pub const MAX_SELECTOR_NESTING: usize = 32;
+/// Maximum compounds of a complex selector inside a functional pseudo-class. Matching recurses once per
+/// compound, so this bounds the stack use of nested lists (top-level selectors are limited in `stylesheet`).
+const MAX_NESTED_COMPOUNDS: usize = 16;
+
 /// Parse a selector list. A non-forgiving list is invalid (`None`) if any selector is; a forgiving
-/// list (`:is()`, `:where()`) drops invalid selectors.
+/// list (`:is()`, `:where()`) drops invalid selectors. A list nested deeper than [`MAX_SELECTOR_NESTING`]
+/// is invalid.
 pub fn parse_selector_list(cvs: &[Cv], ctx: &mut ParseCtx<'_>, forgiving: bool, allow_pseudo_element: bool) -> Option<Vec<Selector>> {
+    if ctx.depth > MAX_SELECTOR_NESTING {
+        return None;
+    }
+    ctx.depth += 1;
+    let r = parse_selector_list_inner(cvs, ctx, forgiving, allow_pseudo_element);
+    ctx.depth -= 1;
+    r
+}
+
+fn parse_selector_list_inner(cvs: &[Cv], ctx: &mut ParseCtx<'_>, forgiving: bool, allow_pseudo_element: bool) -> Option<Vec<Selector>> {
     let mut out = Vec::new();
     let trimmed = trim_ws(cvs);
     if trimmed.is_empty() {
@@ -228,6 +248,9 @@ fn parse_complex(cvs: &[Cv], ctx: &mut ParseCtx<'_>, allow_pseudo_element: bool)
             None => return None,
         }
         i = j;
+    }
+    if ctx.depth > 1 && compounds.len() > MAX_NESTED_COMPOUNDS {
+        return None;
     }
     let ancestor_keys = ancestor_keys(&compounds, &combinators);
     let fast_key = match (compounds.as_slice(), combinators.as_slice()) {

@@ -10,7 +10,7 @@ use std::rc::Rc;
 use super::media::{MediaQueryList, Tri};
 use super::parse_prop::{ParseEnv, parse_declaration};
 use super::selector::{ParseCtx, Selector, parse_selector_list};
-use super::syntax::{BlockKind, Cv, RawRule, parse_cvs, parse_declaration_list, parse_rule_list, split_commas, trim_ws};
+use super::syntax::{BlockKind, Cv, MAX_CONDITION_NESTING, RawRule, nests_deeper_than, parse_cvs, parse_declaration_list, parse_rule_list, split_commas, trim_ws};
 use super::tokenizer::Token;
 use super::types::{DeclBlock, DeclProp, Declaration, PropId};
 use crate::html::atoms::Interner;
@@ -134,7 +134,7 @@ fn convert_rules(raw: Vec<RawRule>, ctx: &mut SheetCtx<'_>, top_level: bool, dep
 fn style_rule(r: RawRule, ctx: &mut SheetCtx<'_>) -> Option<StyleRule> {
     let body = r.block?;
     let selectors = {
-        let mut pc = ParseCtx { atoms: ctx.atoms, quirks: ctx.quirks };
+        let mut pc = ParseCtx { atoms: ctx.atoms, quirks: ctx.quirks, depth: 0 };
         parse_selector_list(&r.prelude, &mut pc, false, true)?
     };
     let selectors: Vec<Selector> = selectors.into_iter().filter(|s| s.compounds.len() <= MAX_COMPOUNDS).collect();
@@ -260,8 +260,15 @@ fn supports_declaration(inner: &[Cv], ctx: &mut SheetCtx<'_>) -> bool {
     parse_declaration(&d.name, &d.value, &env, &mut tmp).is_some()
 }
 
-/// Evaluate a `<supports-condition>`.
+/// Evaluate a `<supports-condition>`. A condition nested deeper than `MAX_CONDITION_NESTING` is false.
 pub fn eval_supports(cvs: &[Cv], ctx: &mut SheetCtx<'_>) -> Tri {
+    if nests_deeper_than(cvs, MAX_CONDITION_NESTING) {
+        return Tri::False;
+    }
+    eval_supports_inner(cvs, ctx)
+}
+
+fn eval_supports_inner(cvs: &[Cv], ctx: &mut SheetCtx<'_>) -> Tri {
     let items: Vec<&Cv> = cvs.iter().filter(|c| !c.is_ws()).collect();
     if items.is_empty() {
         return Tri::False;
@@ -341,13 +348,13 @@ fn eval_in_parens(cv: &Cv, ctx: &mut SheetCtx<'_>) -> Tri {
             let non_ws: Vec<&Cv> = inner.iter().filter(|c| !c.is_ws()).collect();
             // `( <supports-condition> )`
             if non_ws.first().is_some_and(|c| c.is_ident("not") || matches!(c, Cv::Block(BlockKind::Paren, _)) || matches!(c, Cv::Func(..))) {
-                return eval_supports(inner, ctx);
+                return eval_supports_inner(inner, ctx);
             }
             // `( <declaration> )`
             if supports_declaration(inner, ctx) { Tri::True } else { Tri::False }
         }
         Cv::Func(n, inner) if n.eq_ignore_ascii_case("selector") => {
-            let mut pc = ParseCtx { atoms: ctx.atoms, quirks: ctx.quirks };
+            let mut pc = ParseCtx { atoms: ctx.atoms, quirks: ctx.quirks, depth: 0 };
             let single = !inner.iter().any(Cv::is_comma);
             match parse_selector_list(inner, &mut pc, false, true) {
                 Some(l) if single && l.len() == 1 => Tri::True,
@@ -401,6 +408,27 @@ mod tests {
     fn invalid_selector_drops_rule() {
         let (s, _) = parse("a:foo { color: red } b { color: red } c:has(d) { color: red } e::before { color: red }");
         assert_eq!(s.rules.len(), 2); // b and e::before
+    }
+
+    #[test]
+    fn nesting_caps() {
+        // n nested levels: `open` repeated n times, the core, then one `)` per `(` in `open`.
+        let nest = |open: &str, core: &str, n: usize| format!("{}{core}{}", open.repeat(n), ")".repeat(open.matches('(').count() * n));
+        // Selectors: 32 nested :not() levels are fine, 33 make the selector (and the rule) invalid.
+        for (n, rules) in [(32, 1), (33, 0)] {
+            let (s, _) = parse(&format!("p{} {{ color: red }}", nest(":not(", "q", n)));
+            assert_eq!(s.rules.len(), rules, "selector depth {n}");
+        }
+        // @supports: 32 nested parentheses are fine, 33 are false.
+        for (n, rules) in [(32, 1), (33, 0)] {
+            let (s, _) = parse(&format!("@supports {} {{ p {{ color: red }} }}", nest("(", "display: block", n)));
+            assert_eq!(s.rules.len(), rules, "supports depth {n}");
+        }
+        // Compounds in a nested list: 16 are fine, 17 are invalid.
+        for (n, rules) in [(16, 1), (17, 0)] {
+            let (s, _) = parse(&format!("p:not({}) {{ color: red }}", vec!["q"; n].join(" ")));
+            assert_eq!(s.rules.len(), rules, "nested compounds {n}");
+        }
     }
 
     #[test]

@@ -465,12 +465,16 @@ pub fn parse_legacy_color(input: &str) -> Option<Color> {
     // Otherwise the legacy algorithm: replace non-BMP chars with "00", truncate to 128, strip '#',
     // replace non-hex with '0', pad to a multiple of 3, split in three, truncate to 8, strip leading zeros
     // beyond 2 digits, take the first two.
-    let mut chars: Vec<char> = s.chars().map(|c| if (c as u32) > 0xFFFF { '0' } else { c }).collect();
-    let mut owned: String = chars.iter().collect();
-    if owned.chars().count() > 128 {
-        owned = owned.chars().take(128).collect();
-        chars = owned.chars().collect();
+    let mut chars: Vec<char> = Vec::with_capacity(s.len().min(256));
+    for c in s.chars() {
+        if (c as u32) > 0xFFFF {
+            // HTML 2.3.5 step 6: a code point above U+FFFF becomes the two characters "00" (before the 128 limit).
+            chars.extend(['0', '0']);
+        } else {
+            chars.push(c);
+        }
     }
+    chars.truncate(128);
     if chars.first() == Some(&'#') {
         chars.remove(0);
     }
@@ -502,6 +506,12 @@ pub fn parse_legacy_color(input: &str) -> Option<Color> {
 mod tests {
     use super::*;
     use crate::css::syntax::parse_cvs;
+
+    #[test]
+    fn legacy_color_non_bmp_becomes_two_zeros() {
+        // "1" + U+1F600 + "2" -> "1002" -> padded "100200" -> #100200 (HTML 2.3.5 step 6).
+        assert_eq!(parse_legacy_color("1\u{1F600}2"), Some(Color::rgb(0x10, 0x02, 0x00)));
+    }
 
     fn p(s: &str) -> Option<Color> {
         match parse_color(&parse_cvs(s))? {

@@ -113,6 +113,9 @@ fn main() -> ExitCode {
             let out = style_document(&mut doc, url.as_ref(), &mut loader, &StyleOptions { viewport_w: width, viewport_h: height });
             let t_style = t0.elapsed();
             print!("{}", dump_styles(&doc, &out.tree));
+            if doc.too_large {
+                eprintln!("note: page too large, only the first part was parsed");
+            }
             for m in &out.missing {
                 eprintln!("warning: style sheet not found: {m}");
             }

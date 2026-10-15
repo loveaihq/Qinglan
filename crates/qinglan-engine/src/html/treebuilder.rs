@@ -87,6 +87,8 @@ pub struct TreeBuilder {
     mode: Mode,
     orig_mode: Mode,
     tmpl_modes: Vec<Mode>,
+    /// Set when the end of a template asks for the EOF token to be processed again in the new mode.
+    reprocess_eof: bool,
     open: Vec<NodeId>,
     afe: Vec<Afe>,
     head: NodeId,
@@ -163,6 +165,7 @@ impl TreeBuilder {
             mode: Mode::Initial,
             orig_mode: Mode::Initial,
             tmpl_modes: Vec::new(),
+            reprocess_eof: false,
             open: Vec::new(),
             afe: Vec::new(),
             head: NONE,
@@ -252,6 +255,12 @@ impl TreeBuilder {
     fn dispatch_one(&mut self, tok: Token) {
         if self.use_foreign(&tok) {
             self.foreign(tok);
+        } else if matches!(tok, Token::Eof) {
+            self.step(self.mode, Token::Eof);
+            // "Reprocess the token" after the end of a template (see `m_in_template`), once per nested template.
+            while std::mem::take(&mut self.reprocess_eof) && !self.done {
+                self.step(self.mode, Token::Eof);
+            }
         } else {
             self.step(self.mode, tok);
         }
@@ -1977,6 +1986,9 @@ impl TreeBuilder {
                 }
             }
             Token::Eof => {
+                // HTML 13.2.6.4.18: pop to the innermost template, reset the insertion mode, reprocess the
+                // token. The reprocessing is left to `dispatch_one`, which loops: a recursive call used
+                // several stack frames per nested template (600 nested templates overflowed a debug stack).
                 if !self.has_template_on_stack() {
                     self.stop();
                     return;
@@ -1985,7 +1997,7 @@ impl TreeBuilder {
                 self.clear_afe_to_marker();
                 self.tmpl_modes.pop();
                 self.reset_insertion_mode();
-                self.step(self.mode, Token::Eof);
+                self.reprocess_eof = true;
             }
         }
     }

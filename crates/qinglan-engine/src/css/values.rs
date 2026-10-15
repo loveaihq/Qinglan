@@ -7,6 +7,9 @@ use super::tokenizer::Token;
 
 /// calc() nesting limit (L1 task sheet).
 pub const MAX_CALC_DEPTH: usize = 32;
+/// Maximum factors (operands of `*` and `/`) in one calc product; a product is a left-deep tree that is
+/// evaluated and dropped recursively, so a long chain would overflow the stack. Longer products are invalid.
+const MAX_CALC_FACTORS: usize = 32;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LenUnit {
@@ -385,6 +388,7 @@ fn parse_sum(items: &[Cv], depth: usize) -> Option<(Calc, Ty)> {
 
 fn parse_product(cur: &mut Cursor<'_>, depth: usize) -> Option<(Calc, Ty)> {
     let (mut node, mut ty) = parse_value(cur, depth)?;
+    let mut factors = 1usize;
     loop {
         let save = cur.pos;
         cur.skip_ws();
@@ -392,6 +396,12 @@ fn parse_product(cur: &mut Cursor<'_>, depth: usize) -> Option<(Calc, Ty)> {
             cur.pos = save;
             break;
         };
+        if op.is_delim('*') || op.is_delim('/') {
+            factors += 1;
+            if factors > MAX_CALC_FACTORS {
+                return None;
+            }
+        }
         if op.is_delim('*') {
             cur.pos += 1;
             cur.skip_ws();

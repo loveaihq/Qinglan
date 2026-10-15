@@ -145,3 +145,166 @@ fn import_limits() {
     assert!(*loader.loads.borrow() <= 80 + 1000, "{} loads", loader.loads.borrow());
     assert!(t.elapsed() < BUDGET);
 }
+
+// -------------------------------------------------------------------------------------------------
+// Stack depth. These tests run on a 1 MB stack, the stack of the main thread of the CLI on Windows, so
+// what passes here also passes in the debug build of `qinglan-cli` and on the 2 MB test-thread stack.
+
+fn on_small_stack(f: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new().stack_size(1 << 20).spawn(f).unwrap().join().unwrap();
+}
+
+/// `open` repeated n times, the core, then one ")" per "(" in `open`.
+fn nest(open: &str, core: &str, n: usize) -> String {
+    format!("{}{core}{}", open.repeat(n), ")".repeat(open.matches('(').count() * n))
+}
+
+fn styled_page(css: &str, inline: &str) {
+    let html = format!("<style>{css}</style><div><p style=\"{inline}\">x</p><span>y</span></div>");
+    let mut doc = parse_document(html);
+    style(&mut doc);
+}
+
+#[test]
+fn hostile_selector_nesting_10000() {
+    on_small_stack(|| {
+        let t = Instant::now();
+        let n = 10_000;
+        let mut sheets: Vec<String> = Vec::new();
+        for open in [":is(", ":where(", ":not(", ":matches(", ":-webkit-any(", ":nth-child(1 of ", ":nth-last-child(2n+1 of ", ":is(:not(", ":not(:where("] {
+            sheets.push(format!("p{} {{ color: red }}", nest(open, "p", n)));
+            sheets.push(format!("p{} {{ color: red }}", open.repeat(n)));
+        }
+        for comb in [" ", " > ", " + ", " ~ "] {
+            let chain = format!("p{comb}").repeat(n);
+            sheets.push(format!("{chain}p {{ color: red }}"));
+            sheets.push(format!("p:is({chain}p) {{ color: red }}"));
+            sheets.push(format!("p:not({chain}p, a) {{ color: red }}"));
+            sheets.push(format!("p:nth-child(1 of {chain}p) {{ color: red }}"));
+        }
+        let list = "p,".repeat(n);
+        sheets.push(format!("{list}p {{ color: red }}"));
+        sheets.push(format!("p:is({list}p) {{ color: red }}"));
+        for css in &sheets {
+            styled_page(css, "color: blue");
+        }
+        assert!(t.elapsed() < BUDGET * 2, "took {:?}", t.elapsed());
+    });
+}
+
+#[test]
+fn hostile_condition_nesting_10000() {
+    on_small_stack(|| {
+        let t = Instant::now();
+        let n = 10_000;
+        let mut sheets: Vec<String> = Vec::new();
+        for head in ["@media ", "@media screen and ", "@media not ", "@supports ", "@supports not "] {
+            for open in ["(", "not (", "(not (", "(("] {
+                sheets.push(format!("{head}{} {{ p {{ color: red }} }}", nest(open, "min-width: 1px", n)));
+                sheets.push(format!("{head}{} {{ p {{ color: red }} }}", open.repeat(n)));
+            }
+            sheets.push(format!("{head}{} {{ p {{ color: red }} }}", nest("selector(", "p", n)));
+            sheets.push(format!("{head}{} {{ p {{ color: red }} }}", nest("(selector(", ":is(p)", n)));
+            sheets.push(format!("{head}selector({}) {{ p {{ color: red }} }}", nest(":is(", "p", n)));
+        }
+        sheets.push(format!("@import url(a.css) supports({});", nest("(", "display: block", n)));
+        sheets.push(format!("@import url(a.css) supports({});", nest("not (", "display: block", n)));
+        sheets.push(format!("@import url(a.css) {};", nest("(", "min-width: 1px", n)));
+        for css in &sheets {
+            styled_page(css, "color: blue");
+        }
+        assert!(t.elapsed() < BUDGET * 2, "took {:?}", t.elapsed());
+    });
+}
+
+#[test]
+fn hostile_block_nesting_10000() {
+    on_small_stack(|| {
+        let t = Instant::now();
+        let n = 10_000;
+        for head in ["@media screen {", "@layer a {", "@supports (display: block) {", "@media screen { @layer a {", "{", "p {", "[", "foo(", "(", "@media ", ";{", "@unknown {"] {
+            styled_page(&format!("{}p {{ color: red }}", head.repeat(n)), "color: blue");
+            styled_page(&format!("{}p {{ color: red }}{}", head.repeat(n), "}".repeat(n)), "color: blue");
+        }
+        assert!(t.elapsed() < BUDGET * 2, "took {:?}", t.elapsed());
+    });
+}
+
+#[test]
+fn hostile_value_nesting_10000() {
+    on_small_stack(|| {
+        let t = Instant::now();
+        let n = 10_000;
+        let values: Vec<String> = vec![
+            nest("calc(", "1px", n),
+            format!("calc({})", nest("(", "1px", n)),
+            format!("calc({}1px)", "1 * ".repeat(n)),
+            format!("calc({}1px)", "2 / ".repeat(n)),
+            format!("calc({}1px)", "1px + ".repeat(n)),
+            format!("calc({}1px)", "1px - ".repeat(n)),
+            format!("calc({}", "(".repeat(n)),
+            nest("min(1px, ", "2px", n),
+            nest("max(", "2px", n),
+            nest("clamp(1px, ", "2px", n),
+            nest("calc(1px + ", "2px", n),
+            nest("calc(1 * ", "2px", n),
+            nest("var(--a, ", "1px", n),
+            nest("var(--a, var(--b, ", "1px", n),
+            nest("var(", "--a", n),
+            nest("env(a, ", "1px", n),
+            nest("rgb(", "1", n),
+            nest("hsl(", "1", n),
+            nest("color-mix(in srgb, ", "red", n),
+            nest("foo(", "1", n),
+            nest("url(", "a", n),
+            "(".repeat(n),
+            "[".repeat(n),
+            "{".repeat(n),
+            format!("{}{}", "(".repeat(n), ")".repeat(n)),
+        ];
+        for prop in ["width", "color", "--x"] {
+            for v in &values {
+                styled_page(&format!("p {{ {prop}: {v}; --y: {v} }} span {{ width: var(--x) }}"), "color: blue");
+            }
+        }
+        for v in &values {
+            styled_page("", &format!("width: {v}").replace('"', ""));
+        }
+        // Custom properties that refer to each other in a long chain, and in a cycle.
+        let chain: String = (0..n).map(|i| format!("--p{i}: var(--p{}); ", i + 1)).collect();
+        styled_page(&format!("p {{ {chain} width: var(--p0) }}"), "color: blue");
+        styled_page(&format!("p {{ {chain} --p{n}: var(--p0); width: var(--p0) }}"), "color: blue");
+        assert!(t.elapsed() < BUDGET * 2, "took {:?}", t.elapsed());
+    });
+}
+
+#[test]
+fn deep_selector_matching_fits_the_stack() {
+    on_small_stack(|| {
+        let t = Instant::now();
+        // 32 nested :is() levels; every level is a chain of 16 compounds whose leftmost compound is the next
+        // level, and 490 nested divs let the match go all the way down.
+        let mut sel = String::from("div");
+        for _ in 0..32 {
+            sel = format!(":is({sel}{})", " div".repeat(15));
+        }
+        let html = format!("<style>{sel} div div div p {{ color: red }}</style>{}<p>x</p>", "<div>".repeat(490));
+        let mut doc = parse_document(html);
+        style(&mut doc);
+        assert!(t.elapsed() < BUDGET, "took {:?}", t.elapsed());
+    });
+}
+
+#[test]
+fn nested_templates_do_not_overflow() {
+    on_small_stack(|| {
+        for unit in ["<template>", "<template><div>", "<template><table><tr><td>"] {
+            for n in [600, 5000] {
+                let mut doc = parse_document(unit.repeat(n));
+                let dump = qinglan_engine::html::dump::dump_children(&doc, 0);
+                assert!(dump.contains("content"));
+                style(&mut doc);
+            }
+        }
+    });
+}
