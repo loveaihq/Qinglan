@@ -1,0 +1,48 @@
+<!--
+viewport: 200x300
+The layer 1 fallbacks (L1 task 9): flex, grid and table parts are laid out as blocks, their inline forms and inline-block
+too (in step 1b-1 as blocks; real atomic inlines come in 1b-2), float is ignored (the element stays in the flow; a
+floated span is a block because the cascade blockifies it, CSS2 9.7), position:absolute stays in the flow too
+(positioning is 1b-2). Font 10px/10px, body margin 0, widths are the full 200 unless set.
+
+flex   two children stack: f1 (0,0), f2 (0,10), the flex box is 20 high.
+grid   the text "g1" gets an anonymous block, then g2: 10 + 10 = 20 high at y=20.
+table  table > tbody > tr > td, td all become blocks and the cells stack: a td is 10 + 2 (padding 1px) = 12 high,
+       so the row is 24 high at y=40; the text sits 1px inside: x=1, y=41 and 53.
+lft    float:left width 50: stays in the flow, (0,64 50x10).
+fr     float:right on a span: a block, 200 wide, y=74.
+ib     "before", an inline-block, "after": anonymous block 10, the inline-block as a block 10, anonymous block 10: 30 high at y=84.
+abs    position:absolute stays in the flow: y=114.
+iflex  display:inline-flex: a block, y=124.
+check: block div#flex :: (0,0 200x20) [display:flex]
+check: block div#f1 :: (0,0 200x10)
+check: block div#f2 :: (0,10 200x10)
+check: block div#grid :: (0,20 200x20) [display:grid]
+check: block (anonymous) :: (0,20 200x10)
+check: block div#g2 :: (0,30 200x10)
+check: block table#t :: (0,40 200x24) [display:table]
+check: block tbody :: (0,40 200x24) [display:table-row-group]
+check: block tr :: (0,40 200x24) [display:table-row]
+check: block td :: (0,40 200x12) [display:table-cell]
+check: text "a" :: (1,41 10x10)
+check: text "b" :: (1,53 10x10)
+check: block div#lft :: (0,64 50x10)
+check: block span#fr :: (0,74 200x10)
+check: block div#ib :: (0,84 200x30)
+check: block span#ibs :: (0,94 200x10) [display:inline-block]
+check: block div#abs :: (0,114 200x10)
+check: block span#iflex :: (0,124 200x10) [display:inline-flex]
+check: block body :: (0,0 200x134)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+</style>
+<div id="flex" style="display:flex"><div id="f1" style="height:10px">one</div><div id="f2" style="height:10px">two</div></div>
+<div id="grid" style="display:grid">g1<div id="g2" style="height:10px">g2</div></div>
+<table id="t"><tr><td>a</td><td>b</td></tr></table>
+<div id="lft" style="float:left;width:50px;height:10px">f</div>
+<span id="fr" style="float:right">x</span>
+<div id="ib">before<span id="ibs" style="display:inline-block">mid</span>after</div>
+<div id="abs" style="position:absolute;top:100px">abs</div>
+<span id="iflex" style="display:inline-flex">if</span>

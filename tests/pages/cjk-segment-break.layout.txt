@@ -1,0 +1,37 @@
+viewport 300x300
+block html (0,0 300x110)
+  block body (0,0 300x110)
+    block div#zh (0,0 300x10)
+      line (0,0 300x10) baseline=8
+        text "你好世界" (0,0 40x10)
+    block div#en (0,10 300x10)
+      line (0,10 300x10) baseline=18
+        text "hello world" (0,10 110x10)
+    block div#mix (0,20 300x10)
+      line (0,20 300x10) baseline=28
+        text "你好 abc" (0,20 60x10)
+    block div#sp (0,30 300x10)
+      line (0,30 300x10) baseline=38
+        text "你好世界" (0,30 40x10)
+    block div#fw (0,40 300x10)
+      line (0,40 300x10) baseline=48
+        text "你好，世界" (0,40 50x10)
+    block div#ko (0,50 300x10)
+      line (0,50 300x10) baseline=58
+        text "안녕 하세요" (0,50 60x10)
+    block div#ja (0,60 300x10)
+      line (0,60 300x10) baseline=68
+        text "こんにちは世界" (0,60 70x10)
+    block div#two (0,70 300x10)
+      line (0,70 300x10) baseline=78
+        text "你好世界" (0,70 40x10)
+    block div#inl (0,80 300x10)
+      line (0,80 300x10) baseline=88
+        text "你好" (0,80 20x10)
+        text "世界" (20,80 20x10)
+    block div#pl (0,90 300x20)
+      line (0,90 300x10) baseline=98
+        text "你好" (0,90 20x10)
+        newline (20,90 0x10)
+      line (0,100 300x10) baseline=108
+        text "世界" (0,100 20x10)

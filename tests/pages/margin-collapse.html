@@ -1,0 +1,63 @@
+<!--
+viewport: 400x300
+Margin collapsing, CSS2 8.3.1. body margin 0, 10px font, every height set by hand. y is the page y of the border box.
+
+A  siblings: margin-bottom 20 and margin-top 30 collapse to 30. a1 y=0 h=10, a2 y=10+30=40.
+B  20 and -5: positive plus negative = 15. b1 y=50 (a2 ends at 50), b2 y=60+15=75.
+C  both negative, -10 and -20: the most negative wins, -20. c1 y=85 h=30 ends 115, c2 y=115-20=95.
+D  parent and first child: top margins 10 and 25 collapse to 25 and the child's border edge is the parent's.
+   d y=105+25=130, d1 y=130, d h=10.
+E  last child margin-bottom 40 and parent margin-bottom 5 collapse to 40: e h=10 (the 40 is outside),
+   e2 y=150+40=190.
+F  padding stops the collapsing: f margin-top 5, y=200+5=205, padding-top 1, f1 margin 20: f1 y=205+1+20=226,
+   content ends 226+10+20=256, +1 padding-bottom: f h=52 (1+20+10+20+1).
+G  empty block margins 20 and 30 collapse through it with the neighbours: g0 ends 267, g2 y=267+30=297.
+   g1 sits where it would be with a bottom border, so its own top margin applies: y=267+20=287, h=0.
+H  overflow:hidden starts a formatting context, child margin 25 stays inside: h y=307+10=317,
+   h1 y=317+25=342, h h=25+10=35.
+I  an empty block inside an empty block: 7, 12 and 9 all collapse through, to 12. i, i1 and i2 all start at
+   352+12=364; i2 h=10 ends 374 which is also body and html height.
+check: block div#a1 :: (0,0 400x10)
+check: block div#a2 :: (0,40 400x10)
+check: block div#b1 :: (0,50 400x10)
+check: block div#b2 :: (0,75 400x10)
+check: block div#c1 :: (0,85 400x30)
+check: block div#c2 :: (0,95 400x10)
+check: block div#d :: (0,130 400x10)
+check: block div#d1 :: (0,130 400x10)
+check: block div#e :: (0,140 400x10)
+check: block div#e1 :: (0,140 400x10)
+check: block div#e2 :: (0,190 400x10)
+check: block div#f :: (0,205 400x52)
+check: block div#f1 :: (0,226 400x10)
+check: block div#g0 :: (0,257 400x10)
+check: block div#g1 :: (0,287 400x0)
+check: block div#g2 :: (0,297 400x10)
+check: block div#h :: (0,317 400x35) [clip]
+check: block div#h1 :: (0,342 400x10)
+check: block div#i :: (0,364 400x0)
+check: block div#i1 :: (0,364 400x0)
+check: block div#i2 :: (0,364 400x10)
+check: block body :: (0,0 400x374)
+check: block html :: (0,0 400x374)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+</style>
+<div id="a1" style="height:10px;margin-bottom:20px"></div>
+<div id="a2" style="height:10px;margin-top:30px"></div>
+<div id="b1" style="height:10px;margin-bottom:20px"></div>
+<div id="b2" style="height:10px;margin-top:-5px"></div>
+<div id="c1" style="height:30px;margin-bottom:-10px"></div>
+<div id="c2" style="height:10px;margin-top:-20px"></div>
+<div id="d" style="margin-top:10px"><div id="d1" style="height:10px;margin-top:25px"></div></div>
+<div id="e" style="margin-bottom:5px"><div id="e1" style="height:10px;margin-bottom:40px"></div></div>
+<div id="e2" style="height:10px"></div>
+<div id="f" style="padding:1px 0;margin-top:5px"><div id="f1" style="height:10px;margin:20px 0"></div></div>
+<div id="g0" style="height:10px"></div>
+<div id="g1" style="margin-top:20px;margin-bottom:30px"></div>
+<div id="g2" style="height:10px"></div>
+<div id="h" style="overflow:hidden;margin-top:10px"><div id="h1" style="height:10px;margin-top:25px"></div></div>
+<div id="i" style="margin-top:7px;margin-bottom:9px"><div id="i1" style="margin-top:12px"></div></div>
+<div id="i2" style="height:10px"></div>

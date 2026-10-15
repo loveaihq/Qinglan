@@ -1,0 +1,35 @@
+<!--
+viewport: 200x300
+Chinese line breaking with the test platform (L1 task 8): a break is allowed between any two CJK characters, but not
+before a closing punctuation mark (，。、；：？！）」』 ...) and not after an opening one (（「『 ...). Every div is 50 wide
+(5 glyphs of 10px), font 10px/10px, body margin 0.
+
+plain  ten characters: five per line: "一二三四五" / "六七八九十"; y=0, 20 high.
+comma  "一二三四五，六七八九十": the comma would be the 6th glyph on line one, so it cannot go there and 五 moves with it:
+       "一二三四" (40) / "五，六七八" (50) / "九十" (20); y=20, 30 high.
+open   "一二三四「五六七八九": 「 may not end a line, so it moves down: "一二三四" (40) / "「五六七八" (50) / "九" (10); y=50, 30 high.
+latin  "abcdefgh" has no break opportunity: one 80 wide line that overflows; y=80, 10 high.
+check: block div#plain :: (0,0 50x20)
+check: text "一二三四五" :: (0,0 50x10)
+check: text "六七八九十" :: (0,10 50x10)
+check: block div#comma :: (0,20 50x30)
+check: text "一二三四" (0,20 :: (0,20 40x10)
+check: text "五，六七八" :: (0,30 50x10)
+check: text "九十" :: (0,40 20x10)
+check: block div#open :: (0,50 50x30)
+check: text "一二三四" (0,50 :: (0,50 40x10)
+check: text "「五六七八" :: (0,60 50x10)
+check: text "九" :: (0,70 10x10)
+check: block div#latin :: (0,80 50x10)
+check: text "abcdefgh" :: (0,80 80x10)
+-->
+<!doctype html>
+<meta charset="utf-8">
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+div { width: 50px }
+</style>
+<div id="plain">一二三四五六七八九十</div>
+<div id="comma">一二三四五，六七八九十</div>
+<div id="open">一二三四「五六七八九</div>
+<div id="latin">abcdefgh</div>

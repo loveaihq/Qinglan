@@ -1,0 +1,8 @@
+viewport 400x300
+block html (0,0 400x90)
+  block body (0,0 400x90)
+    block div#e1 (0,0 80x40)
+    block div#e2 (0,40 100x24)
+    block div#e3 (8,64 392x10)
+    block div#e4 (0,74 400x16)
+      block div#e5 (0,74 16x16)

@@ -4,5 +4,7 @@
 pub mod css;
 pub mod encoding;
 pub mod html;
+pub mod layout;
 pub mod platform;
+pub mod textclass;
 pub mod url;

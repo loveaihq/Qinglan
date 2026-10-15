@@ -2,13 +2,16 @@
 //! the cascaded declarations (css-cascade-5 "defaulting", css-values-4 "computed value").
 
 use std::borrow::Cow;
+use std::cell::RefCell;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use super::color::{Color, ColorValue};
 use super::syntax::Cv;
 use super::types::*;
 use super::values::{LenCtx, LenUnit, Lp, fmt_num};
-use crate::html::atoms::{Atom, FxHashMap};
+use crate::html::atoms::{Atom, FxHashMap, FxHasher};
+use crate::platform::{FontQuery, FontSlant, Platform};
 
 /// Custom property values (inherited), keyed by the interned name including the `--`.
 pub type CustomProps = FxHashMap<Atom, Rc<Vec<Cv>>>;
@@ -236,10 +239,74 @@ impl Default for Declared<'_> {
 }
 
 /// Everything that stays the same while a whole document is styled.
-#[derive(Clone, Copy, Debug)]
-pub struct Env {
+pub struct Env<'a> {
     pub viewport_w: f32,
     pub viewport_h: f32,
+    /// Where `ex` and `ch` get their font metrics from; without one they are half an em.
+    pub platform: Option<&'a dyn Platform>,
+    /// (x-height, advance of "0") as a fraction of the font size, by font description.
+    ex_cache: RefCell<ExCache>,
+}
+
+/// (family hash, weight bits, style, language hash) -> (x-height, advance of "0") per em.
+type ExCache = FxHashMap<(u64, u32, u8, u64), (f32, f32)>;
+
+impl<'a> Env<'a> {
+    pub fn new(viewport_w: f32, viewport_h: f32, platform: Option<&'a dyn Platform>) -> Env<'a> {
+        Env { viewport_w, viewport_h, platform, ex_cache: RefCell::new(FxHashMap::default()) }
+    }
+
+    /// The size in px of `1ex` and `1ch` for `font` (css-values-4 6.1: when the font has no x-height
+    /// or no "0" glyph, 0.5em is used).
+    pub fn ex_ch(&self, font: &FontStyle, lang: Option<&str>) -> (f32, f32) {
+        let half = font.size * 0.5;
+        let Some(platform) = self.platform else { return (half, half) };
+        let mut h = FxHasher::default();
+        for f in font.family.iter() {
+            match f {
+                FontFamily::Named(n) => {
+                    h.write_u8(1);
+                    h.write(n.as_bytes());
+                }
+                FontFamily::Generic(g) => {
+                    h.write_u8(2);
+                    g.hash(&mut h);
+                }
+            }
+        }
+        let family = h.finish();
+        let mut lh = FxHasher::default();
+        if let Some(l) = lang {
+            lh.write(l.as_bytes());
+        }
+        let key = (family, font.weight.to_bits(), font.style as u8, lh.finish());
+        let cached = self.ex_cache.borrow().get(&key).copied();
+        let (ex, ch) = match cached {
+            Some(v) => v,
+            None => {
+                let q = FontQuery { families: &font.family, weight: font.weight, slant: slant_of(font.style), lang };
+                let v = match platform.resolve_font(&q) {
+                    Some(id) => {
+                        let m = platform.font_metrics(id, 100.0);
+                        (m.x_height.map_or(0.5, |x| x / 100.0), m.zero_advance.map_or(0.5, |z| z / 100.0))
+                    }
+                    None => (0.5, 0.5),
+                };
+                self.ex_cache.borrow_mut().insert(key, v);
+                v
+            }
+        };
+        (ex * font.size, ch * font.size)
+    }
+}
+
+/// The platform's name for a `font-style`.
+pub fn slant_of(s: FontStyleKind) -> FontSlant {
+    match s {
+        FontStyleKind::Normal => FontSlant::Upright,
+        FontStyleKind::Italic => FontSlant::Italic,
+        FontStyleKind::Oblique => FontSlant::Oblique,
+    }
 }
 
 /// Resolve "what does this property become" for one declared (or not declared) property:
@@ -276,7 +343,7 @@ fn is_mono_only(family: &[FontFamily]) -> bool {
     matches!(family, [FontFamily::Generic(GenericFamily::Monospace)])
 }
 
-pub fn compute_font(parent: &Rc<FontStyle>, d: &Declared<'_>, env: &Env, root_font_size: f32) -> Rc<FontStyle> {
+pub fn compute_font(parent: &Rc<FontStyle>, d: &Declared<'_>, env: &Env<'_>, root_font_size: f32, lang: Option<&str>) -> Rc<FontStyle> {
     if !d.touches(FONT_BITS) {
         return parent.clone();
     }
@@ -290,7 +357,8 @@ pub fn compute_font(parent: &Rc<FontStyle>, d: &Declared<'_>, env: &Env, root_fo
         Pick::Value(_) => {}
     }
     let mono = is_mono_only(&f.family);
-    let parent_ctx = LenCtx { font_size: parent.size, root_font_size, viewport_w: env.viewport_w, viewport_h: env.viewport_h };
+    let (pex, pch) = env.ex_ch(parent, lang);
+    let parent_ctx = LenCtx { font_size: parent.size, root_font_size, viewport_w: env.viewport_w, viewport_h: env.viewport_h, ex: pex, ch: pch };
     match pick(d, PropId::FontSize) {
         Pick::Inherit => {
             if let Some(k) = parent.size_keyword {
@@ -327,7 +395,13 @@ pub fn compute_font(parent: &Rc<FontStyle>, d: &Declared<'_>, env: &Env, root_fo
         Pick::Value(_) => {}
     }
     f.size = f.size.clamp(0.0, 10_000.0);
-    let own = LenCtx { font_size: f.size, ..parent_ctx };
+    // The element's own `em`, `ex` and `ch` (line-height, letter-spacing) use its final font.
+    let (own_ex, own_ch) = if f.size == parent.size && f.family == parent.family && f.weight == parent.weight && f.style == parent.style {
+        (pex, pch)
+    } else {
+        env.ex_ch(&f, lang)
+    };
+    let own = LenCtx { font_size: f.size, ex: own_ex, ch: own_ch, ..parent_ctx };
     match pick(d, PropId::FontWeight) {
         Pick::Inherit => {}
         Pick::Initial => f.weight = 400.0,

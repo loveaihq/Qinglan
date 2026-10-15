@@ -282,7 +282,7 @@ fn parse_fval(c: &Cv) -> Option<FVal> {
                             LenUnit::Em | LenUnit::Rem | LenUnit::Ex | LenUnit::Ch => v * 16.0,
                             other => other.to_px(
                                 v,
-                                &super::values::LenCtx { font_size: 16.0, root_font_size: 16.0, viewport_w: 0.0, viewport_h: 0.0 },
+                                &super::values::LenCtx { font_size: 16.0, root_font_size: 16.0, viewport_w: 0.0, viewport_h: 0.0, ex: 8.0, ch: 8.0 },
                             ),
                         },
                         _ => return None,

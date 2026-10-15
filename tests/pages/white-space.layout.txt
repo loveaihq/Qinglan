@@ -1,0 +1,53 @@
+viewport 200x300
+block html (0,0 200x190)
+  block body (0,0 200x190)
+    block div#normal (0,0 60x30)
+      line (0,0 60x10) baseline=8
+        text "ab cd" (0,0 50x10)
+      line (0,10 60x10) baseline=18
+        text "ef gh" (0,10 50x10)
+      line (0,20 60x10) baseline=28
+        text "ij" (0,20 20x10)
+    block div#nowrap (0,30 60x10)
+      line (0,30 60x10) baseline=38
+        text "ab cd ef gh ij" (0,30 140x10)
+    block div#pre (0,40 60x20)
+      line (0,40 60x10) baseline=48
+        text "ab  cd" (0,40 60x10)
+        newline (60,40 0x10)
+      line (0,50 60x10) baseline=58
+        text "   ef gh ij" (0,50 110x10)
+    block div#prewrap (0,60 60x30)
+      line (0,60 60x10) baseline=68
+        text "ab  cd" (0,60 60x10)
+        newline (60,60 0x10)
+      line (0,70 60x10) baseline=78
+        text "   ef " (0,70 60x10)
+      line (0,80 60x10) baseline=88
+        text "gh ij" (0,80 50x10)
+    block div#preline (0,90 60x30)
+      line (0,90 60x10) baseline=98
+        text "ab cd" (0,90 50x10)
+        newline (50,90 0x10)
+      line (0,100 60x10) baseline=108
+        text "ef gh" (0,100 50x10)
+      line (0,110 60x10) baseline=118
+        text "ij" (0,110 20x10)
+    block div#bspaces (0,120 60x30)
+      line (0,120 60x10) baseline=128
+        text "ab  cd" (0,120 60x10)
+        newline (60,120 0x10)
+      line (0,130 60x10) baseline=138
+        text "   ef " (0,130 60x10)
+      line (0,140 60x10) baseline=148
+        text "gh ij" (0,140 50x10)
+    block div#pw2 (0,150 60x20)
+      line (0,150 60x10) baseline=158
+        text "abcde      " (0,150 110x10)
+      line (0,160 60x10) baseline=168
+        text "f" (0,160 10x10)
+    block div#bs2 (0,170 60x20)
+      line (0,170 60x10) baseline=178
+        text "abcde " (0,170 60x10)
+      line (0,180 60x10) baseline=188
+        text "     f" (0,180 60x10)

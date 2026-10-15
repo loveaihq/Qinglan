@@ -1,0 +1,50 @@
+<!--
+viewport: 200x300
+word-break, overflow-wrap and nowrap on top of the platform's break opportunities (css-text-3 5.2, 5.3).
+Every div is 50 wide (5 glyphs of 10px), font 10px/10px, body margin 0.
+
+ba   break-all: a break between any two letters: "abcde" / "fghij"; y=0, 20 high.
+ba2  break-all "ab cdefgh": the line fills up to the edge: "ab cd" / "efgh"; y=20.
+ka   keep-all: no break between the CJK characters, only at the space: "..三" (30 wide) then the six characters
+     "..九" (60 wide, overflowing); y=40.
+ow   overflow-wrap:normal: the long word overflows on one 100 wide line; y=60, 10 high.
+bw   overflow-wrap:break-word: the word is broken when it does not fit: "abcde" / "fghij"; y=70.
+bw2  "ab cdefghij": break-word only breaks when there is no other opportunity on the line, so "ab" / "cdefg" / "hij"; y=90, 30 high.
+wbw  word-break:break-word acts like overflow-wrap:anywhere: "abcde" / "fghij"; y=120.
+nw   white-space:nowrap: one 110 wide line; y=140.
+check: block div#ba :: (0,0 50x20)
+check: text "abcde" (0,0 :: (0,0 50x10)
+check: text "fghij" (0,10 :: (0,10 50x10)
+check: block div#ba2 :: (0,20 50x20)
+check: text "ab cd" :: (0,20 50x10)
+check: text "efgh" :: (0,30 40x10)
+check: block div#ka :: (0,40 50x20)
+check: text "一二三" :: (0,40 30x10)
+check: text "四五六七八九" :: (0,50 60x10)
+check: block div#ow :: (0,60 50x10)
+check: text "abcdefghij" (0,60 :: (0,60 100x10)
+check: block div#bw :: (0,70 50x20)
+check: text "abcde" (0,70 :: (0,70 50x10)
+check: text "fghij" (0,80 :: (0,80 50x10)
+check: block div#bw2 :: (0,90 50x30)
+check: text "ab" :: (0,90 20x10)
+check: text "cdefg" :: (0,100 50x10)
+check: text "hij" :: (0,110 30x10)
+check: block div#wbw :: (0,120 50x20)
+check: text "abcde" (0,120 :: (0,120 50x10)
+check: block div#nw :: (0,140 50x10)
+check: text "ab cd ef gh" :: (0,140 110x10)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+div { width: 50px }
+</style>
+<div id="ba" style="word-break:break-all">abcdefghij</div>
+<div id="ba2" style="word-break:break-all">ab cdefgh</div>
+<div id="ka" style="word-break:keep-all">一二三 四五六七八九</div>
+<div id="ow" style="overflow-wrap:normal">abcdefghij</div>
+<div id="bw" style="overflow-wrap:break-word">abcdefghij</div>
+<div id="bw2" style="overflow-wrap:break-word">ab cdefghij</div>
+<div id="wbw" style="word-break:break-word">abcdefghij</div>
+<div id="nw" style="white-space:nowrap">ab cd ef gh</div>

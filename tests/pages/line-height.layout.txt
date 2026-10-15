@@ -1,0 +1,31 @@
+viewport 200x300
+block html (0,0 200x156)
+  block body (0,0 200x156)
+    block div#n (0,0 200x10)
+      line (0,0 200x10) baseline=8
+        text "ab" (0,0 20x10)
+    block div#px20 (0,10 200x20)
+      line (0,10 200x20) baseline=23
+        text "ab" (0,15 20x10)
+    block div#num (0,30 200x15)
+      line (0,30 200x15) baseline=40
+        text "ab" (0,32 20x10)
+    block div#zero (0,45 200x0)
+      line (0,45 200x0) baseline=48
+        text "ab" (0,40 20x10)
+    block div#big (0,45 200x20)
+      line (0,45 200x20) baseline=61
+        text "ab" (0,45 40x20)
+    block div#mix (0,65 200x20)
+      line (0,65 200x20) baseline=81
+        text "ab" (0,73 20x10)
+        text "X" (20,65 20x20)
+    block div#span40 (0,85 200x40)
+      line (0,85 200x40) baseline=108
+        text "x" (0,100 10x10)
+    block div#odd (0,125 200x11)
+      line (0,125 200x11) baseline=133
+        text "ab" (0,125 20x10)
+    block div#strut (0,136 200x20)
+      line (0,136 200x20) baseline=152
+        text "x" (0,148 5x5)

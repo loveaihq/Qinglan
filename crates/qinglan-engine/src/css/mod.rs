@@ -27,6 +27,7 @@ use stylesheet::{ImportRule, SheetCtx, Stylesheet, parse_stylesheet, parse_style
 use types::DeclBlock;
 
 use crate::html::atoms::{FxHashMap, Interner, a};
+use crate::platform::Platform;
 use crate::html::dom::{Document, NONE, Namespace, NodeId, QuirksMode};
 use crate::url::Url;
 
@@ -211,6 +212,18 @@ const UA_QUIRKS_CSS: &str = include_str!("ua_quirks.css");
 /// `doc_url` is the address of the page (for relative style sheet addresses); `loader` supplies the
 /// text of external style sheets.
 pub fn style_document(doc: &mut Document, doc_url: Option<&Url>, loader: &mut dyn ResourceLoader, opts: &StyleOptions) -> StyleOutput {
+    style_document_with(doc, doc_url, loader, opts, None)
+}
+
+/// Like [`style_document`], with a platform that supplies font metrics for `ex` and `ch`
+/// (css-values-4 6.1). Without one both are half an em.
+pub fn style_document_with(
+    doc: &mut Document,
+    doc_url: Option<&Url>,
+    loader: &mut dyn ResourceLoader,
+    opts: &StyleOptions,
+    platform: Option<&dyn Platform>,
+) -> StyleOutput {
     let quirks = doc.quirks == QuirksMode::Quirks;
     let base = base_url(doc, doc_url);
     let sources = collect_sources(doc, base.as_ref());
@@ -312,7 +325,7 @@ pub fn style_document(doc: &mut Document, doc_url: Option<&Url>, loader: &mut dy
             ua: &ua,
             author: &author,
             style_attrs: &style_attrs,
-            env: Env { viewport_w: opts.viewport_w, viewport_h: opts.viewport_h },
+            env: Env::new(opts.viewport_w, opts.viewport_h, platform),
             hints: &mut hint_fn,
         })
     };

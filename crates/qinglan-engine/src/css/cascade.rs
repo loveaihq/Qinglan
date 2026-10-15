@@ -471,7 +471,7 @@ pub struct StyleInput<'a> {
     pub author: &'a RuleSet,
     /// Parsed `style` attributes by node id.
     pub style_attrs: &'a [Option<Rc<DeclBlock>>],
-    pub env: Env,
+    pub env: Env<'a>,
     /// Presentational hints per element (HTML 15.3), built by the caller on demand.
     pub hints: &'a mut dyn FnMut(&Document, NodeId) -> Option<Rc<DeclBlock>>,
 }
@@ -780,7 +780,7 @@ fn style_for(
     entries: &[Entry],
     parent: &Rc<ComputedStyle>,
     init: &Rc<ComputedStyle>,
-    env: &Env,
+    env: &Env<'_>,
     root_font_size: f32,
     lang: Option<&str>,
     is_root: bool,
@@ -829,9 +829,9 @@ fn style_for(
         declared.set(p, Cow::Owned(found.unwrap_or(Specified::Unset)));
     }
 
-    let parent_ctx = LenCtx { font_size: parent.font.size, root_font_size, viewport_w: env.viewport_w, viewport_h: env.viewport_h };
-    let font = compute_font(&parent.font, &declared, env, root_font_size);
-    let own = LenCtx { font_size: font.size, ..parent_ctx };
+    let font = compute_font(&parent.font, &declared, env, root_font_size, lang);
+    let (ex, ch) = env.ex_ch(&font, lang);
+    let own = LenCtx { font_size: font.size, root_font_size, viewport_w: env.viewport_w, viewport_h: env.viewport_h, ex, ch };
     let _ = is_root;
     let boxs = compute_box(&parent.boxs, &init.boxs, &declared, &own, is_root);
     let border = compute_border(&parent.border, &init.border, &declared, &own);

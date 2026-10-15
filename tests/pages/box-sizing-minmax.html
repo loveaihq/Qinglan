@@ -1,0 +1,64 @@
+<!--
+viewport: 400x300
+Widths (CSS2 10.3.3), min/max (10.4, 10.7), percentages (10.2, 10.5) and box-sizing. Containing block 400 wide,
+body margin 0, every block 10px high unless said otherwise, so y just adds up.
+
+w1   width 50% = 200.                                              (0,0 200x10)
+c    width 100 and margin 0 auto: margins (400-100)/2 = 150.        (150,10 100x10)
+o    over-constrained, width 300, margin-left 50, margin-right 80: margin-right is ignored. (50,20 300x10)
+p    margin-left 10% = 40, padding 5% = 20 on all four sides (also top and bottom, of the width),
+     width auto: content 400-40-40 = 320, border box 360; height 10+20+20 = 50.        (40,30 360x50)
+bb   border-box, width 200, height 100, padding 10, border 5: the box is 200x100.     (0,80 200x100)
+cb   content-box, width 200, height 50, padding 10, border 5: 200+20+10 = 230 by 50+20+10 = 80. (0,180 230x80)
+mm1  width 300, max-width 200 gives 200.                          (0,260 200x10)
+mm2  width 100, min-width 150 gives 150.                          (0,270 150x10)
+mm3  width auto fills 400, max-width 120 then applies and the auto margins centre it: (400-120)/2 = 140.
+mm4  border-box, padding 10, min-width 100 beats width 50: border box 100; height 10 is smaller than the
+     padding, so the box is 20 high (the content cannot be negative).   (0,290 100x20)
+hp   height 100 with a child height 50% = 50.                      hp (0,310 400x100), hp1 (0,310 400x50)
+ha   parent height auto, so the child's 50% acts as auto: it is as high as its content, 20.
+mh1  height 10 but min-height 30 gives 30.                         (0,430 400x30)
+mh2  height 100 but max-height 40 gives 40.                        (0,460 400x40)
+mh3  height auto, content 20, min-height 50 gives 50.              (0,500 400x50)
+nm   margin-left -20, width auto: 400+20 = 420, starting at -20.   (-20,550 420x10)
+check: block div#w1 :: (0,0 200x10)
+check: block div#c :: (150,10 100x10)
+check: block div#o :: (50,20 300x10)
+check: block div#p :: (40,30 360x50)
+check: block div#bb :: (0,80 200x100)
+check: block div#cb :: (0,180 230x80)
+check: block div#mm1 :: (0,260 200x10)
+check: block div#mm2 :: (0,270 150x10)
+check: block div#mm3 :: (140,280 120x10)
+check: block div#mm4 :: (0,290 100x20)
+check: block div#hp :: (0,310 400x100)
+check: block div#hp1 :: (0,310 400x50)
+check: block div#ha :: (0,410 400x20)
+check: block div#ha1 :: (0,410 400x20)
+check: block div#ha2 :: (0,410 400x20)
+check: block div#mh1 :: (0,430 400x30)
+check: block div#mh2 :: (0,460 400x40)
+check: block div#mh3 :: (0,500 400x50)
+check: block div#nm :: (-20,550 420x10)
+check: block body :: (0,0 400x560)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+</style>
+<div id="w1" style="width:50%;height:10px"></div>
+<div id="c" style="width:100px;margin:0 auto;height:10px"></div>
+<div id="o" style="width:300px;margin-left:50px;margin-right:80px;height:10px"></div>
+<div id="p" style="margin-left:10%;padding:5%;height:10px"></div>
+<div id="bb" style="box-sizing:border-box;width:200px;height:100px;padding:10px;border:5px solid"></div>
+<div id="cb" style="width:200px;height:50px;padding:10px;border:5px solid"></div>
+<div id="mm1" style="width:300px;max-width:200px;height:10px"></div>
+<div id="mm2" style="width:100px;min-width:150px;height:10px"></div>
+<div id="mm3" style="margin:0 auto;max-width:120px;height:10px"></div>
+<div id="mm4" style="box-sizing:border-box;padding:10px;min-width:100px;width:50px;height:10px"></div>
+<div id="hp" style="height:100px"><div id="hp1" style="height:50%"></div></div>
+<div id="ha"><div id="ha1" style="height:50%"><div id="ha2" style="height:20px"></div></div></div>
+<div id="mh1" style="height:10px;min-height:30px"></div>
+<div id="mh2" style="height:100px;max-height:40px"></div>
+<div id="mh3" style="min-height:50px"><div style="height:20px"></div></div>
+<div id="nm" style="margin-left:-20px;height:10px"></div>

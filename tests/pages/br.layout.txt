@@ -1,0 +1,42 @@
+viewport 200x300
+block html (0,0 200x140)
+  block body (0,0 200x140)
+    block div#b1 (0,0 200x20)
+      line (0,0 200x10) baseline=8
+        text "a" (0,0 10x10)
+        br (10,0 0x10)
+      line (0,10 200x10) baseline=18
+        text "b" (0,10 10x10)
+    block div#b2 (0,20 200x30)
+      line (0,20 200x10) baseline=28
+        text "a" (0,20 10x10)
+        br (10,20 0x10)
+      line (0,30 200x10) baseline=38
+        br (0,30 0x10)
+      line (0,40 200x10) baseline=48
+        text "b" (0,40 10x10)
+    block div#b3 (0,50 200x10)
+      line (0,50 200x10) baseline=58
+        text "a" (0,50 10x10)
+        br (10,50 0x10)
+    block div#b4 (0,60 200x10)
+      line (0,60 200x10) baseline=68
+        br (0,60 0x10)
+    block div#b5 (0,70 200x20)
+      line (0,70 200x10) baseline=78
+        text "a" (0,70 10x10)
+        br (10,70 0x10)
+      line (0,80 200x10) baseline=88
+        text "b" (0,80 10x10)
+    block div#b6 (0,90 200x20)
+      line (0,90 200x10) baseline=98
+        text "a" (190,90 10x10)
+        br (200,90 0x10)
+      line (0,100 200x10) baseline=108
+        text "bcd" (170,100 30x10)
+    block div#b7 (0,110 200x30)
+      line (0,110 200x20) baseline=126
+        text "x" (0,118 10x10)
+        br (10,110 0x20)
+      line (0,130 200x10) baseline=138
+        text "y" (0,130 10x10)

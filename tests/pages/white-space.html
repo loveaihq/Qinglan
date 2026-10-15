@@ -1,0 +1,65 @@
+<!--
+viewport: 200x300
+The six white-space modes (css-text-3 4.1, 5.2). Every div is 60px wide (6 glyphs of 10px) and holds
+"ab", two spaces, "cd", a line feed, three spaces, "ef gh ij". The last two divs hold "abcde", six spaces, "f".
+Line height is 10px, so the heights below are 10 per line.
+
+normal       collapse + wrap: "ab cd ef gh ij" (14 glyphs), lines "ab cd" / "ef gh" / "ij" (the break space is
+             removed at the end of the line): 50, 50, 20 wide; 30 high; y=0.
+nowrap       the same text on one 140 wide line, overflowing the 60 box; y=30, 10 high.
+pre          nothing collapses, no wrapping, the line feed breaks: "ab  cd" 60 wide, "   ef gh ij" 110 wide; y=40, 20 high.
+pre-wrap     preserved, wraps. Line 2 is "   ef gh ij": "   ef " fits (6 glyphs), the space after ef hangs, so the
+             second line is "   ef " (fragment 60) and the third "gh ij" (50); y=60, 30 high.
+pre-line     spaces collapse, the line feed stays: "ab cd" / "ef gh" / "ij" (the spaces after the line feed go);
+             y=90, 30 high.
+break-spaces preserved and a break is possible after every space: same lines as pre-wrap here; y=120, 30 high.
+pw2          pre-wrap "abcde      f": the six spaces hang, so "abcde" + spaces stay on line one (fragment 110 wide,
+             overflowing) and "f" follows; y=150, 20 high.
+bs2          break-spaces: spaces take room, so line one is "abcde " (60) and line two five spaces + "f" (60); y=170.
+check: block div#normal :: (0,0 60x30)
+check: text "ab cd" (0,0 :: (0,0 50x10)
+check: text "ef gh" (0,10 :: (0,10 50x10)
+check: text "ij" (0,20 :: (0,20 20x10)
+check: block div#nowrap :: (0,30 60x10)
+check: text "ab cd ef gh ij" :: (0,30 140x10)
+check: block div#pre :: (0,40 60x20)
+check: text "ab  cd" (0,40 :: (0,40 60x10)
+check: text "   ef gh ij" :: (0,50 110x10)
+check: block div#prewrap :: (0,60 60x30)
+check: text "ab  cd" (0,60 :: (0,60 60x10)
+check: text "   ef " (0,70 :: (0,70 60x10)
+check: text "gh ij" (0,80 :: (0,80 50x10)
+check: block div#preline :: (0,90 60x30)
+check: text "ab cd" (0,90 :: (0,90 50x10)
+check: text "ef gh" (0,100 :: (0,100 50x10)
+check: text "ij" (0,110 :: (0,110 20x10)
+check: block div#bspaces :: (0,120 60x30)
+check: text "ab  cd" (0,120 :: (0,120 60x10)
+check: text "   ef " (0,130 :: (0,130 60x10)
+check: text "gh ij" (0,140 :: (0,140 50x10)
+check: block div#pw2 :: (0,150 60x20)
+check: text "abcde      " :: (0,150 110x10)
+check: text "f" (0,160 :: (0,160 10x10)
+check: block div#bs2 :: (0,170 60x20)
+check: text "abcde " :: (0,170 60x10)
+check: text "     f" :: (0,180 60x10)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+div { width: 60px }
+</style>
+<div id="normal" style="white-space:normal">ab  cd
+   ef gh ij</div>
+<div id="nowrap" style="white-space:nowrap">ab  cd
+   ef gh ij</div>
+<div id="pre" style="white-space:pre">ab  cd
+   ef gh ij</div>
+<div id="prewrap" style="white-space:pre-wrap">ab  cd
+   ef gh ij</div>
+<div id="preline" style="white-space:pre-line">ab  cd
+   ef gh ij</div>
+<div id="bspaces" style="white-space:break-spaces">ab  cd
+   ef gh ij</div>
+<div id="pw2" style="white-space:pre-wrap">abcde      f</div>
+<div id="bs2" style="white-space:break-spaces">abcde      f</div>

@@ -1,0 +1,43 @@
+<!--
+viewport: 200x300
+Anonymous block boxes (CSS2 9.2.1.1) and whitespace between blocks (9.2.2.1). Font 10px/10px, body margin 0.
+
+a   "one " then a block, then " two " and a span that contains a block, then " five".
+    The inline run before a block becomes an anonymous block: "one " (the trailing space is dropped, 30 wide).
+    b is a 10px block. " two " + span "three" form the next anonymous block, one line: the leading space is dropped,
+    "two " 40 wide then "three" 50 wide. c is the block inside the span, so the span is split in two pieces; the
+    second piece "four" + " five" is the third anonymous block: "four" 40 wide, " five" 50 wide.
+    Five children, each 10 high: a is 50 high.
+d   whitespace-only text between blocks makes no box: two blocks, 20 high, no anonymous block.
+e   an empty span between blocks makes no anonymous block either: 20 high.
+f   whitespace only: no line at all, so f is 0 high and (empty, no padding or border) its margin collapses through.
+g   starts where f is.
+check: block div#a :: (0,0 200x50)
+check: block (anonymous) :: (0,0 200x10)
+check: text "one" :: (0,0 30x10)
+check: block div#b :: (0,10 200x10)
+check: text "two " :: (0,20 40x10)
+check: text "three" :: (40,20 50x10)
+check: block div#c :: (0,30 200x10)
+check: text "four" :: (0,40 40x10)
+check: text " five" :: (40,40 50x10)
+check: block div#d :: (0,50 200x20)
+check: block div#d1 :: (0,50 200x10)
+check: block div#d2 :: (0,60 200x10)
+check: block div#e :: (0,70 200x20)
+check: block div#f :: (0,90 200x0)
+check: block div#g :: (0,90 200x10)
+check: block body :: (0,0 200x100)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+</style>
+<div id="a">one <div id="b" style="height:10px"></div> two <span>three<div id="c" style="height:10px"></div>four</span> five</div>
+<div id="d">
+   <div id="d1" style="height:10px"></div>
+   <div id="d2" style="height:10px"></div>
+</div>
+<div id="e"><div id="e1" style="height:10px"></div><span></span><div id="e2" style="height:10px"></div></div>
+<div id="f">   </div>
+<div id="g" style="height:10px"></div>

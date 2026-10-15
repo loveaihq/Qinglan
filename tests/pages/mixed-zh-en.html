@@ -1,0 +1,25 @@
+<!--
+viewport: 200x300
+Chinese mixed with English (test platform: a break is allowed between a CJK and a non-CJK character, after a space, never
+inside a Latin word, never before ASCII or CJK closing punctuation). Font 10px/10px, body margin 0.
+
+m1  50 wide: "中文abc中文ab". Opportunities: between the Chinese characters, between 文 and a, between c and 中.
+    "中文abc" is exactly 50 wide and fits; the next 中 does not: line two "中文ab" is 40 wide. y=0, 20 high.
+m2  80 wide: "Hello 世界, 你好 world" (8 glyphs per line). "Hello 世界" would fit exactly (8) but the comma may not start
+    a line, so the comma must follow 界 and there is no room: the line breaks between 世 and 界, "Hello 世" (70).
+    Line two "界, 你好" (50; the space after 好 is removed at the line end), line three "world" (50). y=20, 30 high.
+check: block div#m1 :: (0,0 50x20)
+check: text "中文abc" :: (0,0 50x10)
+check: text "中文ab" :: (0,10 40x10)
+check: block div#m2 :: (0,20 80x30)
+check: text "Hello 世" :: (0,20 70x10)
+check: text "界, 你好" :: (0,30 50x10)
+check: text "world" :: (0,40 50x10)
+-->
+<!doctype html>
+<meta charset="utf-8">
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+</style>
+<div id="m1" style="width:50px">中文abc中文ab</div>
+<div id="m2" style="width:80px">Hello 世界, 你好 world</div>

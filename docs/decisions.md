@@ -58,7 +58,7 @@
 
 **值**
 
-- `ex`、`ch` = 0.5em（引擎核心没有字体度量；1b 如果要更准再改）。`vw/vh/vmin/vmax` 按 `style` 命令的 `--width/--height`（默认 1280×1000）；`dvh/svh/lvh` 等当 `vh`，`dvw` 等当 `vw`。
+- `ex`、`ch`：1a 时按 0.5em；1b-1 起取平台的字体度量（x 高度、"0" 的前进宽度），没有平台时仍是 0.5em，见 1b-1 一节。`vw/vh/vmin/vmax` 按 `style` 命令的 `--width/--height`（默认 1280×1000）；`dvh/svh/lvh` 等当 `vh`，`dvw` 等当 `vw`。
 - 颜色：Lab/LCH/OKLab/OKLCH 换算到 sRGB 后**直接钳制**到 0–255，不做色域映射（规范推荐的映射第 1 层用不上）；`color-mix()`、`color()`、`light-dark()`、相对颜色语法都当无效。系统颜色（`Canvas`、`LinkText`、`ButtonFace` …）取一组固定的浅色方案的值（`css/color.rs`）。`currentcolor` 在边框、背景、装饰线颜色上保留为关键字，在 `color` 上等于 `inherit`。
 - `calc()`/`min()`/`max()`/`clamp()` 嵌套最多 32 层；加减号两侧必须有空白；类型不匹配（长度 + 数字）无效；算出来不含百分比就在计算值阶段收成一个长度。没有 `round()`、`mod()`、`sin()` 等。
 - `font-size` 绝对关键字用 Blink 的表（16px 为 `medium`）；**只写 `monospace` 一个字体族时 `medium` 是 13px**（Blink/Gecko 的老规矩，不然 `<pre>`、`<code>` 会比浏览器大）。继承来的关键字大小在字体族变成/不再是 `monospace` 时会重新算（`size_keyword`）。`larger/smaller` 按 1.2 倍。`font-weight: bolder/lighter` 按规范表。
@@ -123,8 +123,64 @@
 - 嵌套 `<template>`：EOF 时 "in template" 模式要反复"弹出到 template、重置插入模式、重新处理 EOF"（HTML 13.2.6.4.18），原来用递归，每层 template 一个栈帧，debug 构建 600 层就溢出；改成循环，步骤不变。
 - 旧式颜色（HTML 2.3.5 第 6 步）：大于 U+FFFF 的字符换成两个 `0`（不是一个），之后才按 128 个字符截断。`bgcolor="1😀2"` 得 `#100200`。
 - 1a 性能目标（zh.wikipedia 2.4 MB 页面，解析+样式 ≤ 80 ms）没有达到，实测 84–95 ms。暂时接受：真正的关口是 1c 的首屏 ≤ 200 ms；如果它有风险，第一个优化是相同样式的元素之间共享样式（style sharing）。
-- `ex`、`ch` 在 1b 之前按 0.5em 算；1b 起必须用真实的字体度量（x 高度、"0" 的宽度）。
+- `ex`、`ch` 在 1b 之前按 0.5em 算；1b 起用字体度量（x 高度、"0" 的宽度），1b-1 已改（见下）。
 - 怪异模式的 `li { list-style-position: inside }` 那条规则仍然不采用，和浏览器一致。
+
+## 第 1 层 · 1b-1 平台接口、盒子树、块排版、基础行内排版
+
+代码在 `platform/`、`layout/`（`boxtree.rs`、`block.rs`、`inline.rs`、`units.rs`、`dump.rs`）、`textclass.rs`；测试在 `tests/layout_snapshots.rs`（快照）、`tests/layout_basic.rs`，网页在仓库根的 `tests/pages/`。
+
+### 平台接口（`platform/mod.rs`，一次定全）
+
+- 方法：`decode_legacy`（1a 已有）、`resolve_font`（字体族列表 + 粗细 + 斜体 + 语言 → `FontId`）、`font_metrics`（上升、下降、行距、x 高、"0" 前进宽度、下划线和删除线的位置和粗细，单位 px）、`shape`（一段同样式的文字 → 字形列表，含回退，每个字形带字体、字形号、前进宽度、偏移、对应的字节范围 `cluster_start..cluster_end`）、`line_breaks`（整段文字的断行位置）、`glyph_mask`（灰度遮罩，横向 4 档）。对象安全，不含 Windows 类型。没有字体的 `BasicPlatform` 只是让 1a 的代码继续能用。
+- **断行分工**：平台对整个段落调一次，只返回 UAX #14 的基础断点（字节位置）。`word-break: break-all / keep-all`、`white-space`（`nowrap`、`pre`、`break-spaces` 的"每个空格后可断"）由引擎叠加，`overflow-wrap` / `word-break: break-word` 在填行时处理（行里没有别的断点才在字里断）。1b-3 的 Windows 平台因此只需要把 `AnalyzeLineBreakpoints` 的结果翻译成字节位置。
+- 整形的结果按"字形簇"切成最小单位，一行只在簇的边界断开；一个簇多个字符（连字）或多个字形（附加符号）都能处理。字体回退发生在平台里，`Glyph.font` 可以不同。字形号 0 表示缺字（1b-3 验收"没有方块字"就数它）。
+- 尺寸一律 `f32` px，进了排版才换成 1/64 px 的整数。
+
+### 测试平台（`platform/test.rs`）
+
+- 按任务单：每个字形 1em 见方（前进宽度 = 字号），上升 0.8em，下降 0.2em，行距 0。**x 高度 0.8em**（Ahem 的 OS/2 表里就是这个值，"x" 字形和上升一样高），**"0" 的前进宽度 1em**；所以 `5ex` 在 20px 字号下是 80px，`2ch` 是 40px。零宽：ZWSP/ZWNJ/ZWJ/词连接符/BOM/变体选择符/组合记号/控制字符。空格不画（遮罩为空）。
+- 断行（比任务单多写了几条，都是为了混排不出怪样子）：空格（和制表符等）之后可断；两个中日韩字符之间可断；中日韩字符和非中日韩字符之间可断；ZWSP 之后可断。**后置标点前不断**：`，。、；：？！）」』】》…` 等全角的，加上 ASCII 的 `, . ; : ! ? ) ] }`（UAX #14 的 CL/EX/IS 类，不加的话"界,"会在逗号前断开）；**前置标点后不断**：`（「『【《` 和 `( [ {`。连字符、不间断空格（U+00A0）、词内不断。韩文音节也算"中日韩"（UAX #14 里音节之间默认可断）。字符表在 `textclass.rs`，手写，只覆盖中日韩常用区。
+
+### `ex` / `ch`（css-values-4 6.1）
+
+- 样式计算时用平台度量：`ex` = x 高度，`ch` = "0" 的前进宽度，按元素自己的字体（`font-size` 里的 `ex`/`ch` 用父元素的字体）。度量查询按（字体族、粗细、斜体、语言）缓存。字体没有 x 高度或没有 "0" 时按 0.5em。`style_document_with(.., Some(platform))` 才查平台；`style_document` 和不带 `--test-font` 的 `style` 命令仍是 0.5em。
+
+### 盒子树（`layout/boxtree.rs`，任务单第 9 节）
+
+- 按 `display` 生成：`none` 不生成；`contents` 本身不生成、子节点顶替它的位置；`block / list-item / flow-root` 是块；`inline` 是行内盒。SVG / MathML 元素不生成（第 1 层不显示）。
+- **退路**：`flex`、`grid`、`table` 和所有 `table-*`（含 `table-column`、`table-column-group`，不按 CSS2 17.2 当 `none`，照任务单"当 block"）→ 块，盒子上记着原来的 `display`，转储里写 `[display:flex]`；`inline-block`、`inline-flex`、`inline-grid`、`inline-table` → **1b-1 暂时也当块排**（等 1b-2 做了真正的原子行内盒再改），转储里同样有标记；`ruby` / `ruby-text` → 行内；`float` 忽略（1a 的层叠已按 CSS2 9.7 把浮动元素块化，所以浮动的 `span` 是个块）；`position: absolute / fixed` 也先留在正常流里（定位是 1b-2）。
+- 匿名块（CSS2 9.2.1.1）：块容器的子盒里既有块级又有行内级时，每一段连续的行内级盒包进一个匿名块（继承属性来自父盒，其余用初始值）。行内元素里有块级后代时，行内元素被拆成几段（`SplitPart` 记着第一段、最后一段，给 1b-2 的左右边框用）；没有子盒的段不生成（1b-2 里有水平内边距/边框/外边距的要保留，`finish_inline` 里有注）。
+- 只有可折叠空白的文字、和空的行内元素，在块之间不生成匿名块（CSS2 9.2.2.1）；`white-space: pre-line` 里含换行的空白文字要保留（它会渲染成一个空行）。
+- **层数上限 `MAX_BOX_DEPTH` = 256**：嵌套更深的元素不再生成自己的盒（当 `display: contents`），子孙上移。防排版递归爆栈；测试 `deep_nesting_fits_in_one_megabyte_of_stack` 在 1 MB 栈的线程上跑 1500 层。
+
+### 块排版（`layout/block.rs`，任务单第 10 节）
+
+- 单位 `LayoutUnit` = 1/64 px 的 `i32`，加减乘都饱和在 ±2^24 px，1e9px 的恶意长度不会溢出。样式里的 `f32` 长度四舍五入换算；文字宽度按每个字形簇四舍五入到 1/64（测试字体里全是整数，不受影响）。
+- 一个块只需要知道含块宽度（和已定的高度）就能排；它自己的位置由父亲事后定。外边距合并（CSS2 8.3.1）自下向上算：每个块报告上、下边缘露出来的外边距（已经和第一个/最后一个子块合并）和"自己的上下外边距穿过自己"（`through`）；父亲在兄弟之间合并并摆放。覆盖：兄弟、父子（上、下）、空块穿过、负外边距（最大正值加最小负值）、padding / border 隔断、新格式化上下文（`overflow` 非 visible/clip、`flow-root`、各种退路块、根元素）。
+- 空块（`through`）的位置按 8.3.1 末段："像下边框不为零那样"——只算它自己的上外边距，所以 `g1 { margin: 20px 0 30px }` 夹在两块之间时，它在上一块下面 20px 处，而后一块在 30px 处。
+- 宽度 10.3.3：auto 外边距、过约束（ltr：右外边距被忽略）、两个外边距都是 auto 时居中，装不下时左 0、右取余；min/max 10.4（算一遍，超过 max 用 max 再算，小于 min 用 min 再算）；`box-sizing: border-box` 的 width / min / max 先减去 padding + border（不小于 0）。`min-content / max-content / fit-content` 1b-1 当 `auto`（要内在宽度，1b-2 才有）。
+- 高度 10.6.3、10.5：百分比高度只有含块高度明确（含块 `height` 指定了，或是根的视口）才算，否则当 `auto`；`min-height` 的百分比在含块高度不明确时当 0，`max-height` 当 `none`。边框宽度和 Blink 一样取整（≥ 1 取整，0–1 之间算 1px）。padding 的百分比也是对含块**宽度**。
+- **`overflow`**：`hidden` 和 `clip` 记 `[clip]`（1c 绘制时裁剪）；`auto` / `scroll` 按任务单当 `visible`，内容不丢，不裁剪。但 `hidden / auto / scroll` 仍然**是格式化上下文**（和浏览器一致），子块的外边距不会合并出来；`clip` 不是。
+- 根元素是格式化上下文：它的外边距不和子元素合并。视口高度只用来解析根上的百分比高度（`html { height: 100% }`）。
+
+### 行内排版（`layout/inline.rs`，任务单第 10 节）
+
+- 一个"子盒全是行内级"的块容器是一个段落：先收集文字（`collect`）、按 css-text-3 4.1.1 / 4.1.3 做空白折叠（**第一阶段**，跨行内元素边界），再整形、切单位、断行、排行（**第二阶段**，4.1.2：行首行尾的可折叠空格删掉，保留的空格在行尾"悬挂"，`pre-wrap` 在强制换行前的悬挂空格算有条件悬挂，放得下就不悬挂）。
+- 六种 `white-space`（`white-space-collapse` × `text-wrap-mode`）：`normal`、`nowrap`、`pre`、`pre-wrap`、`pre-line`、`break-spaces` 的行为见 `tests/pages/white-space.html`。`preserve-spaces`（css-text-4）：空格保留，换行变成保留的空格。`\r` 当空格。制表符：折叠模式变空格；保留模式按 `tab-size: 8`（`tab-size` 属性 1a 没解析，用初始值）走到下一个制表位（制表位从块的内容左边算，不足半个空格宽就跳到下一个）。
+- **中日韩换行（4.1.3，Firefox 的做法，Chrome 没有）**：可折叠的换行，两边的字符的东亚宽度都是 W / F / H 且都不是韩文，就删掉不变成空格；任何一边是 U+200B 也删掉；其余变空格。先删换行两边的空格和制表符，连续的换行算一个。判断跨文字节点、跨行内元素。韩文要空格（"안녕\n하세요" → "안녕 하세요"）。
+- **断点叠加**：见上"断行分工"。两个相邻单位属于不同文字项时，"任一边允许换行就算允许"（真正的规则看共同祖先的 `white-space`，这是近似）。
+- **行高**：`line-height: normal` = 主字体的上升 + 下降 + 行距，三个数先取整到整 px（和 Blink 一样）；`<数字>` 乘元素自己的字号。半行距 = (行高 − 上升 − 下降) / 2，**上半部分向下取整到整 px**（Blink 的做法，CSS 没规定怎么舍入），下半部分是余数。行盒的高度 = 支柱和这一行里有内容的每个行内盒（包括文字外面的所有行内祖先、`<br>` 自己）的（上升 + 上半行距）最大值 + （下降 + 下半行距）最大值；没有内容的空行内盒不参与（和 Chrome 一致）；不实现怪异模式里"没有文字的行不用支柱"的老规矩。
+- 只有强制换行（`<br>`、保留的换行符）结尾的空行有支柱的高度；末尾的 `<br>` 不再生出一个空行。
+- `text-align`：`left` / `start` / `match-parent` / `justify` / `justify-all` → 靠左（`justify` 要到 1b-2），`right` / `end` → 靠右，`center`。内容比行宽时不居中也不靠右，从行首开始（css-text-3 7.1）。没有右到左排版，`direction` 不影响。居中的偏移 = 空余 / 2（1/64 单位向零取整）。
+- 文字片段（转储里的 `text`）的矩形是内容区：高 = 主字体上升 + 下降，底边不含半行距；同一行里同一个文字项的相邻单位合成一个片段。
+- 没做（1b-2）：`vertical-align`（只有 baseline）、行内盒的 padding / border / margin、`justify`、`text-indent`、`letter-spacing`、`word-spacing`、`text-transform`、装饰线、原子行内（`inline-block` 暂时按块）、图片、列表标记、定位、表单控件、**排版工作量计量**（现在只有 `MAX_BOX_DEPTH`；一个 10MB 没有空格的文字现在会整个整形，每个字符约占 100 字节）。
+
+### `qinglan-cli layout` 和转储格式
+
+- `qinglan-cli layout <文件> [--width 1280] [--height 1000] [--test-font] [--time]`。不带 `--test-font` 报错退出（"Windows 平台到位前只有 --test-font 能用"）。
+- 转储格式（`layout/dump.rs` 开头有例子）：第一行 `viewport WxH`；之后每个块一行 `block <标签#id.类 | (anonymous)> (x,y WxH)`，坐标是页面坐标下的边框盒，单位 CSS px，去掉多余的 0，最小单位 1/64 = 0.015625；退路块后面加 `[display:flex]` 之类，`overflow: hidden/clip` 加 `[clip]`。块里有行内内容时，下面缩进列出 `line (x,y WxH) baseline=Y`（Y 是基线的页面 y）和它的 `text "…" (x,y WxH)` 片段，强制换行是 `br`（`<br>` 元素）或 `newline`（保留的换行符）。
+- 快照：`tests/pages/*.html` 配 `*.layout.txt`。每个网页开头的 HTML 注释里写着按规范**手算**的关键数字，其中 `check: <行首文字> :: <期望片段>` 的行由测试程序逐条对照转储（手算数字不是从引擎抄来的，所以快照不会只是记录引擎当时的输出）；`viewport: WxH` 设视口。重新生成期望文件：`UPDATE_SNAPSHOTS=1 cargo test -p qinglan-engine --test layout_snapshots`，生成前先确认手算数字没有失败。
 
 ### 来源
 

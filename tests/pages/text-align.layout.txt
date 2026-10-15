@@ -1,0 +1,38 @@
+viewport 200x400
+block html (0,0 200x120)
+  block body (0,0 200x120)
+    block div#l (0,0 100x10)
+      line (0,0 100x10) baseline=8
+        text "abc" (0,0 30x10)
+    block div#c (0,10 100x10)
+      line (0,10 100x10) baseline=18
+        text "abc" (35,10 30x10)
+    block div#r (0,20 100x10)
+      line (0,20 100x10) baseline=28
+        text "abc" (70,20 30x10)
+    block div#s (0,30 100x10)
+      line (0,30 100x10) baseline=38
+        text "abc" (0,30 30x10)
+    block div#e (0,40 100x10)
+      line (0,40 100x10) baseline=48
+        text "abc" (70,40 30x10)
+    block div#ov (0,50 100x10)
+      line (0,50 100x10) baseline=58
+        text "abcdefghijkl" (0,50 120x10)
+    block div#two (0,60 100x20)
+      line (0,60 100x10) baseline=68
+        text "abcd efgh" (5,60 90x10)
+      line (0,70 100x10) baseline=78
+        text "ij" (40,70 20x10)
+    block div#half (0,80 105x10)
+      line (0,80 105x10) baseline=88
+        text "abc" (37.5,80 30x10)
+    block div#nest (0,90 100x10)
+      line (0,90 100x10) baseline=98
+        text "abc" (20,90 30x10)
+        text " de" (50,90 30x10)
+    block div#hang (0,100 50x20)
+      line (0,100 50x10) baseline=108
+        text "ab   " (30,100 50x10)
+      line (0,110 50x10) baseline=118
+        text "cd" (30,110 20x10)

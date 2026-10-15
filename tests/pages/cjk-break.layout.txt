@@ -1,0 +1,25 @@
+viewport 200x300
+block html (0,0 200x90)
+  block body (0,0 200x90)
+    block div#plain (0,0 50x20)
+      line (0,0 50x10) baseline=8
+        text "一二三四五" (0,0 50x10)
+      line (0,10 50x10) baseline=18
+        text "六七八九十" (0,10 50x10)
+    block div#comma (0,20 50x30)
+      line (0,20 50x10) baseline=28
+        text "一二三四" (0,20 40x10)
+      line (0,30 50x10) baseline=38
+        text "五，六七八" (0,30 50x10)
+      line (0,40 50x10) baseline=48
+        text "九十" (0,40 20x10)
+    block div#open (0,50 50x30)
+      line (0,50 50x10) baseline=58
+        text "一二三四" (0,50 40x10)
+      line (0,60 50x10) baseline=68
+        text "「五六七八" (0,60 50x10)
+      line (0,70 50x10) baseline=78
+        text "九" (0,70 10x10)
+    block div#latin (0,80 50x10)
+      line (0,80 50x10) baseline=88
+        text "abcdefgh" (0,80 80x10)

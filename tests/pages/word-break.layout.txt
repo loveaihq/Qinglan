@@ -1,0 +1,41 @@
+viewport 200x300
+block html (0,0 200x150)
+  block body (0,0 200x150)
+    block div#ba (0,0 50x20)
+      line (0,0 50x10) baseline=8
+        text "abcde" (0,0 50x10)
+      line (0,10 50x10) baseline=18
+        text "fghij" (0,10 50x10)
+    block div#ba2 (0,20 50x20)
+      line (0,20 50x10) baseline=28
+        text "ab cd" (0,20 50x10)
+      line (0,30 50x10) baseline=38
+        text "efgh" (0,30 40x10)
+    block div#ka (0,40 50x20)
+      line (0,40 50x10) baseline=48
+        text "一二三" (0,40 30x10)
+      line (0,50 50x10) baseline=58
+        text "四五六七八九" (0,50 60x10)
+    block div#ow (0,60 50x10)
+      line (0,60 50x10) baseline=68
+        text "abcdefghij" (0,60 100x10)
+    block div#bw (0,70 50x20)
+      line (0,70 50x10) baseline=78
+        text "abcde" (0,70 50x10)
+      line (0,80 50x10) baseline=88
+        text "fghij" (0,80 50x10)
+    block div#bw2 (0,90 50x30)
+      line (0,90 50x10) baseline=98
+        text "ab" (0,90 20x10)
+      line (0,100 50x10) baseline=108
+        text "cdefg" (0,100 50x10)
+      line (0,110 50x10) baseline=118
+        text "hij" (0,110 30x10)
+    block div#wbw (0,120 50x20)
+      line (0,120 50x10) baseline=128
+        text "abcde" (0,120 50x10)
+      line (0,130 50x10) baseline=138
+        text "fghij" (0,130 50x10)
+    block div#nw (0,140 50x10)
+      line (0,140 50x10) baseline=148
+        text "ab cd ef gh" (0,140 110x10)

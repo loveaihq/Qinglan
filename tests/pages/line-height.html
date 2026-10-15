@@ -1,0 +1,62 @@
+<!--
+viewport: 200x300
+line-height, the strut and half-leading (CSS2 10.8.1, css-inline-3 4.2). Test font: ascent 0.8em, descent 0.2em, so
+a 10px font has ascent 8 and descent 2 (whole px). A line box is as high as the highest ascent plus the deepest descent
+of the strut and of every inline box with content on the line, each grown by its half-leading
+(line-height - (ascent+descent)) / 2, whose upper part is rounded down to whole px (as Blink does).
+Divs are 200 wide, text "ab" is 20 wide.
+
+n      normal = ascent+descent+gap = 10: line (0,0 200x10), baseline 8, text y=0.
+px20   leading 10, half 5: ascent 13, descent 7: line h=20 at y=10, baseline 10+13=23, text y=23-8=15.
+num    1.5 x 10 = 15, leading 5, half 2.5 rounded down to 2: ascent 10, descent 5: h=15 at y=30, baseline 40, text y=32.
+zero   line-height 0: leading -10, half -5: ascent 3, descent -3: the line is 0 high at y=45, baseline 48, text y=40.
+big    20px font: ascent 16, descent 4, h=20 at y=45, baseline 61, "ab" is 40 wide.
+mix    the strut is 10px (8/2), the span is 20px (16/4): line h=20 at y=65, baseline 81; "ab" y=81-8=73; "X" y=81-16=65.
+span40 the span's own line-height 40 (half-leading 15 around 10px text) makes the line 40 high: baseline 85+23=108,
+       text y=100. The block's strut (line-height 10) is smaller.
+odd    line-height 11: leading 1, half 0.5 rounds down to 0: ascent 8, descent 3: h=11 at y=125, baseline 133.
+strut  a 5px span inside a 20px block: the strut (16/4) keeps the line 20 high: h=20 at y=136, baseline 152; the 5px
+       text (ascent 4) is at y=148.
+check: block div#n :: (0,0 200x10)
+check: line (0,0 :: baseline=8
+check: text "ab" (0,0 :: (0,0 20x10)
+check: block div#px20 :: (0,10 200x20)
+check: line (0,10 :: baseline=23
+check: text "ab" (0,15 :: (0,15 20x10)
+check: block div#num :: (0,30 200x15)
+check: line (0,30 :: baseline=40
+check: text "ab" (0,32 :: (0,32 20x10)
+check: block div#zero :: (0,45 200x0)
+check: line (0,45 200x0) :: baseline=48
+check: text "ab" (0,40 :: (0,40 20x10)
+check: block div#big :: (0,45 200x20)
+check: line (0,45 200x20) :: baseline=61
+check: text "ab" (0,45 :: (0,45 40x20)
+check: block div#mix :: (0,65 200x20)
+check: line (0,65 :: baseline=81
+check: text "ab" (0,73 :: (0,73 20x10)
+check: text "X" :: (20,65 20x20)
+check: block div#span40 :: (0,85 200x40)
+check: line (0,85 :: baseline=108
+check: text "x" (0,100 :: (0,100 10x10)
+check: block div#odd :: (0,125 200x11)
+check: line (0,125 :: baseline=133
+check: text "ab" (0,125 :: (0,125 20x10)
+check: block div#strut :: (0,136 200x20)
+check: line (0,136 :: baseline=152
+check: text "x" (0,148 :: (0,148 5x5)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/normal Ahem }
+div { width: 200px }
+</style>
+<div id="n">ab</div>
+<div id="px20" style="line-height:20px">ab</div>
+<div id="num" style="line-height:1.5">ab</div>
+<div id="zero" style="line-height:0">ab</div>
+<div id="big" style="font-size:20px">ab</div>
+<div id="mix">ab<span style="font-size:20px">X</span></div>
+<div id="span40" style="line-height:10px"><span style="line-height:40px">x</span></div>
+<div id="odd" style="line-height:11px">ab</div>
+<div id="strut" style="font-size:20px"><span style="font-size:5px">x</span></div>

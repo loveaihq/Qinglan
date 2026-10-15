@@ -1,0 +1,59 @@
+<!--
+viewport: 300x300
+The segment break between two CJK characters (css-text-3 4.1.3; css-text-4 segment break transformation): a line feed in the
+source disappears between two East Asian Wide/Fullwidth/Halfwidth characters (not Hangul) and becomes a space otherwise.
+Spaces and tabs around the line feed are removed first; a second line feed in a row is removed. Font 10px/10px, divs 300 wide,
+body margin 0, no wrapping needed.
+
+zh   "你好" newline "世界" -> "你好世界" (40 wide).            en   "hello" newline "world" -> "hello world" (110).
+mix  "你好" newline "abc" -> "你好 abc" (the Latin side is not wide: a space, 60).
+sp   "你好" space newline space "世界" -> "你好世界" (40).
+fw   "你好，" newline "世界": the fullwidth comma is wide -> "你好，世界" (50).
+ko   Hangul needs spaces: "안녕" newline "하세요" -> "안녕 하세요" (60).
+ja   "こんにちは" newline "世界" -> "こんにちは世界" (70).
+two  two line feeds in a row count as one: "你好世界" (40).
+inl  the line feed is inside a span, the characters before it are in the text node outside: the same rule across the boundary:
+     "你好" (0..20) and "世界" (20..40) as two fragments on one line.
+pl   white-space:pre-line keeps the line feed: two lines "你好" and "世界", 20 high.
+y: 0, 10, 20, 30, 40, 50, 60, 70, 80, 90 (pl is 20 high, body ends at 110).
+check: text "你好世界" (0,0 :: (0,0 40x10)
+check: text "hello world" :: (0,10 110x10)
+check: text "你好 abc" :: (0,20 60x10)
+check: text "你好世界" (0,30 :: (0,30 40x10)
+check: text "你好，世界" :: (0,40 50x10)
+check: text "안녕 하세요" :: (0,50 60x10)
+check: text "こんにちは世界" :: (0,60 70x10)
+check: text "你好世界" (0,70 :: (0,70 40x10)
+check: text "你好" (0,80 :: (0,80 20x10)
+check: text "世界" (20,80 :: (20,80 20x10)
+check: block div#pl :: (0,90 300x20)
+check: text "你好" (0,90 :: (0,90 20x10)
+check: text "世界" (0,100 :: (0,100 20x10)
+check: block body :: (0,0 300x110)
+-->
+<!doctype html>
+<meta charset="utf-8">
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+</style>
+<div id="zh">你好
+世界</div>
+<div id="en">hello
+world</div>
+<div id="mix">你好
+abc</div>
+<div id="sp">你好
+ 世界</div>
+<div id="fw">你好，
+世界</div>
+<div id="ko">안녕
+하세요</div>
+<div id="ja">こんにちは
+世界</div>
+<div id="two">你好
+
+世界</div>
+<div id="inl">你好<span>
+世界</span></div>
+<div id="pl" style="white-space:pre-line">你好
+世界</div>

@@ -1,0 +1,15 @@
+viewport 200x300
+block html (0,0 200x50)
+  block body (0,0 200x50)
+    block div#m1 (0,0 50x20)
+      line (0,0 50x10) baseline=8
+        text "中文abc" (0,0 50x10)
+      line (0,10 50x10) baseline=18
+        text "中文ab" (0,10 40x10)
+    block div#m2 (0,20 80x30)
+      line (0,20 80x10) baseline=28
+        text "Hello 世" (0,20 70x10)
+      line (0,30 80x10) baseline=38
+        text "界, 你好" (0,30 50x10)
+      line (0,40 80x10) baseline=48
+        text "world" (0,40 50x10)

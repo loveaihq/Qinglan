@@ -83,6 +83,9 @@ pub struct LenCtx {
     pub root_font_size: f32,
     pub viewport_w: f32,
     pub viewport_h: f32,
+    /// Size of `1ex` and `1ch` in px for the element's font (platform metrics; 0.5em without a platform).
+    pub ex: f32,
+    pub ch: f32,
 }
 
 /// Largest absolute length kept (keeps arithmetic finite; layout clamps further).
@@ -104,8 +107,9 @@ impl LenUnit {
             LenUnit::Pt => v * 96.0 / 72.0,
             LenUnit::Em => v * ctx.font_size,
             LenUnit::Rem => v * ctx.root_font_size,
-            // No font metrics in the engine core: ex and ch are half an em (decisions.md).
-            LenUnit::Ex | LenUnit::Ch => v * ctx.font_size * 0.5,
+            // From the platform's font metrics (x-height, advance of "0"); half an em without one.
+            LenUnit::Ex => v * ctx.ex,
+            LenUnit::Ch => v * ctx.ch,
             LenUnit::Vw => v * ctx.viewport_w / 100.0,
             LenUnit::Vh => v * ctx.viewport_h / 100.0,
             LenUnit::Vmin => v * ctx.viewport_w.min(ctx.viewport_h) / 100.0,
@@ -530,7 +534,7 @@ mod tests {
     }
 
     fn ctx() -> LenCtx {
-        LenCtx { font_size: 16.0, root_font_size: 16.0, viewport_w: 1280.0, viewport_h: 800.0 }
+        LenCtx { font_size: 16.0, root_font_size: 16.0, viewport_w: 1280.0, viewport_h: 800.0, ex: 8.0, ch: 8.0 }
     }
 
     fn px(s: &str, base: f32) -> Option<f32> {

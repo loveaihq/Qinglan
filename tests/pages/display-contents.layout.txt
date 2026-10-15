@@ -1,0 +1,22 @@
+viewport 200x300
+block html (0,0 200x60)
+  block body (0,0 200x60)
+    block div#outer (0,0 100x30)
+      block (anonymous) (0,0 100x10)
+        line (0,0 100x10) baseline=8
+          text "a" (0,0 10x10)
+          text "b" (10,0 10x10)
+      block div#blk (0,10 100x10)
+        line (0,10 100x10) baseline=18
+          text "x" (0,10 10x10)
+      block (anonymous) (0,20 100x10)
+        line (0,20 100x10) baseline=28
+          text "c" (0,20 10x10)
+    block div#o2 (0,30 200x10)
+      line (0,30 200x10) baseline=38
+        text "x" (0,30 10x10)
+        text "y" (10,30 10x10)
+        text "z" (20,30 10x10)
+    block div#o3 (0,40 200x10)
+      block div#deep (0,40 200x10)
+    block div#end (0,50 200x10)

@@ -1,0 +1,48 @@
+viewport 200x300
+block html (0,0 200x134)
+  block body (0,0 200x134)
+    block div#flex (0,0 200x20) [display:flex]
+      block div#f1 (0,0 200x10)
+        line (0,0 200x10) baseline=8
+          text "one" (0,0 30x10)
+      block div#f2 (0,10 200x10)
+        line (0,10 200x10) baseline=18
+          text "two" (0,10 30x10)
+    block div#grid (0,20 200x20) [display:grid]
+      block (anonymous) (0,20 200x10)
+        line (0,20 200x10) baseline=28
+          text "g1" (0,20 20x10)
+      block div#g2 (0,30 200x10)
+        line (0,30 200x10) baseline=38
+          text "g2" (0,30 20x10)
+    block table#t (0,40 200x24) [display:table]
+      block tbody (0,40 200x24) [display:table-row-group]
+        block tr (0,40 200x24) [display:table-row]
+          block td (0,40 200x12) [display:table-cell]
+            line (1,41 198x10) baseline=49
+              text "a" (1,41 10x10)
+          block td (0,52 200x12) [display:table-cell]
+            line (1,53 198x10) baseline=61
+              text "b" (1,53 10x10)
+    block div#lft (0,64 50x10)
+      line (0,64 50x10) baseline=72
+        text "f" (0,64 10x10)
+    block span#fr (0,74 200x10)
+      line (0,74 200x10) baseline=82
+        text "x" (0,74 10x10)
+    block div#ib (0,84 200x30)
+      block (anonymous) (0,84 200x10)
+        line (0,84 200x10) baseline=92
+          text "before" (0,84 60x10)
+      block span#ibs (0,94 200x10) [display:inline-block]
+        line (0,94 200x10) baseline=102
+          text "mid" (0,94 30x10)
+      block (anonymous) (0,104 200x10)
+        line (0,104 200x10) baseline=112
+          text "after" (0,104 50x10)
+    block div#abs (0,114 200x10)
+      line (0,114 200x10) baseline=122
+        text "abs" (0,114 30x10)
+    block span#iflex (0,124 200x10) [display:inline-flex]
+      line (0,124 200x10) baseline=132
+        text "if" (0,124 20x10)

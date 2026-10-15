@@ -1,0 +1,34 @@
+<!--
+viewport: 200x300
+display:contents (css-display-3 2.5): the element makes no box, its children take its place as if they were
+children of its parent; display:none makes no boxes at all. Font 10px/10px, body margin 0.
+
+outer  100 wide: "a" and the span "b" (children of the contents div, so inline in outer) share an anonymous block line,
+       then the block #blk (a block child of outer), then "c": 30 high; "a" at x=0, "b" at x=10 (separate text boxes).
+o2     "x", "y" (inside a contents span) and "z" on one line: three fragments at x=0, 10, 20; y=30.
+o3     two nested contents divs around a block: that block is o3's only child, o3 is 10 high at y=40.
+none   display:none: no box (the dump has no div#none).
+end    starts at y=50.
+check: block div#outer :: (0,0 100x30)
+check: text "a" :: (0,0 10x10)
+check: text "b" :: (10,0 10x10)
+check: block div#blk :: (0,10 100x10)
+check: text "x" (0,10 :: (0,10 10x10)
+check: text "c" :: (0,20 10x10)
+check: block div#o2 :: (0,30 200x10)
+check: text "x" (0,30 :: (0,30 10x10)
+check: text "y" :: (10,30 10x10)
+check: text "z" :: (20,30 10x10)
+check: block div#o3 :: (0,40 200x10)
+check: block div#deep :: (0,40 200x10)
+check: block div#end :: (0,50 200x10)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+</style>
+<div id="outer" style="width:100px">a<div id="dc" style="display:contents;color:red"><span>b</span><div id="blk" style="height:10px">x</div></div>c</div>
+<div id="o2">x<span style="display:contents">y</span>z</div>
+<div id="o3"><div style="display:contents"><div style="display:contents"><div id="deep" style="height:10px"></div></div></div></div>
+<div id="none" style="display:none">hidden</div>
+<div id="end" style="height:10px"></div>

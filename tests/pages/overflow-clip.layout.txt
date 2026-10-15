@@ -1,0 +1,18 @@
+viewport 400x300
+block html (0,0 400x240)
+  block body (0,0 400x240)
+    block div#v (0,0 400x10)
+      block div.k (0,0 400x10)
+    block div#hid (0,40 400x40) [clip]
+      block div.k (0,40 400x10)
+    block div#clp (0,80 400x10) [clip]
+      block div.k (0,80 400x10)
+    block div#aut (0,120 400x40)
+      block div.k (0,120 400x10)
+    block div#scr (0,160 400x40)
+      block div.k (0,160 400x10)
+    block div#big (0,200 400x20) [clip]
+      block div#bigk (0,200 400x50)
+    block div#ox (0,220 400x10) [clip]
+      block div (0,220 400x30)
+    block div#after (0,230 400x10)

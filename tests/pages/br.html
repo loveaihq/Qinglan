@@ -1,0 +1,47 @@
+<!--
+viewport: 200x300
+<br> is a forced line break (HTML 15.3.4). A line that ends in a break keeps its height even when empty; a break at the very end
+adds no line. Spaces around a break are removed (css-text-3 4.1.2). Font 10px/normal (line-height normal = 10px, the span has its own 20px), divs 200 wide.
+
+b1  "a<br>b": two lines, 20 high, y=0.
+b2  "a<br><br>b": the second break makes an empty line: three lines, 30 high, y=20.
+b3  "a<br>": one line (no empty line after the last break), 10 high, y=50.
+b4  "<br>": one empty line, 10 high, y=60; the break is at x=0.
+b5  "a <br> b": the space before and the space after the break are removed: "a" and "b", 20 high, y=70.
+b6  right aligned: "a" ends at 200 (x=190), "bcd" at x=170; y=90.
+b7  the break sits in a span with a 20px font, so line one is 20 high (baseline 110+16=126, "x" at y=118, the break
+    at x=10, y=110, 20 high) and line two "y" is 10 high: block 30 high, y=110.
+check: block div#b1 :: (0,0 200x20)
+check: text "a" (0,0 :: (0,0 10x10)
+check: br (10,0 :: (10,0 0x10)
+check: text "b" (0,10 :: (0,10 10x10)
+check: block div#b2 :: (0,20 200x30)
+check: line (0,30 :: (0,30 200x10)
+check: br (0,30 :: (0,30 0x10)
+check: text "b" (0,40 :: (0,40 10x10)
+check: block div#b3 :: (0,50 200x10)
+check: block div#b4 :: (0,60 200x10)
+check: br (0,60 :: (0,60 0x10)
+check: block div#b5 :: (0,70 200x20)
+check: text "a" (0,70 :: (0,70 10x10)
+check: text "b" (0,80 :: (0,80 10x10)
+check: block div#b6 :: (0,90 200x20)
+check: text "a" (190,90 :: (190,90 10x10)
+check: text "bcd" :: (170,100 30x10)
+check: block div#b7 :: (0,110 200x30)
+check: line (0,110 :: baseline=126
+check: text "x" (0,118 :: (0,118 10x10)
+check: br (10,110 :: (10,110 0x20)
+check: text "y" (0,130 :: (0,130 10x10)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/normal Ahem }
+</style>
+<div id="b1">a<br>b</div>
+<div id="b2">a<br><br>b</div>
+<div id="b3">a<br></div>
+<div id="b4"><br></div>
+<div id="b5">a <br> b</div>
+<div id="b6" style="text-align:right">a<br>bcd</div>
+<div id="b7">x<span style="font-size:20px"><br></span>y</div>
