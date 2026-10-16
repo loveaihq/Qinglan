@@ -13,10 +13,11 @@ use qinglan_engine::html::dom::NodeId;
 use qinglan_engine::html::treebuilder::parse_document;
 use qinglan_engine::layout::{LayoutOptions, LayoutResult, layout_document};
 use qinglan_engine::net::Response;
+use qinglan_engine::paint::decode::{DecodePool, Finished};
 use qinglan_engine::paint::images::{Band, ImageSource, ImageStore, NoBitmaps};
 use qinglan_engine::paint::raster::{Frame, View, render_band, render_frame};
 use qinglan_engine::paint::{DisplayList, RasterStats, build_display_list, far_images, wanted_images};
-use qinglan_engine::platform::image::{DecodedImage, ImageDecoder, ImageError, ImageInfo};
+use qinglan_engine::platform::image::{DecodedCache, DecodedImage, ImageDecoder, ImageError, ImageInfo};
 use qinglan_engine::platform::{BasicPlatform, Platform, TestPlatform};
 use qinglan_engine::url::Url;
 
@@ -498,4 +499,169 @@ fn a_frame_placeholder_is_a_border_and_a_label_not_a_cover() {
         <iframe style='position:fixed;left:10px;top:10px;width:100px;height:50px;border:0'></iframe></body>";
     let f = paint(html, 140, 100);
     expect(&f, &[(60, 45, GREEN), (105, 30, GREEN), (30, 56, GREEN), (10, 30, [0x76, 0x76, 0x76, 255]), (109, 30, [0x76, 0x76, 0x76, 255]), (60, 10, [0x76, 0x76, 0x76, 255]), (60, 59, [0x76, 0x76, 0x76, 255])]);
+}
+
+// ---- decoding on worker threads (step 2-0) ----------------------------------------------------------------------
+
+/// A decoder that waits at a gate, so that a test decides when a decode finishes.
+struct GateDecoder {
+    open: std::sync::Mutex<bool>,
+    cv: std::sync::Condvar,
+    started: std::sync::atomic::AtomicUsize,
+}
+
+impl GateDecoder {
+    fn new() -> Arc<GateDecoder> {
+        Arc::new(GateDecoder { open: std::sync::Mutex::new(false), cv: std::sync::Condvar::new(), started: Default::default() })
+    }
+    fn open(&self) {
+        *self.open.lock().unwrap() = true;
+        self.cv.notify_all();
+    }
+    fn wait_started(&self, n: usize) {
+        let t = std::time::Instant::now();
+        while self.started.load(std::sync::atomic::Ordering::SeqCst) < n {
+            assert!(t.elapsed() < std::time::Duration::from_secs(5), "the workers did not start");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+}
+
+impl ImageDecoder for GateDecoder {
+    fn probe(&self, _bytes: &[u8]) -> Result<ImageInfo, ImageError> {
+        Ok(ImageInfo { width: 10, height: 10 })
+    }
+    fn decode(&self, _bytes: &[u8], width: u32, height: u32) -> Result<DecodedImage, ImageError> {
+        self.started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut open = self.open.lock().unwrap();
+        while !*open {
+            open = self.cv.wait(open).unwrap();
+        }
+        Ok(DecodedImage { width, height, natural_width: 10, natural_height: 10, bgra: RED.repeat((width * height) as usize) })
+    }
+}
+
+/// `n` stacked images of 100 x 100, their addresses set in `store`, and a response cache that has all of them.
+fn async_fixture(n: usize, store: &mut ImageStore) -> (Page, HashMap<String, Arc<Response>>) {
+    let page = lay(&image_page(n, &[]), 100, 200, 1.0, None);
+    let mut bytes = HashMap::new();
+    for (i, r) in page.res.images.iter().enumerate() {
+        let url = format!("http://x.test/i{i}.png");
+        store.set_url(r.node, &url);
+        bytes.insert(url.clone(), Arc::new(Response { url: Url::parse(&url, None).unwrap(), status: 200, headers: vec![], body: b"png".to_vec() }));
+    }
+    (page, bytes)
+}
+
+/// What one decode of 100 x 100 takes of the budget.
+const SIZE_100: usize = 100 * 100 * 4 + 64;
+
+fn drain(pool: &mut DecodePool, n: usize) -> Vec<Finished> {
+    (0..n).map(|_| pool.wait(std::time::Duration::from_secs(5)).expect("a decode result")).collect()
+}
+
+#[test]
+fn a_decode_that_finishes_after_navigation_is_dropped() {
+    let gate = GateDecoder::new();
+    let mut pool = DecodePool::new(gate.clone(), 2, Arc::new(|| {}));
+    let mut old = ImageStore::new();
+    let (page, bytes) = async_fixture(40, &mut old);
+    let mut lookup = |u: &str| bytes.get(u).cloned();
+    let band = Band::new(0.0, 200.0);
+    let rep = old.prepare_async(&page.list, band, 1.0, &mut pool, &mut lookup);
+    assert!(rep.missing.is_empty());
+    assert_eq!(old.in_flight(), 5, "images 0..=4 are within a screen");
+    assert_eq!(old.reserved_bytes(), 5 * SIZE_100);
+    assert!(old.is_empty(), "nothing is drawn before the bitmap is there");
+    // The page is left while two decodes run and three wait: the waiting ones are called off, and the new page's store
+    // (it asks for the same addresses) does not know the running ones.
+    gate.wait_started(2);
+    pool.cancel_all();
+    assert_eq!(pool.queued(), 0);
+    let mut new = ImageStore::new();
+    let (_, _) = async_fixture(40, &mut new);
+    let rep = new.prepare_async(&page.list, band, 1.0, &mut pool, &mut lookup);
+    assert!(rep.missing.is_empty());
+    assert_eq!(new.in_flight(), 5);
+    gate.open();
+    let results = drain(&mut pool, 7);
+    let (stale, fresh): (Vec<_>, Vec<_>) = results.into_iter().partition(|f| f.id <= 5);
+    assert_eq!((stale.len(), fresh.len()), (2, 5), "the old page's two running decodes, the new page's five");
+    for f in stale {
+        assert!(new.accept(f).nodes.is_empty());
+    }
+    assert!(new.is_empty() && new.bytes() == 0, "nothing of the old page was stored");
+    assert_eq!(new.in_flight(), 5);
+    for f in fresh {
+        assert_eq!(new.accept(f).nodes.len(), 1);
+    }
+    assert_eq!((new.len(), new.in_flight(), new.reserved_bytes()), (5, 0, 0));
+    // A store that was cleared (the page was left) takes nothing in either.
+    old.clear();
+    assert_eq!((old.in_flight(), old.reserved_bytes(), old.len()), (0, 0, 0));
+}
+
+#[test]
+fn the_cache_budget_counts_decodes_in_flight() {
+    let gate = GateDecoder::new();
+    let mut pool = DecodePool::new(gate.clone(), 2, Arc::new(|| {}));
+    // Room for three bitmaps of 100 x 100.
+    let budget = 3 * SIZE_100 + 10;
+    let mut store = ImageStore::with_cache(DecodedCache::with_budget(budget));
+    let (page, bytes) = async_fixture(40, &mut store);
+    let mut lookup = |u: &str| bytes.get(u).cloned();
+    // Images 0..=2 are on screen, 3 and 4 a little below: only three decodes may be started.
+    store.prepare_async(&page.list, Band::new(0.0, 200.0), 1.0, &mut pool, &mut lookup);
+    assert_eq!(store.in_flight(), 3);
+    assert_eq!(store.reserved_bytes(), 3 * SIZE_100);
+    assert!(store.deferred());
+    assert!(store.bytes() + store.reserved_bytes() <= budget);
+    gate.open();
+    for f in drain(&mut pool, 3) {
+        store.accept(f);
+    }
+    assert_eq!((store.len(), store.in_flight(), store.reserved_bytes()), (3, 0, 0));
+    assert!(store.bytes() <= budget);
+    // The two that did not fit do not push out the nearer ones that are shown (no thrashing).
+    store.prepare_async(&page.list, Band::new(0.0, 200.0), 1.0, &mut pool, &mut lookup);
+    assert_eq!((store.in_flight(), store.len()), (0, 3));
+    assert!(store.deferred());
+    // Scrolled to 300: images 3 and 4 are on screen now, 0 and 1 are farther away and make room for them; image 5,
+    // just as near, has to wait because image 2 (still on screen) is not given up for it.
+    let gate2 = GateDecoder::new();
+    let mut pool2 = DecodePool::new(gate2.clone(), 2, Arc::new(|| {}));
+    store.prepare_async(&page.list, Band::new(300.0, 200.0), 1.0, &mut pool2, &mut lookup);
+    assert_eq!(store.in_flight(), 2);
+    assert!(store.deferred());
+    assert!(store.bytes() + store.reserved_bytes() <= budget, "{} + {} > {budget}", store.bytes(), store.reserved_bytes());
+    gate2.open();
+    for f in drain(&mut pool2, 2) {
+        store.accept(f);
+    }
+    assert!(store.bytes() <= budget);
+    assert_eq!((store.len(), store.in_flight(), store.reserved_bytes()), (3, 0, 0));
+}
+
+#[test]
+fn queued_decodes_of_images_that_went_far_are_called_off() {
+    let gate = GateDecoder::new();
+    let mut pool = DecodePool::new(gate.clone(), 1, Arc::new(|| {}));
+    let mut store = ImageStore::new();
+    let (page, bytes) = async_fixture(40, &mut store);
+    let mut lookup = |u: &str| bytes.get(u).cloned();
+    store.prepare_async(&page.list, Band::new(0.0, 200.0), 1.0, &mut pool, &mut lookup);
+    gate.wait_started(1);
+    assert_eq!((store.in_flight(), pool.queued()), (5, 4));
+    // Scrolled far away: the four that have not started are taken back; the running one finishes and is dropped.
+    store.prepare_async(&page.list, Band::new(2000.0, 200.0), 1.0, &mut pool, &mut lookup);
+    let new_jobs = store.in_flight() - 1;
+    assert_eq!(pool.queued(), new_jobs, "only the jobs for the new place are queued");
+    assert!(new_jobs > 0);
+    gate.open();
+    for f in drain(&mut pool, 1 + new_jobs) {
+        store.accept(f);
+    }
+    assert_eq!((store.in_flight(), store.reserved_bytes()), (0, 0));
+    assert!(!store.has(page.res.images[0].node, &page.list.images[0].rect, 1.0), "the bitmap of the image that was left behind is not kept");
+    assert_eq!(store.len(), new_jobs);
 }

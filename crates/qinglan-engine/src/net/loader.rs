@@ -117,6 +117,11 @@ impl Loader {
         Loader::new(transport, Arc::new(|| {}))
     }
 
+    /// The wake-up callback, for other worker threads that report to the same owner (image decoding).
+    pub fn waker(&self) -> Arc<dyn Fn() + Send + Sync> {
+        self.wake.clone()
+    }
+
     pub fn cache(&self) -> &ResponseCache {
         &self.cache
     }
@@ -298,9 +303,15 @@ impl Loader {
             }
         };
         // Network threads only copy bytes: a small stack is enough.
-        if std::thread::Builder::new().name("qinglan-net".into()).stack_size(1 << 20).spawn(job).is_err() {
+        if !spawn_named("qinglan-net", 1 << 20, Box::new(job)) {
             let _ = self.tx.send(failed);
             (self.wake)();
         }
     }
+}
+
+/// Start a thread that runs `f`; false when the system has none to give. One function for every thread the engine starts:
+/// each closure type would otherwise bring its own copy of the spawning code into the executable.
+pub(crate) fn spawn_named(name: &str, stack: usize, f: Box<dyn FnOnce() + Send>) -> bool {
+    std::thread::Builder::new().name(name.into()).stack_size(stack).spawn(f).is_ok()
 }

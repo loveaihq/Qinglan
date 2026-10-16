@@ -10,6 +10,7 @@ use qinglan_engine::net::Response;
 use qinglan_engine::net::blocking::{self, Opened};
 use qinglan_engine::net::loader::Loader;
 use qinglan_engine::net::page::{PageResources, Update, probe_response};
+use qinglan_engine::paint::decode::{DecodePool, Finished};
 use qinglan_engine::paint::images::{Band, ImageStore};
 use qinglan_engine::paint::raster::{Frame, View, render_band};
 use qinglan_engine::paint::{DisplayList, build_display_list, wanted_images};
@@ -198,19 +199,38 @@ impl Page {
         }
     }
 
-    /// Decode the images that came near and drop the ones that went far. True when some image's bytes are gone from
-    /// the response cache (they are asked for again).
-    pub fn prepare(&mut self, vp: Viewport, scroll: f32, loader: &mut Loader) -> bool {
+    /// Start decoding the images that came near (on `pool`, nothing waits for it) and drop the ones that went far. True
+    /// when some image's bytes are gone from the response cache (they are asked for again).
+    pub fn prepare(&mut self, vp: Viewport, scroll: f32, loader: &mut Loader, pool: &mut DecodePool) -> bool {
         let Some(list) = &self.list else { return false };
         let band = Band::new(scroll, vp.h);
-        let prepared = self.store.prepare(list, band, vp.dpr, &WicDecoder, &mut |u| loader.cache_mut().get(u));
+        // Far bitmaps go first: their room is what the near ones are started with.
         self.store.drop_far(list, band);
+        let prepared = self.store.prepare_async(list, band, vp.dpr, pool, &mut |u| loader.cache_mut().get(u));
         if prepared.missing.is_empty() {
             false
         } else {
             self.res.forget_images(&prepared.missing);
             true
         }
+    }
+
+    /// A decode of the pool is done. The rows (device pixels, in the viewport scrolled to `scroll`, `height` of them
+    /// visible) that now show a picture, if any is on screen.
+    pub fn take_decoded(&mut self, done: Finished, scroll: f32, dpr: f32, height: u32) -> Option<(u32, u32)> {
+        let accepted = self.store.accept(done);
+        let list = self.list.as_ref()?;
+        let mut rows: Option<(u32, u32)> = None;
+        for p in list.images.iter().filter(|p| accepted.nodes.contains(&p.node)) {
+            let (top, bottom) = (p.rect.y.to_f32() - if p.fixed { 0.0 } else { scroll }, p.rect.bottom().to_f32() - if p.fixed { 0.0 } else { scroll });
+            // A row of margin each side for the rounding of the rectangle to device pixels.
+            let a = ((top * dpr).floor().max(0.0) as u32).saturating_sub(1);
+            let b = ((bottom * dpr).ceil().max(0.0) as u32).saturating_add(1).min(height);
+            if a < b {
+                rows = Some(rows.map_or((a, b), |(r0, r1)| (r0.min(a), r1.max(b))));
+            }
+        }
+        rows
     }
 
     /// Paint rows `y0 ..` (device pixels) of the viewport at `scroll` into `frame` (a band of the viewport).

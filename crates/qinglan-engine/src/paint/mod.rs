@@ -16,6 +16,7 @@
 //! styles are single solid lines, text is blended in sRGB space with the platform's grayscale mask.
 
 pub mod build;
+pub mod decode;
 pub mod images;
 pub mod raster;
 

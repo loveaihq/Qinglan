@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use super::decode::{DecodeKey, DecodePool, Finished, JobId};
 use super::raster::device_size;
 use super::{DisplayList, Rect};
 use crate::html::atoms::FxHashMap;
@@ -22,7 +23,7 @@ use crate::layout::LayoutResult;
 use crate::layout::image::ImageRequest;
 use crate::layout::units::LayoutUnit as LU;
 use crate::net::Response;
-use crate::platform::image::{DecodedCache, DecodedImage, ImageDecoder};
+use crate::platform::image::{DecodedCache, DecodedImage, ImageDecoder, MAX_DECODED_PIXELS};
 
 /// Images this far from the viewport (in screens) are requested up front.
 pub const EAGER_SCREENS: f32 = 2.0;
@@ -117,6 +118,36 @@ pub struct ImageStore {
     failed: FxHashMap<NodeId, ()>,
     /// How many times in a row the bytes of a node were gone from the response cache after being asked for again.
     refetched: FxHashMap<NodeId, u8>,
+    /// Decodes handed to a [`DecodePool`] and not taken in yet (step 2-0), by what they decode.
+    /// A handful at a time (the images near the viewport), so a list: no hash table for one more key type (the
+    /// executable is size-limited).
+    inflight: Vec<(DecodeKey, Pending)>,
+    /// What the jobs in `inflight` will take of the budget when they are done.
+    reserved: usize,
+    /// The last [`ImageStore::prepare_async`] left images undone for lack of room.
+    deferred: bool,
+}
+
+/// A decode on a worker thread.
+struct Pending {
+    id: JobId,
+    /// What the bitmap will cost (an upper bound: a decode that comes out smaller costs less).
+    cost: usize,
+    /// The nodes near enough to want it, as of the last `prepare_async`. A job nobody wants any more is taken back if
+    /// it has not started; one that has finishes and is dropped.
+    nodes: Vec<NodeId>,
+}
+
+/// What [`ImageStore::accept`] did: the nodes that have a bitmap now (to be drawn).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Accepted {
+    pub nodes: Vec<NodeId>,
+}
+
+/// What a decode of `width` x `height` device pixels takes of the cache budget.
+fn decode_cost(width: u32, height: u32) -> usize {
+    let px = (u64::from(width) * u64::from(height)).min(MAX_DECODED_PIXELS);
+    usize::try_from(px).unwrap_or(usize::MAX).saturating_mul(4).saturating_add(64)
 }
 
 /// Bytes that are gone from the response cache are asked for again this many times in a row; then the image is given up
@@ -135,7 +166,16 @@ impl ImageStore {
     }
 
     pub fn with_cache(cache: DecodedCache) -> ImageStore {
-        ImageStore { urls: FxHashMap::default(), cache, keys: FxHashMap::default(), failed: FxHashMap::default(), refetched: FxHashMap::default() }
+        ImageStore {
+            urls: FxHashMap::default(),
+            cache,
+            keys: FxHashMap::default(),
+            failed: FxHashMap::default(),
+            refetched: FxHashMap::default(),
+            inflight: Vec::new(),
+            reserved: 0,
+            deferred: false,
+        }
     }
 
     /// The image of `node` comes from `url` (the key of the response cache: `Url::serialize(true)`).
@@ -190,6 +230,141 @@ impl ImageStore {
             }
         }
         report
+    }
+
+    /// [`ImageStore::prepare`] without waiting (step 2-0): the decodes that are due go to `pool`, nearest to the viewport
+    /// first, and the bitmaps come back through [`ImageStore::accept`]; until then the image is not drawn. `decoded` of
+    /// the report stays 0 (nothing is decoded here), `missing` is as in `prepare`.
+    ///
+    /// The budget counts the decodes on their way: nothing is started that would not fit next to what is cached and
+    /// what is running. Room is made by dropping cached bitmaps of images *farther* from the viewport than the one that
+    /// waits, never nearer ones (two images that do not fit together would throw each other out for ever). What still
+    /// does not fit waits for a decode to finish (`deferred`). A queued decode that no image near the viewport wants
+    /// any more (it scrolled away, its size changed) is taken back; a running one finishes and is dropped by `accept`.
+    pub fn prepare_async(&mut self, list: &DisplayList, band: Band, dpr: f32, pool: &mut DecodePool, bytes: &mut dyn FnMut(&str) -> Option<Arc<Response>>) -> Prepared {
+        let mut report = Prepared::default();
+        for (_, p) in &mut self.inflight {
+            p.nodes.clear();
+        }
+        // The nearest distance of each (address, size) that is wanted, and what has to be started (nearest first).
+        let mut dist: Vec<(DecodeKey, f32)> = Vec::new();
+        let mut todo: Vec<(f32, NodeId, DecodeKey)> = Vec::new();
+        for p in &list.images {
+            let d = if p.fixed { 0.0 } else { band.distance(p.rect.y, p.rect.bottom()) };
+            if d > PREPARE_SCREENS * band.height {
+                continue;
+            }
+            let (w, h) = device_size(&p.rect, dpr);
+            if w == 0 || h == 0 || self.failed.contains_key(&p.node) {
+                continue;
+            }
+            let Some(url) = self.urls.get(&p.node) else { continue };
+            let key = (url.clone(), w, h);
+            match dist.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, nearest)) => *nearest = nearest.min(d),
+                None => dist.push((key.clone(), d)),
+            }
+            if let Some((_, pending)) = self.inflight.iter_mut().find(|(k, _)| *k == key) {
+                pending.nodes.push(p.node);
+            } else if self.cache.get(&key.0, w, h).is_some() {
+                self.keys.insert(p.node, key);
+            } else {
+                let at = todo.partition_point(|t| t.0 <= d);
+                todo.insert(at, (d, p.node, key));
+            }
+        }
+        let reserved = &mut self.reserved;
+        self.inflight.retain(|(_, p)| {
+            let back = p.nodes.is_empty() && pool.cancel(p.id);
+            if back {
+                *reserved = reserved.saturating_sub(p.cost);
+            }
+            !back
+        });
+        self.deferred = false;
+        for (d, node, key) in todo {
+            if let Some((_, p)) = self.inflight.iter_mut().find(|(k, _)| *k == key) {
+                p.nodes.push(node);
+                continue;
+            }
+            let cost = decode_cost(key.1, key.2);
+            let budget = self.cache.budget();
+            if cost > budget {
+                // Would never fit, whatever is dropped: not drawn (as with `prepare`, which decodes it for nothing).
+                continue;
+            }
+            while self.cache.bytes().saturating_add(self.reserved).saturating_add(cost) > budget {
+                if !self.cache.evict_oldest_where(&|k| dist.iter().find(|(dk, _)| dk == k).is_none_or(|(_, near)| *near > d)) {
+                    break;
+                }
+            }
+            if self.cache.bytes().saturating_add(self.reserved).saturating_add(cost) > budget {
+                self.deferred = true;
+                continue;
+            }
+            let Some(resp) = bytes(&key.0) else {
+                let n = self.refetched.entry(node).or_insert(0);
+                if *n >= MAX_REFETCH {
+                    self.failed.insert(node, ());
+                } else {
+                    *n += 1;
+                    report.missing.push(node);
+                }
+                continue;
+            };
+            let id = pool.submit(key.clone(), resp);
+            self.reserved = self.reserved.saturating_add(cost);
+            self.inflight.push((key, Pending { id, cost, nodes: vec![node] }));
+        }
+        report
+    }
+
+    /// Take in a decode that a [`DecodePool`] finished. Dropped (nothing is stored) when this store did not start it or
+    /// does not want it any more: the page was left (a new store has no such job), the image went far away, its size
+    /// changed. Returns the nodes that have a bitmap now.
+    pub fn accept(&mut self, done: Finished) -> Accepted {
+        let Finished { id, key, result } = done;
+        let Some(at) = self.inflight.iter().position(|(k, p)| *k == key && p.id == id) else { return Accepted::default() };
+        let (_, p) = self.inflight.swap_remove(at);
+        self.reserved = self.reserved.saturating_sub(p.cost);
+        if p.nodes.is_empty() {
+            return Accepted::default();
+        }
+        match result {
+            Ok(img) => {
+                self.cache.insert(&key.0, key.1, key.2, Arc::new(img));
+                for &node in &p.nodes {
+                    self.refetched.remove(&node);
+                    if let Some((u, ow, oh)) = self.keys.insert(node, key.clone())
+                        && (u != key.0 || ow != key.1 || oh != key.2)
+                    {
+                        self.cache.remove(&u, ow, oh);
+                    }
+                }
+                Accepted { nodes: p.nodes }
+            }
+            Err(_) => {
+                for node in p.nodes {
+                    self.failed.insert(node, ());
+                }
+                Accepted::default()
+            }
+        }
+    }
+
+    /// Decodes handed to the pool and not taken in yet.
+    pub fn in_flight(&self) -> usize {
+        self.inflight.len()
+    }
+
+    /// Bytes the decodes on their way will take, counted against the budget together with [`ImageStore::bytes`].
+    pub fn reserved_bytes(&self) -> usize {
+        self.reserved
+    }
+
+    /// The last `prepare_async` left images undone because the budget was full: ask again when a decode finishes.
+    pub fn deferred(&self) -> bool {
+        self.deferred
     }
 
     /// Drop the bitmaps of the images that are more than [`DROP_SCREENS`] from `band`. Returns how many.

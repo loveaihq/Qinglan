@@ -63,6 +63,18 @@ impl<K: Eq + Hash + Clone, V> ByteLru<K, V> {
         self.bytes = 0;
     }
 
+    /// Drop the least recently used entry that `evictable` allows. False when there is none.
+    pub fn evict_oldest_where(&mut self, evictable: &dyn Fn(&K) -> bool) -> bool {
+        let oldest = self.map.iter().filter(|(k, _)| evictable(k)).min_by_key(|(_, e)| e.used).map(|(k, _)| k.clone());
+        match oldest {
+            Some(k) => {
+                self.remove(&k);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Store `val` with `cost`, evicting the least recently used entries to make room. An entry that
     /// alone is bigger than the budget is not stored (returns false).
     pub fn insert(&mut self, key: K, val: V, cost: usize) -> bool {
@@ -71,10 +83,8 @@ impl<K: Eq + Hash + Clone, V> ByteLru<K, V> {
             return false;
         }
         while self.bytes + cost > self.budget {
-            let oldest = self.map.iter().min_by_key(|(_, e)| e.used).map(|(k, _)| k.clone());
-            match oldest {
-                Some(k) => self.remove(&k),
-                None => break,
+            if !self.evict_oldest_where(&|_| true) {
+                break;
             }
         }
         self.tick += 1;

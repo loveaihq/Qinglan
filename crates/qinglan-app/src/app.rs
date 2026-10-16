@@ -5,6 +5,7 @@ use std::any::Any;
 use std::io::Write as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -15,9 +16,10 @@ use qinglan_engine::net::content::ContentKind;
 use qinglan_engine::net::loader::{LoadEvent, LoadRequest, Loader, Ticket};
 use qinglan_engine::net::policy::{self, Refusal};
 use qinglan_engine::net::{NetError, ResourceKind};
+use qinglan_engine::paint::decode::{DECODE_WORKERS, DecodePool};
 use qinglan_engine::paint::raster::Frame;
 use qinglan_engine::url::{Url, UrlPath};
-use qinglan_win::WinPlatform;
+use qinglan_win::{WicDecoder, WinPlatform};
 use qinglan_win::window::{App, Command, Event, MouseButton, ScrollCode, Ui};
 
 use crate::address;
@@ -149,6 +151,8 @@ pub struct Browser {
     s: &'static Strings,
     opts: Options,
     loader: Loader,
+    /// Decodes images off the UI thread; its results arrive with the loader's wake-up (step 2-0).
+    pool: DecodePool,
     platform: Option<Rc<WinPlatform>>,
     history: History,
     nav: Option<Nav>,
@@ -180,11 +184,13 @@ impl Browser {
     pub fn new(ui: Ui, opts: Options, loader: Loader, lang: Lang) -> Browser {
         let bench = opts.bench.clone().map(Bench::new);
         let dpr = bench.as_ref().map_or(ui.dpi() as f32 / 96.0, |b| b.opts.dpr);
+        let pool = DecodePool::new(Arc::new(WicDecoder), DECODE_WORKERS, loader.waker());
         Browser {
             ui,
             s: lang.strings(),
             opts,
             loader,
+            pool,
             platform: None,
             history: History::new(),
             nav: None,
@@ -337,6 +343,29 @@ impl Browser {
         for ev in self.loader.poll() {
             self.on_load_event(ev);
         }
+        self.on_decoded();
+    }
+
+    /// Images the pool finished: the page takes the ones it still wants into its cache and the rows they cover are drawn
+    /// again (nothing else is). A result of a page that is gone is dropped.
+    fn on_decoded(&mut self) {
+        let (scroll, dpr, height) = (self.scroll, self.dpr, self.dev.1);
+        let mut rows: Option<(u32, u32)> = None;
+        let mut again = false;
+        for done in self.pool.poll() {
+            let Some(page) = self.page.as_mut() else { continue };
+            if let Some((a, b)) = page.take_decoded(done, scroll, dpr, height) {
+                rows = Some(rows.map_or((a, b), |(r0, r1)| (r0.min(a), r1.max(b))));
+            }
+            again |= page.store.deferred();
+        }
+        if let Some((a, b)) = rows {
+            self.draw_rows(scroll, a, b);
+        }
+        // A decode that finished made room for one that had to wait.
+        if again {
+            self.ui.invalidate();
+        }
     }
 
     fn on_load_event(&mut self, ev: LoadEvent) {
@@ -458,7 +487,9 @@ impl Browser {
     /// The page's bytes are here and decoded: replace the page on screen with the new one.
     fn commit(&mut self, kind: NavKind, scroll: f32, fragment: Option<String>, opened: Opened, display: String, is_error: bool) {
         // The old page goes first: DOM, styles, layout, display list and decoded images are freed before the new
-        // page is built (L1 task 17).
+        // page is built (L1 task 17). Decodes of its images that have not started are called off; those that run
+        // finish and are dropped (the new page's store does not know them).
+        self.pool.cancel_all();
         self.page = None;
         self.hover = None;
         self.ui.set_hand_cursor(false);
@@ -531,6 +562,7 @@ impl Browser {
         eprintln!("qinglan: internal error: {text}");
         let (was_error, display) = self.page.as_ref().map_or((false, String::new()), |p| (p.is_error, p.display.clone()));
         self.cancel_loading();
+        self.pool.cancel_all();
         self.page = None;
         if was_error {
             // The error page itself failed; show nothing rather than loop.
@@ -682,13 +714,18 @@ impl Browser {
 
     /// Draw the page at `scroll` into the window, a band of rows at a time through the one small frame buffer.
     fn draw_bands(&mut self, scroll: f32) {
+        self.draw_rows(scroll, 0, self.dev.1);
+    }
+
+    /// Draw rows `r0..r1` (device pixels) of the page at `scroll` into the window, a band at a time.
+    fn draw_rows(&mut self, scroll: f32, r0: u32, r1: u32) {
         let (w, h) = self.dev;
         let vp = self.vp();
         let rows = band_rows(w, h);
         let platform = self.platform.clone();
-        let mut y0 = 0;
-        while y0 < h {
-            let bh = rows.min(h - y0);
+        let (mut y0, end) = (r0, r1.min(h));
+        while y0 < end {
+            let bh = rows.min(end - y0);
             self.frame.set_size(w, bh);
             match (&platform, self.page.as_mut()) {
                 (Some(p), Some(page)) if page.list.is_some() => page.raster(&**p, vp, scroll, y0, &mut self.frame),
@@ -712,7 +749,7 @@ impl Browser {
             && let Some(page) = self.page.as_mut()
             && page.list.is_some()
         {
-            need_images = page.prepare(vp, scroll, &mut self.loader);
+            need_images = page.prepare(vp, scroll, &mut self.loader, &mut self.pool);
         }
         self.draw_bands(scroll);
         if self.bench.as_ref().is_some_and(|b| b.first_screen.is_none()) {
@@ -984,7 +1021,7 @@ impl Browser {
 
     /// Is something still on its way to the page (a layout waiting, images loading)?
     fn bench_busy(&self) -> bool {
-        self.relayout.pending() || self.loader.pending() > 0 || self.page.as_ref().is_some_and(|p| p.res.images_pending() > 0)
+        self.relayout.pending() || self.loader.pending() > 0 || self.page.as_ref().is_some_and(|p| p.res.images_pending() > 0 || p.store.in_flight() > 0)
     }
 
     /// One notch of the scroll, as a hand on a wheel makes it: the next position, the images that came near are
@@ -1023,7 +1060,7 @@ impl Browser {
         let t_decode = Instant::now();
         let mut decoded = 0;
         if let Some(p) = self.page.as_mut() {
-            p.prepare(vp, y, &mut self.loader);
+            p.prepare(vp, y, &mut self.loader, &mut self.pool);
             decoded = p.store.bytes();
         }
         if let Some(b) = self.bench.as_mut() {

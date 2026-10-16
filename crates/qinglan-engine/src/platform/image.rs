@@ -111,6 +111,16 @@ impl DecodedCache {
         self.lru.remove(&(url.to_string(), width, height));
     }
 
+    /// The budget in bytes.
+    pub fn budget(&self) -> usize {
+        self.lru.budget()
+    }
+
+    /// Drop the least recently used bitmap that `evictable` allows (by key). False when there is none.
+    pub fn evict_oldest_where(&mut self, evictable: &dyn Fn(&(String, u32, u32)) -> bool) -> bool {
+        self.lru.evict_oldest_where(evictable)
+    }
+
     /// The cached decode, or decode now (and cache it).
     pub fn get_or_decode(&mut self, dec: &dyn ImageDecoder, url: &str, bytes: &[u8], width: u32, height: u32) -> Result<Arc<DecodedImage>, ImageError> {
         if let Some(hit) = self.get(url, width, height) {
