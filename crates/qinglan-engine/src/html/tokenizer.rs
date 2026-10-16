@@ -13,13 +13,13 @@ use super::entities;
 /// Attributes kept per tag; the rest are dropped (keeps the duplicate check cheap on hostile input).
 pub const MAX_ATTRIBUTES: usize = 2048;
 
-pub use super::dom::Attribute;
+pub use super::dom::{Attribute, Attrs};
 use super::dom::Namespace;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TagToken {
     pub name: Atom,
-    pub attrs: Vec<Attribute>,
+    pub attrs: Attrs,
     pub self_closing: bool,
 }
 
@@ -135,7 +135,7 @@ pub struct Tokenizer {
     // current tag token
     tag_is_end: bool,
     tag_name: String,
-    tag_attrs: Vec<Attribute>,
+    tag_attrs: Attrs,
     tag_self_closing: bool,
     attr_name: String,
     attr_value: String,
@@ -188,7 +188,7 @@ impl Tokenizer {
             finished: false,
             tag_is_end: false,
             tag_name: String::new(),
-            tag_attrs: Vec::new(),
+            tag_attrs: Attrs::default(),
             tag_self_closing: false,
             attr_name: String::new(),
             attr_value: String::new(),
@@ -327,9 +327,8 @@ impl Tokenizer {
             self.attr_value.clear();
             return;
         }
-        let value = self.attr_value.clone(); // exactly sized, the buffer is kept (see `flush_text`)
+        self.tag_attrs.push(Namespace::None, super::atoms::a::EMPTY, name, &self.attr_value);
         self.attr_value.clear();
-        self.tag_attrs.push(Attribute { ns: Namespace::None, prefix: super::atoms::a::EMPTY, name, value });
     }
 
     fn start_attr(&mut self, atoms: &mut Interner) {
@@ -345,13 +344,12 @@ impl Tokenizer {
         let name = atoms.intern(&self.tag_name);
         if self.tag_is_end {
             self.tag_attrs.clear();
-            self.queue.push_back(Token::EndTag(TagToken { name, attrs: Vec::new(), self_closing: false }));
+            self.queue.push_back(Token::EndTag(TagToken { name, attrs: Attrs::default(), self_closing: false }));
         } else {
             self.last_start_tag.clear();
             self.last_start_tag.push_str(&self.tag_name);
             // Exactly sized: a pushed-to Vec would keep room for four attributes in every element, for the life of the page.
-            let mut attrs: Vec<Attribute> = Vec::with_capacity(self.tag_attrs.len());
-            attrs.append(&mut self.tag_attrs);
+            let attrs = self.tag_attrs.take_exact();
             self.queue.push_back(Token::StartTag(TagToken { name, attrs, self_closing: self.tag_self_closing }));
         }
     }

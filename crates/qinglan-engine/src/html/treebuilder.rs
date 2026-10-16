@@ -8,7 +8,7 @@
 
 use super::atoms::{Atom, Interner, a};
 use super::dom::{
-    Attribute, Document, ElementData, StoredAttr, MAX_DEPTH, MAX_NODES, NONE, NodeData, NodeId, Namespace, QuirksMode, DOCUMENT,
+    Attrs, Document, ElementData, StoredAttr, MAX_DEPTH, MAX_NODES, NONE, NodeData, NodeId, Namespace, QuirksMode, DOCUMENT,
 };
 use super::foreign_data::{SVG_ATTRS, SVG_TAGS};
 use super::quirks_data as q;
@@ -573,7 +573,7 @@ impl TreeBuilder {
     }
 
     /// "Create an element for a token" (13.2.6.1) from already converted attributes.
-    fn create_element(&mut self, name: Atom, ns: Namespace, attrs: Vec<Attribute>) -> NodeId {
+    fn create_element(&mut self, name: Atom, ns: Namespace, attrs: Attrs) -> NodeId {
         let is_template = ns == Namespace::Html && name == a::TEMPLATE;
         let contents = if is_template { self.doc.alloc(NodeData::Fragment) } else { NONE };
         let attrs = self.doc.store_attrs(attrs);
@@ -581,7 +581,7 @@ impl TreeBuilder {
     }
 
     /// "Insert a foreign element" without pushing: create and insert at the appropriate place.
-    fn insert_element_node(&mut self, name: Atom, ns: Namespace, attrs: Vec<Attribute>) -> NodeId {
+    fn insert_element_node(&mut self, name: Atom, ns: Namespace, attrs: Attrs) -> NodeId {
         let el = self.create_element(name, ns, attrs);
         let loc = self.appropriate_place(None);
         self.insert_node(loc, el);
@@ -590,7 +590,7 @@ impl TreeBuilder {
 
     /// "Insert a foreign element" / "insert an HTML element": create, insert, push on the stack of open
     /// elements (unless the depth limit is reached: then the element is attached but not pushed).
-    fn insert_element(&mut self, name: Atom, ns: Namespace, attrs: Vec<Attribute>) -> (NodeId, bool) {
+    fn insert_element(&mut self, name: Atom, ns: Namespace, attrs: Attrs) -> (NodeId, bool) {
         let el = self.insert_element_node(name, ns, attrs);
         if self.open.len() < MAX_DEPTH {
             self.open.push(el);
@@ -610,7 +610,7 @@ impl TreeBuilder {
     }
 
     fn insert_html_element_by_name(&mut self, name: Atom) -> NodeId {
-        self.insert_element(name, Namespace::Html, Vec::new()).0
+        self.insert_element(name, Namespace::Html, Attrs::default()).0
     }
 
     fn insert_char(&mut self, s: &str) {
@@ -698,7 +698,7 @@ impl TreeBuilder {
 
     /// The start tag the element `node` (an entry of the list of active formatting elements) was created for.
     fn afe_token(&self, node: NodeId, name: Atom) -> TagToken {
-        let attrs = self.doc.element(node).map(|e| e.attrs.iter().map(|a| self.doc.token_attr(a)).collect()).unwrap_or_default();
+        let attrs = self.doc.element(node).map(|e| self.doc.token_attrs(&e.attrs)).unwrap_or_default();
         TagToken { name, attrs, self_closing: false }
     }
 
@@ -1055,7 +1055,7 @@ impl TreeBuilder {
             }
             Token::EndTag(ref t) if !matches!(t.name, a::HEAD | a::BODY | a::HTML | a::BR) => {}
             other => {
-                let el = self.create_element(a::HTML, Namespace::Html, Vec::new());
+                let el = self.create_element(a::HTML, Namespace::Html, Attrs::default());
                 self.doc.append_child(DOCUMENT, el);
                 self.open.push(el);
                 self.mode = Mode::BeforeHead;
@@ -1411,7 +1411,7 @@ impl TreeBuilder {
                     self.pop_until_name(a::SELECT);
                 }
                 self.reconstruct_afe();
-                let hidden = t.attrs.iter().any(|at| at.name == a::TYPE && at.value.eq_ignore_ascii_case("hidden"));
+                let hidden = t.attrs.iter().any(|at| at.name == a::TYPE && t.attrs.value(at).eq_ignore_ascii_case("hidden"));
                 self.insert_void_html_element(t);
                 if !hidden {
                     self.frameset_ok = false;
@@ -1525,14 +1525,10 @@ impl TreeBuilder {
         }
     }
 
-    fn merge_attrs(&mut self, target: NodeId, attrs: Vec<Attribute>) {
+    fn merge_attrs(&mut self, target: NodeId, attrs: Attrs) {
         let Some(e) = self.doc.element(target) else { return };
-        let mut new: Vec<Attribute> = Vec::new();
-        for at in attrs {
-            if !e.attrs.iter().any(|x| x.ns == Namespace::None && x.name == at.name) {
-                new.push(at);
-            }
-        }
+        let mut new = attrs;
+        new.retain(|at| !e.attrs.iter().any(|x| x.ns == Namespace::None && x.name == at.name));
         let stored = self.doc.store_attrs(new);
         if let Some(e) = self.doc.element_mut(target) {
             e.attrs.extend(stored);
@@ -1623,7 +1619,7 @@ impl TreeBuilder {
             a::BR => {
                 // Act as if this was a "br" start tag token with no attributes.
                 self.reconstruct_afe();
-                self.insert_element_node(a::BR, Namespace::Html, Vec::new());
+                self.insert_element_node(a::BR, Namespace::Html, Attrs::default());
                 self.frameset_ok = false;
             }
             _ => self.any_other_end_tag(t.name),
@@ -1631,9 +1627,9 @@ impl TreeBuilder {
     }
 
     /// Adjust MathML/SVG attribute names and foreign attributes (13.2.6.1, "adjust ... attributes").
-    fn adjust_attrs(&mut self, attrs: Vec<Attribute>, ns: Namespace) -> Vec<Attribute> {
-        let mut out = Vec::with_capacity(attrs.len());
-        for r in attrs {
+    fn adjust_attrs(&mut self, attrs: Attrs, ns: Namespace) -> Attrs {
+        let mut out = Attrs::default();
+        for r in attrs.iter() {
             let mut name = r.name;
             let text = self.doc.atoms.get(name).to_string();
             match ns {
@@ -1659,9 +1655,9 @@ impl TreeBuilder {
             if ans != Namespace::None {
                 let p = self.doc.atoms.intern(prefix);
                 let l = self.doc.atoms.intern(local);
-                out.push(Attribute { ns: ans, prefix: p, name: l, value: r.value });
+                out.push(ans, p, l, attrs.value(r));
             } else {
-                out.push(Attribute { ns: Namespace::None, prefix: a::EMPTY, name, value: r.value });
+                out.push(Namespace::None, a::EMPTY, name, attrs.value(r));
             }
         }
         out
@@ -1736,7 +1732,7 @@ impl TreeBuilder {
                 }
                 a::STYLE | a::SCRIPT | a::TEMPLATE => self.step(Mode::InHead, Token::StartTag(t)),
                 a::INPUT => {
-                    let hidden = t.attrs.iter().any(|at| at.name == a::TYPE && at.value.eq_ignore_ascii_case("hidden"));
+                    let hidden = t.attrs.iter().any(|at| at.name == a::TYPE && t.attrs.value(at).eq_ignore_ascii_case("hidden"));
                     if hidden {
                         self.insert_void_html_element(t);
                     } else {

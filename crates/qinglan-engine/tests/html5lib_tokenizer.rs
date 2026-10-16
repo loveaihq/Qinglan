@@ -77,7 +77,7 @@ fn render_actual(tokens: &[Token], atoms: &Interner) -> Vec<String> {
             )),
             Token::StartTag(t) => {
                 let mut attrs: Vec<(String, String)> =
-                    t.attrs.iter().map(|a| (atoms.get(a.name).to_string(), a.value.clone())).collect();
+                    t.attrs.iter().map(|a| (atoms.get(a.name).to_string(), t.attrs.value(a).to_string())).collect();
                 attrs.sort();
                 out.push(format!("StartTag:{}|{attrs:?}|{}", atoms.get(t.name), t.self_closing));
             }

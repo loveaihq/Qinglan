@@ -26,25 +26,68 @@ pub enum Namespace {
     Xmlns,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Attribute {
-    pub ns: Namespace,
-    /// Prefix for adjusted foreign attributes (`xlink` in `xlink:href`), `a::EMPTY` otherwise.
-    pub prefix: Atom,
-    pub name: Atom,
-    pub value: String,
-}
-
-/// An attribute as the document keeps it: the value is a range of [`Document::attr_pool`] (one string for all the
-/// values of the page instead of a heap block each; read it with [`Document::value`]).
+/// An attribute: the value is a range of the string that owns it -- [`Attrs::values`] while the attribute is in a
+/// token, [`Document::attr_pool`] (one string for all the values of the page instead of a heap block each) once the
+/// element is made. Read it with [`Attrs::value`] / [`Document::value`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StoredAttr {
+pub struct Attribute {
     pub ns: Namespace,
     /// Prefix for adjusted foreign attributes (`xlink` in `xlink:href`), `a::EMPTY` otherwise.
     pub prefix: Atom,
     pub name: Atom,
     off: u32,
     len: u32,
+}
+
+/// An attribute as the document keeps it.
+pub type StoredAttr = Attribute;
+
+/// The attributes of a start tag: the list, and all their values one after the other in one string (one heap block per
+/// tag instead of one per attribute).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Attrs {
+    list: Vec<Attribute>,
+    values: String,
+}
+
+impl Attrs {
+    pub fn push(&mut self, ns: Namespace, prefix: Atom, name: Atom, value: &str) {
+        let off = u32::try_from(self.values.len()).unwrap_or(u32::MAX);
+        self.values.push_str(value);
+        self.list.push(Attribute { ns, prefix, name, off, len: u32::try_from(value.len()).unwrap_or(0) });
+    }
+
+    pub fn value(&self, a: &Attribute) -> &str {
+        self.values.get(a.off as usize..a.off as usize + a.len as usize).unwrap_or("")
+    }
+
+    pub fn clear(&mut self) {
+        self.list.clear();
+        self.values.clear();
+    }
+
+    pub fn retain(&mut self, f: impl FnMut(&Attribute) -> bool) {
+        self.list.retain(f);
+    }
+
+    /// The attributes in a block of exactly the size they need (the tokenizer keeps its buffers for the next tag).
+    pub fn take_exact(&mut self) -> Attrs {
+        if self.list.is_empty() {
+            return Attrs::default();
+        }
+        let mut list = Vec::with_capacity(self.list.len());
+        list.append(&mut self.list);
+        let values = self.values.clone();
+        self.values.clear();
+        Attrs { list, values }
+    }
+}
+
+impl std::ops::Deref for Attrs {
+    type Target = [Attribute];
+    fn deref(&self) -> &[Attribute] {
+        &self.list
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -255,23 +298,33 @@ impl Document {
 
     /// Put the attributes' values in the pool. (A page whose values would not fit in the pool's 32-bit offsets keeps
     /// the attributes with empty values.)
-    pub fn store_attrs(&mut self, attrs: Vec<Attribute>) -> Vec<StoredAttr> {
-        let mut out = Vec::with_capacity(attrs.len());
-        for at in attrs {
-            let off = self.attr_pool.len();
-            let fits = u32::try_from(off + at.value.len()).is_ok();
-            if fits {
-                self.attr_pool.push_str(&at.value);
-            }
-            let len = if fits { at.value.len() as u32 } else { 0 };
-            out.push(StoredAttr { ns: at.ns, prefix: at.prefix, name: at.name, off: off.min(u32::MAX as usize) as u32, len });
+    pub fn store_attrs(&mut self, attrs: Attrs) -> Vec<StoredAttr> {
+        let Attrs { mut list, values } = attrs;
+        if list.is_empty() {
+            return list;
         }
-        out
+        let base = self.attr_pool.len();
+        if u32::try_from(base + values.len()).is_ok() {
+            self.attr_pool.push_str(&values);
+            for at in &mut list {
+                at.off += base as u32;
+            }
+        } else {
+            for at in &mut list {
+                at.off = 0;
+                at.len = 0;
+            }
+        }
+        list
     }
 
-    /// The stored attribute as a token's attribute (a copy of the value).
-    pub fn token_attr(&self, a: &StoredAttr) -> Attribute {
-        Attribute { ns: a.ns, prefix: a.prefix, name: a.name, value: self.value(a).to_string() }
+    /// The attributes of element data as a token's attributes (copies of the values).
+    pub fn token_attrs(&self, list: &[StoredAttr]) -> Attrs {
+        let mut out = Attrs::default();
+        for a in list {
+            out.push(a.ns, a.prefix, a.name, self.value(a));
+        }
+        out
     }
 
     /// The `<html>` element, if any.
