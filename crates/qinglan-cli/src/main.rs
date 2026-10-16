@@ -36,6 +36,7 @@
 
 mod bench;
 mod render;
+mod wpt;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -214,6 +215,9 @@ fn main() -> ExitCode {
         qinglan_win::count_heap();
         #[cfg(not(feature = "mem-stats"))]
         eprintln!("note: --mem needs a build with --features mem-stats; ignored");
+    }
+    if flags.get(1).map(String::as_str) == Some("wpt") {
+        return wpt::main(&flags[2..]);
     }
     let Some(args) = parse_args() else { return usage() };
     if !matches!(args.cmd.as_str(), "dom" | "style" | "layout" | "record" | "render" | "bench") || (args.cmd == "bench" && args.replay.is_none()) || (args.cmd == "render" && (args.out_png.is_none() || args.width < 1.0 || args.height < 1.0)) {
