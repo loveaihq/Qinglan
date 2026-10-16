@@ -66,8 +66,8 @@ pub const NO_CLIP: u32 = u32::MAX;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaintGlyph {
     /// The platform's font id.
-    pub font: u32,
-    pub glyph: u32,
+    pub font: u16,
+    pub glyph: u16,
     pub advance: f32,
     /// Offset of the drawn glyph from its pen position (marks, kerning), CSS px, y down.
     pub dx: f32,

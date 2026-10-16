@@ -98,8 +98,8 @@
 - **#4 asahi 的 50 张、zol 的 10 张（查清）**：asahi 的 58 张“坏图”全是 SVG（`icon__keyGold.svg` 52 张 + `icon__movie.svg` 6 张，第 2 层）；另外 108 张用 lazysizes：`<img class="lazyload" src=loading.jpg data-src=真图>`，真图要靠 JavaScript 把 `data-src` 换进 `src`，第 4 层之前不处理（页面上显示的是 160 字节的占位图）。没有 `<picture>`、`srcset` 的问题。zol 的 10 张是混合内容（#1，已修）；还有 `data-lazyload-src` 的图同样是 JavaScript 懒加载，不处理。之前“录制时没取到”的说法不对：asahi 那 50 张就是 SVG 里的重复项，zol 那 10 张是被我们自己拦的。
 - **#6 gh-ripgrep / gh-rust 首屏 > 200 ms（已修，原因和猜的不一样）**：首屏时间不在排版（`first-layout` 4–9 ms），而在样式：21 个样式表共 2.9 MB、20 744 条规则，`parse_sheets` 153 ms。做了三件事（`css/facts.rs`、`css/syntax.rs::parse_cvs_many`、`css/stylesheet.rs`）：1）按文档里有的标签/id/class/属性值，丢掉不可能匹配的规则，丢之前不解析它的声明（20 744 → 2 212 条）；2）当前视口下不成立的 `@media` 块不解析里面的规则；3）样式表多时（共 256 KB 以上）分词在最多 4 个线程上并行。`qinglan-cli style` 的输出在 49 个真实页面上新旧完全相同（逐页比 md5，0 个不同）。`qinglan-cli style --time` 现在会多输出各阶段时间。
 - **#5 ruby、#7、#9–#11**：没动（#5 已记入 PLAN 第 2 层；#10 记入第 4 层）。
-- **#8 坏 UTF-8 峰值内存（未修）**：4 MB 垃圾的峰值仍是 207 MB（`qinglan-cli bench`）。分阶段：解析后 13.9 MB，首屏后 80.7 MB，整页后 102.1 MB，峰值 207 MB；放大来自 `MAX_SHAPED_CHARS`（100 万字符）以内的每个字符：`shape` 的返回值（`Glyph` 32 字节）、拷进 `self.glyphs` 的第二份、每个簇一个 `Unit`，再加 Vec 翻倍增长。下一步：按 64 K 字符分段整形（临时数组不再是整段的 32 MB），或把 `Glyph` 压到 16 字节；目标 4 MB ≤ 120 MB。
-- **B6 内存余量（未做）**：见下面第 3 节的 5 次数据，最大 53.0 MB（第一次，构建后第一个新进程），其余 48.1–49.4。
+- **#8 坏 UTF-8 峰值内存（已修，提交 3）**：4 MB 垃圾的峰值 207 MB → 106 MB（`hostile.rs::bad_utf8`，发布版，1.48 秒；目标 ≤ 120 MB，测试里现在断言）。原因和改法见 `docs/decisions.md` 的“提交 3：内存”：长文字按 64 KiB 分段整形、保留数组一次留够、布局里的字形 28 → 16 字节、词表上限 3 万 → 1.6 万词。
+- **B6 内存余量（提交 3）**：构建后立刻新开 5 个进程，zhwiki-rec 滚到底的私有字节 47.9、48.4、48.2、49.2、48.2 MB，最大 49.2 MB（≤ 50）。上一轮记的“构建后第一个进程高 4 MB”这次没有重现（第一个是 47.9 MB），原因没查出来，见 decisions.md。
 
 ## 2. 恶意网页
 
@@ -108,7 +108,7 @@
 | 项 | 测试 | 时间 | 峰值 Private Bytes | 结果 |
 | --- | --- | --- | --- | --- |
 | invalid GBK | `qinglan-cli/tests/hostile.rs::bad_gbk` | 1000 ms | 154 MB | ok |
-| invalid UTF-8 | `qinglan-cli/tests/hostile.rs::bad_utf8` | 1181 ms | 179 MB | ok |
+| invalid UTF-8（4 MB） | `qinglan-cli/tests/hostile.rs::bad_utf8` | 1475 ms | 106 MB | ok |
 | calc() nested 10 000 deep | `qinglan-cli/tests/hostile.rs::calc_nested_10000` | 55 ms | 9 MB | ok |
 | 100 000 CSS rules | `qinglan-cli/tests/hostile.rs::css_100k_rules` | 526 ms | 171 MB | ok |
 | one element with 100 000 attributes | `qinglan-cli/tests/hostile.rs::element_with_100k_attributes` | 84 ms | 17 MB | ok |
@@ -161,5 +161,5 @@
 
 - gh-ripgrep 265 → 150.5 ms，gh-rust 232 → 147.3 ms（`qinglan-cli style` 206 → 104 ms）。
 - zhwiki-rec 首屏中位数 120.7 ms，比 1c-3 记的 102.9 ms 高；同一台机器上同时跑旧、新 `qinglan-cli bench`（交替 4 轮）首屏 98.9–104.1 对 100.6–102.5、样式 34.6–36.4 对 35.7–37.7，没有差别，所以这是窗口一侧的噪声（CPU 占用 23%）。
-- `qinglan.exe` 1 985 536 字节（≤ 1 992 294）。
-- 4 MB 坏 UTF-8（`qinglan-cli bench`）：峰值 207 MB，1.6 秒；目标 ≤ 120 MB 没达到（见 #8）。
+- `qinglan.exe` 1 924 608 字节（≤ 1 992 294，余 67 686；提交 3 把开新窗口的 `std::process::Command` 换成直接调 `CreateProcessW`，省了约 60 KB）。
+- 4 MB 坏 UTF-8（`hostile.rs::bad_utf8`，提交 3）：峰值 106 MB，1.5 秒（原 207 MB、1.6 秒）；上限 120 MB，达到。

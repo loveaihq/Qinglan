@@ -285,6 +285,50 @@ enum UnitKind {
     Oof,
 }
 
+/// The most bytes of one text item the platform shapes in a single call (see `Layouter::shape_item`).
+const SHAPE_CHUNK: usize = 64 * 1024;
+
+/// Whether `c` attaches to the character before it (combining marks, variation selectors, joiners, medial and final
+/// Hangul jamo, kana voicing marks): a piece must not start with one.
+fn joins_previous(c: char) -> bool {
+    matches!(u32::from(c),
+        0x0300..=0x036F | 0x0483..=0x0489 | 0x0591..=0x05C7 | 0x0610..=0x061A | 0x064B..=0x065F | 0x0670
+        | 0x06D6..=0x06ED | 0x0900..=0x0903 | 0x093A..=0x094F | 0x0E31 | 0x0E34..=0x0E3A | 0x0E47..=0x0E4E
+        | 0x1160..=0x11FF | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x200B..=0x200F | 0x20D0..=0x20FF
+        | 0x3099..=0x309A | 0xA960..=0xA97C | 0xD7B0..=0xD7FF | 0xFE00..=0xFE0F | 0xFE20..=0xFE2F | 0xE0100..=0xE01EF)
+}
+
+/// End of the piece of `text` that starts at byte `from` and goes to the platform in one call: the end of the text,
+/// or, for a longer text, about `SHAPE_CHUNK` bytes on, preferably right after a space or line feed within the last
+/// 4 KiB, else at the last place where the next character does not attach to the one before (and that one is not a
+/// zero width joiner). If there is none within 4 KiB, the cut stays at the limit. Always greater than `from`.
+fn shape_cut(text: &str, from: usize) -> usize {
+    let limit = from.saturating_add(SHAPE_CHUNK);
+    if limit >= text.len() {
+        return text.len();
+    }
+    let limit = text.floor_char_boundary(limit).max(from + 1);
+    let lo = text.floor_char_boundary(limit.saturating_sub(4096).max(from + 1));
+    let ok = |p: usize| {
+        text.get(p..).and_then(|r| r.chars().next()).is_some_and(|c| !joins_previous(c)) && text.get(..p).and_then(|l| l.chars().next_back()) != Some('\u{200D}')
+    };
+    let mut p = limit;
+    while p > lo {
+        if matches!(text.as_bytes().get(p - 1), Some(b' ' | b'\n')) && ok(p) {
+            return p;
+        }
+        p -= 1;
+    }
+    p = limit;
+    while p > lo {
+        if text.is_char_boundary(p) && ok(p) {
+            return p;
+        }
+        p -= 1;
+    }
+    limit
+}
+
 /// One glyph cluster (or edge, atomic inline, placeholder): the smallest piece a line can be cut into.
 struct Unit {
     kind: UnitKind,
@@ -746,6 +790,10 @@ impl Layouter<'_> {
                     text.truncate(cut);
                     self.truncated = true;
                 }
+                // The text stays in the result: do not keep the room the white-space pass grew it by.
+                if text.len() > SHAPE_CHUNK && text.capacity() > text.len() + text.len() / 8 {
+                    text.shrink_to_fit();
+                }
                 self.text_left = self.text_left.saturating_sub(n);
             }
             match item.kind {
@@ -868,12 +916,40 @@ impl Layouter<'_> {
         }
     }
 
-    /// Shape a text item and cut it into units (one per glyph cluster).
+    /// Shape a text item and cut it into units (one per glyph cluster). A long item goes to the platform in pieces of
+    /// about `SHAPE_CHUNK` bytes (cut where nothing can join across, see `shape_cut`), so that the platform's temporary
+    /// arrays and the pieces' glyph arrays are the size of a piece, not of a megabyte of text; the arrays that keep the
+    /// result are reserved once.
     fn shape_item(&mut self, item: &Item, ii: u32, text: &str, units: &mut Vec<Unit>) {
+        if text.len() > SHAPE_CHUNK {
+            // A little more than one glyph per character (ligature-free text can still come out at 1.01).
+            let n = text.chars().count();
+            self.glyphs.reserve(n + n / 16);
+            units.reserve(n);
+        }
+        let mut tab_size: Option<LU> = None;
+        let mut a = 0usize;
+        while a < text.len() {
+            let b = shape_cut(text, a);
+            self.shape_piece(item, ii, text, (a, b), &mut tab_size, units);
+            a = b;
+        }
+    }
+
+    /// Shape `text[range]` and append its glyphs and units; offsets in both are relative to the whole item text.
+    fn shape_piece(&mut self, item: &Item, ii: u32, text: &str, range: (usize, usize), tab_size: &mut Option<LU>, units: &mut Vec<Unit>) {
+        let Some(piece) = text.get(range.0..range.1) else { return };
         let rf = self.font_for(&item.style);
         let f = &item.style.font;
         let q = FontQuery { families: &f.family, weight: f.weight, slant: slant_of(f.style), lang: item.style.text.lang.as_deref() };
-        let mut glyphs = self.platform.shape(text, &q, rf.size);
+        let mut glyphs = self.platform.shape(piece, &q, rf.size);
+        if range.0 > 0 {
+            let off = range.0 as u32;
+            for g in &mut glyphs {
+                g.cluster_start = g.cluster_start.saturating_add(off);
+                g.cluster_end = g.cluster_end.saturating_add(off);
+            }
+        }
         let (ls, ws) = (f.letter_spacing, f.word_spacing);
         // Letter- and word-spacing are added to the advance of the last glyph of a cluster, so the
         // glyph array alone says where to draw (css-text-3 8.1, 8.2).
@@ -891,8 +967,7 @@ impl Layouter<'_> {
             }
         }
         let gbase = self.glyphs.len() as u32;
-        self.glyphs.extend_from_slice(&glyphs);
-        let mut tab_size: Option<LU> = None;
+        self.glyphs.extend(glyphs.iter().map(super::PlacedGlyph::from));
         let mut i = 0usize;
         while let Some(g0) = glyphs.get(i) {
             let (cs, ce) = (g0.cluster_start, g0.cluster_end);

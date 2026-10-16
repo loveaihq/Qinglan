@@ -239,7 +239,7 @@ impl Ctx<'_> {
             }
             let ix = gx.floor();
             let sub = (((gx - ix) * 4.0) as u8).min(3);
-            let Some(mask) = self.platform.glyph_mask(FontId(g.font), g.glyph, size, sub) else { continue };
+            let Some(mask) = self.platform.glyph_mask(FontId(u32::from(g.font)), u32::from(g.glyph), size, sub) else { continue };
             let x = ix as i32 + mask.left;
             let y = base + (g.dy * dpr).round() as i32 + mask.top;
             let area = IRect { x0: x, y0: y, x1: x + mask.width as i32, y1: y + mask.height as i32 }.intersect(clip);

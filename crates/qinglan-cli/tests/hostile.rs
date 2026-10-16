@@ -26,6 +26,8 @@ fn n(x: usize) -> usize {
 
 const TIME_LIMIT: Duration = Duration::from_secs(5);
 const PEAK_LIMIT: u64 = 200 * 1024 * 1024;
+/// The tighter limit of the invalid UTF-8 case (release builds only: a debug build allocates differently).
+const PEAK_LIMIT_GARBAGE: u64 = 120 * 1024 * 1024;
 
 struct Case {
     item: &'static str,
@@ -33,10 +35,12 @@ struct Case {
     content_type: &'static str,
     /// More responses: (path, content type, bytes).
     extra: Vec<(String, &'static str, Vec<u8>)>,
+    /// Peak private bytes allowed; `PEAK_LIMIT` unless the case sets less.
+    peak_limit: u64,
 }
 
 fn page(item: &'static str, html: impl Into<Vec<u8>>) -> Case {
-    Case { item, html: html.into(), content_type: "text/html; charset=utf-8", extra: Vec::new() }
+    Case { item, html: html.into(), content_type: "text/html; charset=utf-8", extra: Vec::new(), peak_limit: PEAK_LIMIT }
 }
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -89,13 +93,14 @@ fn run(case: Case, test: &str) {
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     let peak: u64 = stdout.lines().find_map(|l| l.strip_prefix("peak-private-bytes: ")).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
     let ok = status.is_some_and(|s| s.success());
+    let limit = if cfg!(debug_assertions) { PEAK_LIMIT } else { case.peak_limit };
     let result = if hung {
         "HUNG"
     } else if !ok {
         "FAILED"
     } else if cfg!(not(debug_assertions)) && wall > TIME_LIMIT {
         "TOO SLOW"
-    } else if peak > PEAK_LIMIT {
+    } else if peak > limit {
         "TOO BIG"
     } else {
         "ok"
@@ -104,7 +109,7 @@ fn run(case: Case, test: &str) {
     assert!(!hung, "{}: still running after {hard:?}\n{stdout}", case.item);
     assert!(ok, "{}: exit {:?}\n{stdout}\n{stderr}", case.item, status);
     assert!(cfg!(debug_assertions) || wall <= TIME_LIMIT, "{}: took {wall:?}", case.item);
-    assert!(peak <= PEAK_LIMIT, "{}: peak {peak} bytes", case.item);
+    assert!(peak <= limit, "{}: peak {peak} bytes (limit {limit})", case.item);
     assert!(stdout.lines().any(|l| l.starts_with("scroll-frames: ")), "{}: bench did not get to the scroll\n{stdout}\n{stderr}", case.item);
 }
 
@@ -244,9 +249,12 @@ fn element_with_100k_attributes() {
 fn bad_utf8() {
     let mut seed = 7;
     let mut html = b"<!DOCTYPE html><meta charset=utf-8><body><p>".to_vec();
-    html.extend((0..n(2_000_000)).map(|_| lcg(&mut seed) | 0x80));
+    html.extend((0..n(4_000_000)).map(|_| lcg(&mut seed) | 0x80));
     html.extend(b"</p><p>after the garbage</p>");
-    run(page("invalid UTF-8", html), "bad_utf8");
+    // 4 MB of garbage is a million shaped characters (the page's text allowance): that case is held to 120 MB.
+    let mut case = page("invalid UTF-8", html);
+    case.peak_limit = PEAK_LIMIT_GARBAGE;
+    run(case, "bad_utf8");
 }
 
 #[test]

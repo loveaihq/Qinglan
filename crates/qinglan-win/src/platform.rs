@@ -28,6 +28,7 @@ const MAX_FONTS: usize = 512;
 const MAX_QUERIES: usize = 8192;
 /// A single `GetGlyphs` call gets at most this many UTF-16 units (its cluster map holds 16-bit values).
 const MAX_RUN_UNITS: usize = 8192;
+
 /// Size at which context-free characters are shaped (advances are scaled linearly afterwards).
 const PROBE: f32 = 100.0;
 /// Most UTF-16 units of words shaped by one bulk call.
@@ -859,7 +860,7 @@ impl Inner {
                     continue;
                 }
                 let shaped = Shaped { glyphs: glyphs.to_vec(), cluster_map: map.iter().map(|&g| g - g0 as u16).collect(), advances: advances.to_vec(), offsets: offsets.to_vec() };
-                if self.words.len() > 30_000 {
+                if self.words.len() > 16_000 {
                     self.words.clear();
                 }
                 self.words.insert(*key, WordEntry { fid, loc: q.loc, script: sa.script, shapes: sa.shapes, units: u.as_slice().into(), shaped: Rc::new(shaped) });
@@ -892,7 +893,7 @@ impl Inner {
                     self.add_shape_time(t.elapsed().as_micros() as u64);
                     self.stats.shape_calls += 1;
                     if let Some(sh) = &sh {
-                        if self.words.len() > 30_000 {
+                        if self.words.len() > 16_000 {
                             self.words.clear();
                         }
                         self.words.insert(key, WordEntry { fid, loc: q.loc, script: sa.script, shapes: sa.shapes, units: word.into(), shaped: Rc::clone(sh) });
@@ -1111,8 +1112,10 @@ impl Platform for WinPlatform {
             let inn = self.inner.borrow();
             wide_nul(&lang.and_then(normalize_lang).or_else(|| normalize_lang(&inn.default_locale)).unwrap_or_else(|| "en-US".to_string()))
         };
-        let mut u16s: Vec<u16> = Vec::with_capacity(text.len());
-        let mut map: Vec<u32> = Vec::with_capacity(text.len());
+        // One unit per character (two for the rare astral one): the byte length overshoots by up to 3x for CJK text.
+        let n_chars = text.chars().count();
+        let mut u16s: Vec<u16> = Vec::with_capacity(n_chars);
+        let mut map: Vec<u32> = Vec::with_capacity(n_chars);
         for (bi, c) in text.char_indices() {
             let mut buf = [0u16; 2];
             for &u in c.encode_utf16(&mut buf).iter() {

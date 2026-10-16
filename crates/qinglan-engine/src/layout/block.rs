@@ -471,7 +471,7 @@ impl Layouter<'_> {
         let rf = self.font_for(&bx.style);
         let baseline = self.first_baseline(id).unwrap_or(content_top + rf.lead_top + rf.asc);
         let gbase = self.glyphs.len() as u32;
-        self.glyphs.extend_from_slice(&glyphs);
+        self.glyphs.extend(glyphs.iter().map(super::PlacedGlyph::from));
         let tid = self.texts.len() as u32;
         let len = text.len() as u32;
         self.texts.push(text);

@@ -35,6 +35,26 @@ use crate::html::atoms::{FxHashMap, a};
 use crate::html::dom::Document;
 use crate::platform::{Glyph, Platform};
 
+/// A shaped glyph as layout and the display list keep it: the platform's [`Glyph`] without the cluster range (only
+/// unit building reads that), and with 16-bit font and glyph ids (a glyph index is 16 bits in OpenType; the platform
+/// keeps fewer than 65536 fonts). 16 bytes instead of 28, for every glyph of the page.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlacedGlyph {
+    pub font: u16,
+    /// Glyph index in `font`; 0 is the font's missing-glyph box.
+    pub glyph: u16,
+    /// Horizontal advance, px (letter-, word-spacing and justification included).
+    pub advance: f32,
+    pub offset_x: f32,
+    pub offset_y: f32,
+}
+
+impl From<&Glyph> for PlacedGlyph {
+    fn from(g: &Glyph) -> PlacedGlyph {
+        PlacedGlyph { font: u16::try_from(g.font.0).unwrap_or(0), glyph: u16::try_from(g.glyph).unwrap_or(0), advance: g.advance, offset_x: g.offset_x, offset_y: g.offset_y }
+    }
+}
+
 pub use boxtree::{BoxId, BoxKind, BoxTree, NO_BOX, build_box_tree};
 pub use image::{ImageRequest, ImageSizes, ImageState};
 pub use units::LayoutUnit;
@@ -178,7 +198,7 @@ pub struct LayoutResult {
     pub boxes: Vec<BoxOut>,
     pub lines: Vec<Line>,
     pub fragments: Vec<Fragment>,
-    pub glyphs: Vec<Glyph>,
+    pub glyphs: Vec<PlacedGlyph>,
     /// The text of every text item after white-space processing (what fragments point into).
     pub texts: Vec<String>,
     pub decorations: Vec<Decoration>,
@@ -268,7 +288,7 @@ pub(crate) struct Layouter<'a> {
     pub out: Vec<BoxOut>,
     pub lines: Vec<Line>,
     pub fragments: Vec<Fragment>,
-    pub glyphs: Vec<Glyph>,
+    pub glyphs: Vec<PlacedGlyph>,
     pub texts: Vec<String>,
     pub decorations: Vec<Decoration>,
     pub markers: Vec<Fragment>,

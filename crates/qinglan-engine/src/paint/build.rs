@@ -329,7 +329,7 @@ impl Builder<'_> {
         let half = LU::from_f32(size * 0.5);
         let (x, top) = (ax + f.x, ay + f.y);
         let bounds = Rect::new(x - half, top - half, f.w + half + half, f.h + half + half);
-        let paint = gs.iter().map(|g| PaintGlyph { font: g.font.0, glyph: g.glyph, advance: g.advance, dx: g.offset_x, dy: g.offset_y });
+        let paint = gs.iter().map(|g| PaintGlyph { font: g.font, glyph: g.glyph, advance: g.advance, dx: g.offset_x, dy: g.offset_y });
         self.push_text(bounds, x, top + asc, size, color, paint);
     }
 
@@ -407,7 +407,7 @@ impl Builder<'_> {
         let Some(font) = self.platform.resolve_font(&q) else { return };
         let ascent = self.platform.font_metrics(font, f.size).ascent;
         let gs = self.platform.shape(text, &q, f.size);
-        let glyphs = gs.iter().map(|g| PaintGlyph { font: g.font.0, glyph: g.glyph, advance: g.advance, dx: g.offset_x, dy: g.offset_y });
+        let glyphs = gs.iter().map(crate::layout::PlacedGlyph::from).map(|g| PaintGlyph { font: g.font, glyph: g.glyph, advance: g.advance, dx: g.offset_x, dy: g.offset_y });
         let pad = LU::px(4);
         let (x, base) = (r.x + pad, r.y + pad + LU::from_f32(ascent).round_px());
         let prev = self.push_clip(r);

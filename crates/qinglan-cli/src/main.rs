@@ -67,14 +67,17 @@ fn count_notdef(res: &qinglan_engine::layout::LayoutResult) -> (usize, String) {
     let mut count = 0usize;
     let mut chars: Vec<char> = Vec::new();
     for f in &res.fragments {
-        let (text, glyphs) = match f.kind {
-            FragKind::Text { text, glyphs, .. } | FragKind::Marker { text, glyphs, .. } => (text, glyphs),
+        let (text, range, glyphs) = match f.kind {
+            FragKind::Text { text, start, end, glyphs, .. } | FragKind::Marker { text, start, end, glyphs, .. } => (text, start as usize..end as usize, glyphs),
             _ => continue,
         };
         let Some(gs) = res.glyphs.get(glyphs.0 as usize..glyphs.1 as usize) else { continue };
-        for g in gs.iter().filter(|g| g.glyph == 0) {
+        // Layout keeps no cluster ranges: the character is taken to be the one at the glyph's position in the fragment
+        // (exact unless the text has multi-character clusters before it).
+        let frag_text = res.texts.get(text as usize).and_then(|t| t.get(range.clone()));
+        for (k, _) in gs.iter().enumerate().filter(|(_, g)| g.glyph == 0) {
             count += 1;
-            let c = res.texts.get(text as usize).and_then(|t| t.get(g.cluster_start as usize..g.cluster_end as usize)).and_then(|s| s.chars().next());
+            let c = frag_text.and_then(|s| s.chars().nth(k));
             if let Some(c) = c
                 && chars.len() < 8
                 && !chars.contains(&c)

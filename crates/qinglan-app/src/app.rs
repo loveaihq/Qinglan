@@ -577,14 +577,15 @@ impl Browser {
     /// A new window is a new process (L1 task 17).
     fn spawn_window(&self, address: Option<&str>) {
         let Ok(exe) = std::env::current_exe() else { return };
-        let mut cmd = std::process::Command::new(exe);
+        let mut args: Vec<&std::ffi::OsStr> = Vec::new();
         if let Some(a) = address {
-            cmd.arg(a);
+            args.push(a.as_ref());
         }
         if let Some(r) = &self.opts.replay {
-            cmd.arg("--replay").arg(r);
+            args.push("--replay".as_ref());
+            args.push(r.as_ref());
         }
-        let _ = cmd.spawn();
+        let _ = qinglan_win::spawn_process(&exe, &args);
     }
 
     // ---- showing the page ---------------------------------------------------------------------------------
