@@ -351,7 +351,7 @@ impl Tokenizer {
             self.last_start_tag.push_str(&self.tag_name);
             // Exactly sized: a pushed-to Vec would keep room for four attributes in every element, for the life of the page.
             let mut attrs: Vec<Attribute> = Vec::with_capacity(self.tag_attrs.len());
-            attrs.extend(self.tag_attrs.drain(..));
+            attrs.append(&mut self.tag_attrs);
             self.queue.push_back(Token::StartTag(TagToken { name, attrs, self_closing: self.tag_self_closing }));
         }
     }
