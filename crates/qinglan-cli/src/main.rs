@@ -353,7 +353,7 @@ fn main() -> ExitCode {
     }
 
     // Style sheets: fetch the linked ones (and what they import), then compute the styles.
-    let sopts = StyleOptions { viewport_w: args.width, viewport_h: args.height, ..StyleOptions::default() };
+    let sopts = StyleOptions { viewport_w: args.width, viewport_h: args.height, profile: args.timing && args.cmd == "style" };
     let mut res = blocking::resources_for(&opened);
     res.start_sheets(&opened.doc, &mut loader, &sopts);
     if !blocking::load_sheets(&mut loader, &mut res, platform, SHEET_TIMEOUT) {
@@ -389,6 +389,7 @@ fn main() -> ExitCode {
                 out.author_rules,
                 opened.doc.nodes.len()
             );
+            eprintln!("{:?}\n{:?}", out.timings, out.tree.timings);
         }
         return ExitCode::SUCCESS;
     }

@@ -91,6 +91,16 @@
 - 没有崩溃、卡死、乱码、方块、丢字，所以没有别的要修。
 - 另：`qinglan-cli bench` 的滚动循环没有帧数上限（高 1e9 像素的页面会滚几小时），加了 `--max-frames N`（默认 20 000 帧）和输出 `scroll-complete`。这是测试工具的改动，不是产品代码。
 
+### 审查后的修复（1c 复审，2026-10-16；上面的疑似 bug 清单按这里更新）
+
+- **#1 混合内容图片（已修）**：https 页面上的 `http://` 图片改成 `https://` 去取（和 Chrome 对图片的做法一样），失败就是坏图，不回退 http；样式表等其他子资源仍然拦截。`policy::upgrade_mixed_image`，测试 `net.rs::http_images_on_an_https_page_are_upgraded_and_nothing_else_is`。重新录 zol：14 张图请求、14 张加载、0 张坏（之前 10 张 `http://2*.zol-img.com.cn/manu_photo/*` 被拒）。
+- **#3 iframe 占位框盖字（已修）**：占位框不再填充，只画 1 px 灰框加名字，下面的字照常显示。测试 `paint.rs::a_frame_placeholder_is_a_border_and_a_label_not_a_cover`。
+- **#4 asahi 的 50 张、zol 的 10 张（查清）**：asahi 的 58 张“坏图”全是 SVG（`icon__keyGold.svg` 52 张 + `icon__movie.svg` 6 张，第 2 层）；另外 108 张用 lazysizes：`<img class="lazyload" src=loading.jpg data-src=真图>`，真图要靠 JavaScript 把 `data-src` 换进 `src`，第 4 层之前不处理（页面上显示的是 160 字节的占位图）。没有 `<picture>`、`srcset` 的问题。zol 的 10 张是混合内容（#1，已修）；还有 `data-lazyload-src` 的图同样是 JavaScript 懒加载，不处理。之前“录制时没取到”的说法不对：asahi 那 50 张就是 SVG 里的重复项，zol 那 10 张是被我们自己拦的。
+- **#6 gh-ripgrep / gh-rust 首屏 > 200 ms（已修，原因和猜的不一样）**：首屏时间不在排版（`first-layout` 4–9 ms），而在样式：21 个样式表共 2.9 MB、20 744 条规则，`parse_sheets` 153 ms。做了三件事（`css/facts.rs`、`css/syntax.rs::parse_cvs_many`、`css/stylesheet.rs`）：1）按文档里有的标签/id/class/属性值，丢掉不可能匹配的规则，丢之前不解析它的声明（20 744 → 2 212 条）；2）当前视口下不成立的 `@media` 块不解析里面的规则；3）样式表多时（共 256 KB 以上）分词在最多 4 个线程上并行。`qinglan-cli style` 的输出在 49 个真实页面上新旧完全相同（逐页比 md5，0 个不同）。`qinglan-cli style --time` 现在会多输出各阶段时间。
+- **#5 ruby、#7、#9–#11**：没动（#5 已记入 PLAN 第 2 层；#10 记入第 4 层）。
+- **#8 坏 UTF-8 峰值内存（未修）**：4 MB 垃圾的峰值仍是 207 MB（`qinglan-cli bench`）。分阶段：解析后 13.9 MB，首屏后 80.7 MB，整页后 102.1 MB，峰值 207 MB；放大来自 `MAX_SHAPED_CHARS`（100 万字符）以内的每个字符：`shape` 的返回值（`Glyph` 32 字节）、拷进 `self.glyphs` 的第二份、每个簇一个 `Unit`，再加 Vec 翻倍增长。下一步：按 64 K 字符分段整形（临时数组不再是整段的 32 MB），或把 `Glyph` 压到 16 字节；目标 4 MB ≤ 120 MB。
+- **B6 内存余量（未做）**：见下面第 3 节的 5 次数据，最大 53.0 MB（第一次，构建后第一个新进程），其余 48.1–49.4。
+
 ## 2. 恶意网页
 
 每个用例是一份录制，用 `qinglan-cli bench` 走完整流程（解析、样式、排版、显示列表、光栅、滚 10 帧）；每个在独立的子进程里，所以峰值内存（`PeakPagefileUsage`）是这个页面自己的。要求：≤ 5 秒、不 panic、峰值 ≤ 200 MB。下面是 release、`--test-threads=1` 的单次结果（时间含启动进程约 40 ms）。debug 构建下尺寸缩到十分之一，只查内存。
@@ -140,3 +150,16 @@
 | 真实网页库滚完私有内存 | 报中位数和最大值 | 中位数 **11.6 MB**，最大 **52.1 MB**（zhwiki-rec，单次；5 次中位数见上一行） |
 
 说明：150% 这一行用 `--width 1280 --height 720 --dpr 1.5`，窗口是 1920×1080 设备像素，和物理 1920×1080 屏幕在 150% 缩放下的工作量一致（1c-2b 时用的是 CSS 1920×1080 × 1.5，重 2.25 倍，那个不是验收要的）。
+
+### 1c 复审后的数字（release，插电 `BatteryStatus = 2`，没有 cargo/rustc/qpdf 在跑，CPU 占用约 23%（用户的 Edge 和桌面版开着），每次新进程，`qinglan.exe --bench` 1920×1080 dpr 1，`C:\Dev\qinglan` 在“Fix real-page issues from the corpus”提交时）
+
+| 页面 | 首屏 ms（5 次） | 中位数 | 滚完私有内存 MB（5 次） | 最大 |
+| --- | --- | --- | --- | --- |
+| zhwiki-rec | 164.1、115.5、120.7、126.7、120.5 | 120.7 | 53.0、48.7、48.1、48.9、49.4 | 53.0 |
+| gh-ripgrep | 172.4、153.7、149.3、150.5、147.3 | 150.5 | 29.1、28.6、28.0、28.9、28.3 | 29.1 |
+| gh-rust | 146.9、147.3、148.3、147.2、151.3 | 147.3 | 26.9、26.1、26.4、29.1、27.5 | 29.1 |
+
+- gh-ripgrep 265 → 150.5 ms，gh-rust 232 → 147.3 ms（`qinglan-cli style` 206 → 104 ms）。
+- zhwiki-rec 首屏中位数 120.7 ms，比 1c-3 记的 102.9 ms 高；同一台机器上同时跑旧、新 `qinglan-cli bench`（交替 4 轮）首屏 98.9–104.1 对 100.6–102.5、样式 34.6–36.4 对 35.7–37.7，没有差别，所以这是窗口一侧的噪声（CPU 占用 23%）。
+- `qinglan.exe` 1 985 536 字节（≤ 1 992 294）。
+- 4 MB 坏 UTF-8（`qinglan-cli bench`）：峰值 207 MB，1.6 秒；目标 ≤ 120 MB 没达到（见 #8）。

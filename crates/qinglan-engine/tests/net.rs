@@ -639,3 +639,38 @@ fn mailto_is_rebuilt_from_rfc_6068_characters() {
     assert!(long.ends_with("%A0") || long.ends_with("%BD") || long.ends_with("%E4"), "{long}");
     assert_eq!(long.matches('%').count() * 3, long.len() - "mailto:a@b.c?body=".len(), "only whole %XX units");
 }
+
+#[test]
+fn http_images_on_an_https_page_are_upgraded_and_nothing_else_is() {
+    let fake = Fake::new(0, |req: &Request| match (req.url.scheme.as_str(), req.url.pathname().as_str()) {
+        ("https", "/up.png") | ("https", "/other.png") => Ok(resp(&req.url, 200, Some("image/png"), &[30, 20, 0])),
+        _ => Err(NetError::Connect("no https here".into())),
+    });
+    let mut loader = Loader::without_wake(fake.clone());
+    let doc = parse_document("<p>".to_string());
+    let img = |node: u32, src: &str| ImageRequest { node, src: src.to_string(), density: 1.0 };
+    let reqs = vec![img(1, "http://x.example/up.png"), img(2, "https://x.example/up.png"), img(3, "http://x.example:8080/other.png"), img(4, "http://y.example/noh.png")];
+
+    let page = u("https://a.example/index.html");
+    let mut res = PageResources::new(&page, &doc, Encoding::UTF_8);
+    let mut sizes = ImageSizes::new();
+    blocking::load_images(&mut loader, &mut res, &reqs, &SizeDecoder, &mut sizes, &BasicPlatform, Duration::from_secs(10));
+    assert_eq!(sizes.get(1), Some(ImageState::Loaded { width: 30, height: 20 }), "http://x/up.png is fetched as https");
+    assert_eq!(sizes.get(2), Some(ImageState::Loaded { width: 30, height: 20 }));
+    assert_eq!(sizes.get(3), Some(ImageState::Loaded { width: 30, height: 20 }), "another port is kept, only the scheme changes");
+    assert_eq!(sizes.get(4), Some(ImageState::Broken), "when https fails the image is broken, with no fallback to http");
+    let urls: Vec<String> = fake.calls.lock().unwrap().iter().map(|r| r.url.href()).collect();
+    assert_eq!(urls.iter().filter(|h| h.as_str() == "https://x.example/up.png").count(), 1, "http and https forms are one request: {urls:?}");
+    assert!(urls.iter().all(|h| h.starts_with("https:")), "nothing goes out over http: {urls:?}");
+    assert!(urls.contains(&"https://x.example:8080/other.png".to_string()));
+
+    // A style sheet is not upgraded: it stays blocked (mixed content).
+    assert_eq!(policy::plan(&u("http://x.example/s.css"), ResourceKind::Style, Some(&page)), Err(Refusal::MixedContent));
+    // On an http page nothing changes.
+    let fake2 = Fake::new(0, |req: &Request| Ok(resp(&req.url, 200, Some("image/png"), &[30, 20, 0])));
+    let mut loader2 = Loader::without_wake(fake2.clone());
+    let mut res2 = PageResources::new(&u("http://a.example/index.html"), &doc, Encoding::UTF_8);
+    let mut sizes2 = ImageSizes::new();
+    blocking::load_images(&mut loader2, &mut res2, &reqs[..1], &SizeDecoder, &mut sizes2, &BasicPlatform, Duration::from_secs(10));
+    assert_eq!(fake2.calls.lock().unwrap()[0].url.href(), "http://x.example/up.png");
+}

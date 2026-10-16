@@ -97,6 +97,19 @@ pub fn plan(url: &Url, kind: ResourceKind, page: Option<&Url>) -> Result<Plan, R
     }
 }
 
+/// Mixed content upgrade: an `http:` image on an `https:` page is fetched over `https:` instead, as browsers
+/// do for images (the same host, the default port 80 becomes 443, another port stays). If the server does not
+/// answer over https the image is broken; nothing falls back to http. Style sheets and everything else are
+/// not upgraded and stay blocked ([`plan`]).
+pub fn upgrade_mixed_image(url: &mut Url, page: &Url) {
+    if url.scheme == "http" && page.scheme == "https" && url.host.is_some() {
+        url.scheme = "https".to_string();
+        if url.port == Some(80) {
+            url.port = None;
+        }
+    }
+}
+
 /// Longest `mailto:` address handed to the mail program (what the page asks for is cut here).
 pub const MAX_MAILTO: usize = 2048;
 

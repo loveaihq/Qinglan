@@ -368,7 +368,15 @@ impl Builder<'_> {
                 }
             }
             Some(ReplacedKind::Placeholder(name)) => {
-                self.rect(content, GREY_FILL);
+                // A thin border and the name, no fill: a placeholder must never hide what is under it (mdBook's
+                // `position: fixed` sidebar frame covered 300 px of the text).
+                let one = LU::px(1);
+                if content.w > one + one && content.h > one + one {
+                    self.rect(Rect::new(content.x, content.y, content.w, one), GREY_LINE);
+                    self.rect(Rect::new(content.x, content.y + content.h - one, content.w, one), GREY_LINE);
+                    self.rect(Rect::new(content.x, content.y + one, one, content.h - one - one), GREY_LINE);
+                    self.rect(Rect::new(content.x + content.w - one, content.y + one, one, content.h - one - one), GREY_LINE);
+                }
                 self.label(id, content, name);
             }
             Some(ReplacedKind::Check) => {

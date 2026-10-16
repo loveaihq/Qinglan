@@ -679,3 +679,31 @@
 WinHTTP 的超时是分步的（解析、连接、发送、接收各一个），沉默服务器的总耗时能超出 4 秒以上，被阻塞的线程也看不到取消标志。`qinglan-win/src/net.rs` 里有一个 `Watchdog` 线程（第一个请求时才起，没有请求就睡在条件变量上）：每个请求在 `Session::get` 创建请求句柄之后、发送之前登记（总截止时间 + 取消标志）；到点或取消标志被设置（每 25 ms 看一次，只在有请求时）就关掉请求句柄，阻塞的调用立刻返回（`12017`），再按“取消 / 超时”归类（`error_for`）。
 
 句柄的安全：请求句柄放在 `Shared(Mutex<Option<Handle>>)` 里，使用线程每次调用前通过 `raw()` 从槽里取，关掉的槽返回错误，所以不会拿已经关闭的句柄开始新调用；谁把句柄从槽里取出来谁关，只关一次（`HttpRequest::drop` 也走这条）；已经在阻塞的调用正是 WinHTTP 支持的情形（句柄关闭时调用失败，对象等调用返回才释放）。unsafe 仍只在 `sys/winhttp.rs`。测试：`silent_server_times_out`（1.5 s 总时限，断言 1.4–2.5 s）、`cancelling_aborts_a_blocked_request_quickly`、`cancel_all_frees_the_slots_and_aborts_the_blocked_workers`（3 个沉默服务器 18 个请求，16 个在跑；取消后名额为 0，新文档请求马上开始，句柄在 25 ms 级被关掉）。
+
+## 第 1 层 · 1c 审查修复（2026-10-16，提交 2：真实网页问题）
+
+### B1 混合内容的图片升级
+
+https 页面上的 `http://` 图片改成 `https://`（同主机，端口不变，默认端口隐含）去取，失败就是坏图，不回退 http。只对图片：样式表等其他子资源仍然被 `Refusal::MixedContent` 拦住。升级发生在 `PageResources::request_images`，缓存键、去重键、`Referer` 用升级后的地址。
+
+### B2 iframe 等占位框不遮挡
+
+`ReplacedKind::Placeholder` 不再填灰色：只画 1 px 灰框和名字。`position: fixed` 的侧栏 iframe（mdBook）不会再盖住正文。
+
+### B3 asahi 和 zol 的缺图
+
+查清了，没有要加的功能：asahi 是 SVG（第 2 层）加 lazysizes 的 `data-src`（要 JavaScript），zol 是混合内容（B1）加 `data-lazyload-src`（要 JavaScript）。没有 `<picture>`/`srcset` 的问题。不做 `data-src` 一类的猜测：那是各站自己的脚本约定，不是 HTML 标准。
+
+### B4 首屏时间：样式表解析
+
+首屏慢在样式，不在排版停止线。三项改动，行为不变（49 页的 `style` 输出逐页相同）：
+
+- `css/facts.rs`：先扫一遍文档，记下出现过的标签、id、class、属性名、属性（名, 值）的哈希。作者样式表里选择器的任何一个复合选择器要求文档里没有的东西，这条选择器就丢掉（全部丢光的规则不解析声明）。只判断“确定不可能”：伪类、`:not`/`:is`、`*`、值的前缀/子串/不区分大小写比较一律保留；怪异模式不判断 id 和 class（那里不区分大小写）；UA 样式表不过滤。哈希碰撞只会多留一条规则。
+- 当前视口下不成立的 `@media` 块在转换时就跳过，不解析里面的规则（以前是解析完、建索引时才丢）。
+- `parse_cvs_many`：作者样式表和其中的 `@import` 之前的分词（文本到组件值）在最多 4 个线程上并行，总文本不到 256 KB 时不用线程；每个线程 8 MB 栈，和主线程一样。样式表的获取、解析成规则、建索引和 `@import` 仍然按文档顺序，在调用线程上，所以结果和顺序不变。
+- `@import` 进来的样式表仍然是按需在建索引时解析的（也过滤，但不并行）。
+- 工具：`qinglan-cli style --time` 多输出各阶段时间（`StyleTimings`、`CascadeTimings`）。
+
+### 没做
+
+- B5（坏 UTF-8 内存 207 MB → ≤ 120 MB）和 B6（zhwiki-rec 内存最大值 ≤ 50 MB）没做，原因和下一步见 `tests/corpus/RESULTS.md` 的 #8 和 B6。

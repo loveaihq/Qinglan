@@ -125,6 +125,44 @@ pub fn parse_cvs(text: &str) -> Vec<Cv> {
     component_values(tokenize(text))
 }
 
+/// Below this many bytes of style sheet text in all, tokenizing on several threads costs more than it saves.
+const PARALLEL_MIN_BYTES: usize = 256 * 1024;
+/// At most this many worker threads for [`parse_cvs_many`].
+const PARALLEL_MAX_THREADS: usize = 4;
+/// Stack of a worker: the main thread has 8 MB and the parser may recurse as deep as the nesting limits allow.
+const WORKER_STACK: usize = 8 << 20;
+
+/// [`parse_cvs`] for several texts, in order. Large sets of sheets are tokenized on up to four threads (the
+/// biggest first): a page with 3 MB of CSS spends a third of its style time here, and the texts are independent.
+/// The result is the same as calling `parse_cvs` on each.
+pub fn parse_cvs_many(texts: &[&str]) -> Vec<Vec<Cv>> {
+    let total: usize = texts.iter().map(|t| t.len()).sum();
+    let threads = std::thread::available_parallelism().map_or(1, usize::from).min(PARALLEL_MAX_THREADS).min(texts.len());
+    if threads < 2 || total < PARALLEL_MIN_BYTES {
+        return texts.iter().map(|t| parse_cvs(t)).collect();
+    }
+    let mut order: Vec<usize> = (0..texts.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(texts.get(i).map_or(0, |t| t.len())));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let slots: Vec<std::sync::Mutex<Option<Vec<Cv>>>> = texts.iter().map(|_| std::sync::Mutex::new(None)).collect();
+    let work = || {
+        while let Some(&i) = order.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+            let (Some(text), Some(slot)) = (texts.get(i), slots.get(i)) else { break };
+            let parsed = parse_cvs(text);
+            *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(parsed);
+        }
+    };
+    std::thread::scope(|s| {
+        for _ in 1..threads {
+            // A worker that cannot start just leaves its share to the others (and to this thread).
+            let _ = std::thread::Builder::new().stack_size(WORKER_STACK).spawn_scoped(s, work);
+        }
+        work();
+    });
+    // A text whose worker panicked is parsed again here: the panic then happens on the caller's thread, as without threads.
+    slots.into_iter().zip(texts).map(|(m, t)| m.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner).unwrap_or_else(|| parse_cvs(t))).collect()
+}
+
 /// A generic rule: an at-rule or a qualified rule.
 #[derive(Clone, Debug)]
 pub struct RawRule {

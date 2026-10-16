@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use super::loader::{LoadEvent, LoadRequest, Loader, Ticket};
-use super::{ResourceKind, Response, content};
+use super::{ResourceKind, Response, content, policy};
 use crate::css::{MAX_SHEETS, ResourceLoader, StyleOptions, base_url, linked_stylesheets, scan_imports};
 use crate::encoding::{Encoding, decode_stylesheet};
 use crate::html::atoms::FxHashMap;
@@ -156,11 +156,13 @@ impl PageResources {
     pub fn request_images(&mut self, loader: &mut Loader, images: &[ImageRequest]) -> Vec<NodeId> {
         let mut broken = Vec::new();
         for r in images {
-            let Ok(url) = self.base.join(r.src.trim()) else {
+            let Ok(mut url) = self.base.join(r.src.trim()) else {
                 self.node_urls.insert(r.node, r.src.clone());
                 broken.push(r.node);
                 continue;
             };
+            // An http image on an https page is asked for over https (the key and the cache use that address).
+            policy::upgrade_mixed_image(&mut url, &self.page);
             let key = url.href();
             if self.node_urls.get(&r.node) == Some(&key) {
                 continue;

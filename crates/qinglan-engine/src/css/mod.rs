@@ -8,6 +8,7 @@ pub mod cascade;
 pub mod color;
 mod color_names;
 pub mod computed;
+pub mod facts;
 pub mod import_scan;
 pub mod media;
 pub mod parse_prop;
@@ -25,7 +26,7 @@ use std::time::{Duration, Instant};
 use cascade::{ImportResolver, Origin, RuleSet, StyleInput, StyleTree, compute_styles};
 use computed::Env;
 use media::{MediaEnv, MediaQueryList};
-use stylesheet::{ImportRule, SheetCtx, Stylesheet, parse_stylesheet, parse_style_attribute};
+use stylesheet::{ImportRule, SheetCtx, Stylesheet, parse_style_attribute, parse_stylesheet, parse_stylesheet_cvs};
 use types::DeclBlock;
 
 use crate::html::atoms::{FxHashMap, Interner, a};
@@ -194,6 +195,8 @@ struct Resolver<'a> {
     block_id: &'a mut u32,
     sheets: &'a mut usize,
     missing: &'a mut Vec<String>,
+    facts: &'a facts::DocFacts,
+    env: &'a MediaEnv,
     /// URLs of the sheets being processed (the chain of imports), for relative URLs and cycle detection.
     chain: Vec<Url>,
 }
@@ -215,7 +218,7 @@ impl ImportResolver for Resolver<'_> {
             return None;
         };
         *self.sheets += 1;
-        let mut ctx = SheetCtx { atoms: self.atoms, quirks: self.quirks, var_id: self.var_id, block_id: self.block_id };
+        let mut ctx = SheetCtx { atoms: self.atoms, quirks: self.quirks, var_id: self.var_id, block_id: self.block_id, facts: Some(self.facts), env: Some(self.env) };
         let sheet = parse_stylesheet(&text, &mut ctx);
         self.chain.push(url);
         Some(Rc::new(sheet))
@@ -258,7 +261,7 @@ pub fn style_document_with(
     // Built-in style sheet.
     let mut ua = RuleSet::new();
     {
-        let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks: false, var_id: &mut var_id, block_id: &mut block_id };
+        let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks: false, var_id: &mut var_id, block_id: &mut block_id, facts: None, env: None };
         let sheet = parse_stylesheet(UA_CSS, &mut ctx);
         clock.lap(&mut timings.parse_sheets);
         ua.add_sheet(&sheet, Origin::UserAgent, &media_env, &mut NoImports);
@@ -272,9 +275,14 @@ pub fn style_document_with(
     }
 
     // Author style sheets, in document order.
+    let doc_facts = facts::DocFacts::collect(doc);
     let mut author = RuleSet::new();
     let mut sheets = 0usize;
     let mut missing = Vec::new();
+    // First every sheet that applies is fetched, then they are tokenized together (on several threads when
+    // there is a lot of text), then each is parsed, indexed and its `@import`s followed, in document order.
+    let mut texts: Vec<String> = Vec::new();
+    let mut urls: Vec<Option<Url>> = Vec::new();
     for src in sources {
         if sheets >= MAX_SHEETS {
             break;
@@ -299,9 +307,20 @@ pub fn style_document_with(
         };
         clock.lap(&mut timings.load_sheets);
         sheets += 1;
+        texts.push(text);
+        urls.push(url);
+    }
+    clock.reset();
+    let tokenized = {
+        let slices: Vec<&str> = texts.iter().map(String::as_str).collect();
+        syntax::parse_cvs_many(&slices)
+    };
+    drop(texts);
+    clock.lap(&mut timings.parse_sheets);
+    for (url, cvs) in urls.into_iter().zip(tokenized) {
         let sheet = {
-            let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks, var_id: &mut var_id, block_id: &mut block_id };
-            parse_stylesheet(&text, &mut ctx)
+            let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks, var_id: &mut var_id, block_id: &mut block_id, facts: Some(&doc_facts), env: Some(&media_env) };
+            parse_stylesheet_cvs(cvs, &mut ctx)
         };
         clock.lap(&mut timings.parse_sheets);
         let chain = vec![url.or_else(|| base.clone()).unwrap_or_else(|| Url::parse("about:blank", None).unwrap_or_else(|_| empty_url()))];
@@ -313,6 +332,8 @@ pub fn style_document_with(
             block_id: &mut block_id,
             sheets: &mut sheets,
             missing: &mut missing,
+            facts: &doc_facts,
+            env: &media_env,
             chain,
         };
         author.add_sheet(&sheet, Origin::Author, &media_env, &mut resolver);
@@ -337,7 +358,7 @@ pub fn style_document_with(
         let block = match memo.get(&text) {
             Some(b) => b.clone(),
             None => {
-                let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks, var_id: &mut var_id, block_id: &mut block_id };
+                let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks, var_id: &mut var_id, block_id: &mut block_id, facts: None, env: None };
                 let b = parse_style_attribute(&text, &mut ctx);
                 memo.insert(text, b.clone());
                 b

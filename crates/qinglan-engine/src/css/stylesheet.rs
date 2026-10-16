@@ -26,6 +26,12 @@ pub struct SheetCtx<'a> {
     /// Counters that make declaration blocks and `var()` declarations identifiable.
     pub var_id: &'a mut u32,
     pub block_id: &'a mut u32,
+    /// Author sheets of a document: what the document has, to drop rules that cannot match before their
+    /// declarations are parsed (see [`super::facts`]). `None`: keep every rule.
+    pub facts: Option<&'a super::facts::DocFacts>,
+    /// The environment media queries are evaluated in. With one, `@media` blocks that do not apply are skipped
+    /// without parsing their rules (the rule index would skip them anyway). `None`: keep every block.
+    pub env: Option<&'a super::media::MediaEnv>,
 }
 
 pub struct StyleRule {
@@ -57,7 +63,12 @@ pub struct Stylesheet {
 }
 
 pub fn parse_stylesheet(text: &str, ctx: &mut SheetCtx<'_>) -> Stylesheet {
-    let raw = parse_rule_list(parse_cvs(text), true);
+    parse_stylesheet_cvs(parse_cvs(text), ctx)
+}
+
+/// [`parse_stylesheet`] for text that was already tokenized (see [`super::syntax::parse_cvs_many`]).
+pub fn parse_stylesheet_cvs(cvs: Vec<Cv>, ctx: &mut SheetCtx<'_>) -> Stylesheet {
+    let raw = parse_rule_list(cvs, true);
     Stylesheet { rules: convert_rules(raw, ctx, true, 0) }
 }
 
@@ -110,6 +121,9 @@ fn convert_rules(raw: Vec<RawRule>, ctx: &mut SheetCtx<'_>, top_level: bool, dep
                     continue;
                 }
                 let q = MediaQueryList::parse(&r.prelude);
+                if ctx.env.is_some_and(|env| !q.matches(env)) {
+                    continue;
+                }
                 let inner = convert_rules(parse_rule_list(body, false), ctx, false, depth + 1);
                 out.push(Rule::Media(q, inner));
             }
@@ -138,7 +152,11 @@ fn style_rule(r: RawRule, ctx: &mut SheetCtx<'_>) -> Option<StyleRule> {
         let mut pc = ParseCtx { atoms: ctx.atoms, quirks: ctx.quirks, depth: 0 };
         parse_selector_list(&r.prelude, &mut pc, false, true)?
     };
-    let selectors: Vec<Rc<Selector>> = selectors.into_iter().filter(|s| s.compounds.len() <= MAX_COMPOUNDS).map(Rc::new).collect();
+    let selectors: Vec<Rc<Selector>> = selectors
+        .into_iter()
+        .filter(|s| s.compounds.len() <= MAX_COMPOUNDS && ctx.facts.is_none_or(|f| f.possible(s, ctx.atoms, ctx.quirks)))
+        .map(Rc::new)
+        .collect();
     if selectors.is_empty() {
         return None;
     }
@@ -378,7 +396,7 @@ mod tests {
     fn parse(text: &str) -> (Stylesheet, Interner) {
         let mut atoms = Interner::new();
         let (mut v, mut b) = (0, 0);
-        let mut ctx = SheetCtx { atoms: &mut atoms, quirks: false, var_id: &mut v, block_id: &mut b };
+        let mut ctx = SheetCtx { atoms: &mut atoms, quirks: false, var_id: &mut v, block_id: &mut b, facts: None, env: None };
         let s = parse_stylesheet(text, &mut ctx);
         (s, atoms)
     }

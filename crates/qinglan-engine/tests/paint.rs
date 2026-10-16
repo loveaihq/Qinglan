@@ -490,3 +490,12 @@ fn bytes_that_never_stay_in_the_cache_are_asked_for_only_twice() {
     let mut ok = |u: &str| Some(Arc::new(Response { url: Url::parse(u, None).unwrap(), status: 200, headers: vec![], body: b"png".to_vec() }));
     assert_eq!(store.prepare(&page.list, band, 1.0, &dec, &mut ok).decoded, 1);
 }
+
+#[test]
+fn a_frame_placeholder_is_a_border_and_a_label_not_a_cover() {
+    // A fixed frame over green: the inside stays green (an opaque grey box hid the text of mdBook pages).
+    let html = "<body style='margin:0;font:10px/10px Ahem;color:#00f'><div style='height:120px;background:#0f0'></div>\
+        <iframe style='position:fixed;left:10px;top:10px;width:100px;height:50px;border:0'></iframe></body>";
+    let f = paint(html, 140, 100);
+    expect(&f, &[(60, 45, GREEN), (105, 30, GREEN), (30, 56, GREEN), (10, 30, [0x76, 0x76, 0x76, 255]), (109, 30, [0x76, 0x76, 0x76, 255]), (60, 10, [0x76, 0x76, 0x76, 255]), (60, 59, [0x76, 0x76, 0x76, 255])]);
+}
