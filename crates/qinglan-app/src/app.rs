@@ -352,15 +352,21 @@ impl Browser {
         let (scroll, dpr, height) = (self.scroll, self.dpr, self.dev.1);
         let mut rows: Option<(u32, u32)> = None;
         let mut again = false;
+        let mut relayout = false;
         for done in self.pool.poll() {
             let Some(page) = self.page.as_mut() else { continue };
-            if let Some((a, b)) = page.take_decoded(done, scroll, dpr, height) {
+            let (taken, broke) = page.take_decoded(done, scroll, dpr, height);
+            if let Some((a, b)) = taken {
                 rows = Some(rows.map_or((a, b), |(r0, r1)| (r0.min(a), r1.max(b))));
             }
+            relayout |= broke;
             again |= page.store.deferred();
         }
         if let Some((a, b)) = rows {
             self.draw_rows(scroll, a, b);
+        }
+        if relayout {
+            self.request_image_relayout();
         }
         // A decode that finished made room for one that had to wait.
         if again {

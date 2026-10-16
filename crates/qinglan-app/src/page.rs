@@ -216,10 +216,13 @@ impl Page {
     }
 
     /// A decode of the pool is done. The rows (device pixels, in the viewport scrolled to `scroll`, `height` of them
-    /// visible) that now show a picture, if any is on screen.
-    pub fn take_decoded(&mut self, done: Finished, scroll: f32, dpr: f32, height: u32) -> Option<(u32, u32)> {
+    /// visible) that now show a picture, if any is on screen; and whether the page needs a new layout because a picture
+    /// that has a size from its header turned out not to decode (a WebP on a system without a WebP codec): it is a
+    /// broken image then, shown as its `alt`, as one whose header is unreadable.
+    pub fn take_decoded(&mut self, done: Finished, scroll: f32, dpr: f32, height: u32) -> (Option<(u32, u32)>, bool) {
         let accepted = self.store.accept(done);
-        let list = self.list.as_ref()?;
+        let relayout = self.store.take_decode_failed().into_iter().fold(false, |c, n| c | self.break_image(n));
+        let Some(list) = self.list.as_ref() else { return (None, relayout) };
         let mut rows: Option<(u32, u32)> = None;
         for p in list.images.iter().filter(|p| accepted.nodes.contains(&p.node)) {
             let (top, bottom) = (p.rect.y.to_f32() - if p.fixed { 0.0 } else { scroll }, p.rect.bottom().to_f32() - if p.fixed { 0.0 } else { scroll });
@@ -230,7 +233,7 @@ impl Page {
                 rows = Some(rows.map_or((a, b), |(r0, r1)| (r0.min(a), r1.max(b))));
             }
         }
-        rows
+        (rows, relayout)
     }
 
     /// Paint rows `y0 ..` (device pixels) of the viewport at `scroll` into `frame` (a band of the viewport).

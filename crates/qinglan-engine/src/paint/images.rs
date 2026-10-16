@@ -116,6 +116,9 @@ pub struct ImageStore {
     keys: FxHashMap<NodeId, (String, u32, u32)>,
     /// Nodes whose bytes would not decode: not tried again.
     failed: FxHashMap<NodeId, ()>,
+    /// Nodes whose decode failed since [`ImageStore::take_decode_failed`] was last called: their pictures are broken even
+    /// though the header said they had a size (a WebP on a system without a WebP codec), so the host shows their `alt`.
+    decode_failed: Vec<NodeId>,
     /// How many times in a row the bytes of a node were gone from the response cache after being asked for again.
     refetched: FxHashMap<NodeId, u8>,
     /// Decodes handed to a [`DecodePool`] and not taken in yet (step 2-0), by what they decode.
@@ -171,6 +174,7 @@ impl ImageStore {
             cache,
             keys: FxHashMap::default(),
             failed: FxHashMap::default(),
+            decode_failed: Vec::new(),
             refetched: FxHashMap::default(),
             inflight: Vec::new(),
             reserved: 0,
@@ -226,10 +230,17 @@ impl ImageStore {
                 }
                 Err(_) => {
                     self.failed.insert(p.node, ());
+                    self.decode_failed.push(p.node);
                 }
             }
         }
         report
+    }
+
+    /// The nodes whose decode failed since the last call (see `decode_failed`). The host marks them broken
+    /// ([`crate::layout::ImageSizes::set_broken`]) and lays out again.
+    pub fn take_decode_failed(&mut self) -> Vec<NodeId> {
+        std::mem::take(&mut self.decode_failed)
     }
 
     /// [`ImageStore::prepare`] without waiting (step 2-0): the decodes that are due go to `pool`, nearest to the viewport
@@ -346,6 +357,7 @@ impl ImageStore {
             Err(_) => {
                 for node in p.nodes {
                     self.failed.insert(node, ());
+                    self.decode_failed.push(node);
                 }
                 Accepted::default()
             }

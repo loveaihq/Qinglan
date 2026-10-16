@@ -665,3 +665,42 @@ fn queued_decodes_of_images_that_went_far_are_called_off() {
     assert!(!store.has(page.res.images[0].node, &page.list.images[0].rect, 1.0), "the bitmap of the image that was left behind is not kept");
     assert_eq!(store.len(), new_jobs);
 }
+
+/// Probes fine (the header was readable), never decodes.
+struct BrokenBody;
+
+impl ImageDecoder for BrokenBody {
+    fn probe(&self, _bytes: &[u8]) -> Result<ImageInfo, ImageError> {
+        Ok(ImageInfo { width: 10, height: 10 })
+    }
+    fn decode(&self, _bytes: &[u8], _width: u32, _height: u32) -> Result<DecodedImage, ImageError> {
+        Err(ImageError::Unsupported)
+    }
+}
+
+#[test]
+fn a_decode_that_fails_is_reported_once_so_the_host_can_show_the_alt_text() {
+    // Step 2a-1: the header of a WebP says how big it is, the bytes then do not decode (no WebP codec on the machine).
+    let mut store = ImageStore::new();
+    let (page, bytes) = async_fixture(2, &mut store);
+    let mut lookup = |u: &str| bytes.get(u).cloned();
+    let band = Band::new(0.0, 200.0);
+    // The pool's way (the window).
+    let mut pool = DecodePool::new(Arc::new(BrokenBody), 2, Arc::new(|| {}));
+    store.prepare_async(&page.list, band, 1.0, &mut pool, &mut lookup);
+    for f in drain(&mut pool, 2) {
+        assert!(store.accept(f).nodes.is_empty());
+    }
+    let mut failed = store.take_decode_failed();
+    failed.sort_unstable();
+    assert_eq!(failed.len(), 2);
+    assert!(store.take_decode_failed().is_empty(), "reported once");
+    // The images are not tried again.
+    store.prepare_async(&page.list, band, 1.0, &mut pool, &mut lookup);
+    assert_eq!(store.in_flight(), 0);
+    // The synchronous way (`qinglan-cli render`).
+    let mut sync = ImageStore::new();
+    let (page, bytes) = async_fixture(2, &mut sync);
+    sync.prepare(&page.list, band, 1.0, &BrokenBody, &mut |u| bytes.get(u).cloned());
+    assert_eq!(sync.take_decode_failed().len(), 2);
+}

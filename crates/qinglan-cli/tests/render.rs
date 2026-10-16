@@ -78,3 +78,30 @@ fn render_refuses_bad_arguments() {
     let out = cli().args(["render", html.to_str().unwrap(), "-o", scratch("o.png").to_str().unwrap(), "--test-font", "--width", "1e9", "--height", "1e9"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
 }
+
+/// Step 2a-1: a picture whose header gives a size but whose bytes do not decode (here a WebP with garbage for a bitmap;
+/// on a system without a WebP codec every WebP is like this) is a broken image: its `alt` is shown, not an empty box.
+#[test]
+fn an_image_that_does_not_decode_is_shown_as_its_alt_text() {
+    let mut vp8l = vec![0x2F];
+    vp8l.extend_from_slice(&(39u32 | (29 << 14)).to_le_bytes()); // 40 x 30
+    vp8l.extend_from_slice(&[0xFF; 17]);
+    let mut webp = b"RIFF".to_vec();
+    webp.extend_from_slice(&((4 + 8 + vp8l.len()) as u32).to_le_bytes());
+    webp.extend_from_slice(b"WEBPVP8L");
+    webp.extend_from_slice(&(vp8l.len() as u32).to_le_bytes());
+    webp.extend_from_slice(&vp8l);
+    let dir = scratch("broken-webp");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("bad.webp"), &webp).unwrap();
+    let html = dir.join("page.html");
+    std::fs::write(&html, "<!doctype html><body style='margin:0;font:10px/10px Ahem;color:#000'><img src='bad.webp' alt='XX'>").unwrap();
+    let png = dir.join("out.png");
+    let out = cli().args(["render", html.to_str().unwrap(), "-o", png.to_str().unwrap(), "--test-font", "--width", "100", "--height", "60"]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let bytes = std::fs::read(&png).unwrap();
+    assert_eq!(pixel(&bytes, 100, 60, 5, 5), [0, 0, 0, 255], "the first letter of the alt text");
+    assert_eq!(pixel(&bytes, 100, 60, 15, 5), [0, 0, 0, 255], "the second letter");
+    assert_eq!(pixel(&bytes, 100, 60, 25, 5), [255, 255, 255, 255], "no 40 px box");
+    assert_eq!(pixel(&bytes, 100, 60, 5, 20), [255, 255, 255, 255], "the alt text is one line high");
+}

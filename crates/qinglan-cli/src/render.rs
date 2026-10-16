@@ -149,6 +149,7 @@ pub fn run(mut cx: Ctx<'_>, a: &RenderArgs) -> ExitCode {
     let mut store = ImageStore::new();
     let band = Band::new(a.scroll, a.height);
     let mut round = 0;
+    let mut decoded_early = 0usize;
     let (mut d_lay, mut d_list_full) = (Duration::ZERO, Duration::ZERO);
     let (layout, list) = loop {
         let t1 = Instant::now();
@@ -160,8 +161,17 @@ pub fn run(mut cx: Ctx<'_>, a: &RenderArgs) -> ExitCode {
         if round >= MAX_ROUNDS {
             break (layout, list);
         }
-        let changed = fetch_images(&mut cx, &layout, &list, band, a.full, &mut sizes, &mut store);
+        let mut changed = fetch_images(&mut cx, &layout, &list, band, a.full, &mut sizes, &mut store);
         round += 1;
+        if !changed {
+            // A picture whose header gave a size but whose bytes do not decode is a broken image: its `alt` is shown, as in
+            // the window.
+            let dec_band = if a.full { Band::new(0.0, list.height.to_f32().max(1.0)) } else { band };
+            decoded_early += store.prepare(&list, dec_band, dpr, &WicDecoder, &mut |u| cx.loader.cache_mut().get(u)).decoded;
+            for n in store.take_decode_failed() {
+                changed |= sizes.set_broken(n);
+            }
+        }
         if !changed {
             break (layout, list);
         }
@@ -207,7 +217,7 @@ pub fn run(mut cx: Ctx<'_>, a: &RenderArgs) -> ExitCode {
         frame.height,
         layout.images.len(),
         stats.images,
-        prepared.decoded,
+        prepared.decoded + decoded_early,
         store.bytes() / 1024
     );
     if a.timing {
