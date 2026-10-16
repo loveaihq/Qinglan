@@ -986,6 +986,7 @@ impl Browser {
 
     /// What each structure holds, by dropping them one at a time and seeing how much the live heap shrinks (the
     /// page is gone afterwards, so this is the last thing a bench run does).
+    #[cfg(feature = "mem-stats")]
     fn memory_breakdown(&mut self) -> String {
         use qinglan_win::memstats::{Breakdown, dom_parts, layout_parts};
         if !qinglan_win::heap_counting() {
@@ -1035,20 +1036,24 @@ impl Browser {
             return;
         }
         let memory = qinglan_win::window::process_memory();
-        let heap_stats = qinglan_win::heap_summary();
-        let breakdown = self.memory_breakdown();
+        #[cfg(feature = "mem-stats")]
+        let (heap_stats, breakdown) = (qinglan_win::heap_summary(), self.memory_breakdown());
+        #[cfg(feature = "mem-stats")]
         let torn_down = qinglan_win::window::process_memory();
         let Some(b) = self.bench.as_mut() else { return };
         b.stage = Stage::Done;
-        b.breakdown = breakdown;
-        if let Some((allocated, committed)) = heap_stats {
-            b.breakdown.push_str(&format!("mem-win-heap-allocated: {allocated}
+        #[cfg(feature = "mem-stats")]
+        {
+            b.breakdown = breakdown;
+            if let Some((allocated, committed)) = heap_stats {
+                b.breakdown.push_str(&format!("mem-win-heap-allocated: {allocated}
 mem-win-heap-committed: {committed}
 "));
-        }
-        if let Some((private, _)) = torn_down {
-            b.breakdown.push_str(&format!("mem-private-after-teardown: {private}
+            }
+            if let Some((private, _)) = torn_down {
+                b.breakdown.push_str(&format!("mem-private-after-teardown: {private}
 "));
+            }
         }
         let code = i32::from(b.error.is_some());
         let report = Report { bench: b, memory }.format();

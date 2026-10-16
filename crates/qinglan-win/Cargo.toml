@@ -8,6 +8,10 @@ rust-version.workspace = true
 [dependencies]
 qinglan-engine = { path = "../qinglan-engine" }
 
+[features]
+# Dev-only: the counting allocator and the `--mem` breakdown (`memstats`); not in release builds.
+mem-stats = []
+
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 

@@ -189,15 +189,21 @@ fn page_url(input: &str) -> Option<Url> {
     }
 }
 
-// Counts live heap bytes once `bench` switches it on (the memory breakdown); costs a relaxed load otherwise.
+// Dev builds (`--features mem-stats`) count live heap bytes once `bench --mem` switches it on (the memory
+// breakdown); release builds use the system allocator as is.
+#[cfg(feature = "mem-stats")]
 #[global_allocator]
 static ALLOC: qinglan_win::CountingAlloc = qinglan_win::CountingAlloc;
 
 fn main() -> ExitCode {
-    // `bench ... --mem` also prints what each structure holds; counting every allocation costs a little time.
+    // `bench ... --mem` (dev builds only) also prints what each structure holds; counting every allocation costs a
+    // little time.
     let flags: Vec<String> = std::env::args().collect();
     if flags.get(1).map(String::as_str) == Some("bench") && flags.iter().any(|a| a == "--mem") {
+        #[cfg(feature = "mem-stats")]
         qinglan_win::count_heap();
+        #[cfg(not(feature = "mem-stats"))]
+        eprintln!("note: --mem needs a build with --features mem-stats; ignored");
     }
     let Some(args) = parse_args() else { return usage() };
     if !matches!(args.cmd.as_str(), "dom" | "style" | "layout" | "record" | "render" | "bench") || (args.cmd == "bench" && args.replay.is_none()) || (args.cmd == "render" && (args.out_png.is_none() || args.width < 1.0 || args.height < 1.0)) {

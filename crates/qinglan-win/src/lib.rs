@@ -10,6 +10,7 @@ mod encodings;
 mod fx;
 mod images;
 mod lru;
+#[cfg(feature = "mem-stats")]
 pub mod memstats;
 mod net;
 mod platform;
@@ -21,6 +22,7 @@ pub use encodings::{code_page_for, decode_legacy};
 pub use images::WicDecoder;
 pub use net::{WinHttpConfig, WinHttpTransport, accept_language, map_error};
 pub use platform::{CacheStats, WinPlatform};
+#[cfg(feature = "mem-stats")]
 pub use sys::alloc::{CountingAlloc, count_heap, heap_counting, heap_summary, heap_allocs, heap_blocks, heap_live, heap_peak};
 
 /// The user's display languages in order of preference (`zh-CN`, `en-US` ...).

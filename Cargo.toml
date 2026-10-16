@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/qinglan-engine", "crates/qinglan-win", "crates/qinglan", "crates/qinglan-cli"]
+members = ["crates/qinglan-engine", "crates/qinglan-win", "crates/qinglan-app", "crates/qinglan", "crates/qinglan-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -17,3 +17,10 @@ strip = true
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
+
+# Hot code stays at opt-level 3: qinglan-engine (HTML parse, style, layout, paint), qinglan-app (the window's draw and
+# scroll path) and the binary crates (`qinglan`, a thin shell around qinglan-app, and `qinglan-cli`). Per-package levels
+# work under fat LTO, but the final LTO pass runs at the opt-level of the crate linked last, so the binary crates must
+# stay at 3 or the engine slows down by ~15%. The Windows glue is size-optimized (docs/decisions.md, "Hot and cold code").
+[profile.release.package.qinglan-win]
+opt-level = "z"

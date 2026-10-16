@@ -6,6 +6,14 @@ version = 4
 name = "qinglan"
 version = "0.1.0"
 dependencies = [
+ "qinglan-app",
+ "qinglan-win",
+]
+
+[[package]]
+name = "qinglan-app"
+version = "0.1.0"
+dependencies = [
  "qinglan-engine",
  "qinglan-win",
 ]

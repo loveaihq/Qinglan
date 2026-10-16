@@ -594,3 +594,42 @@
 
 - 没达标：release `qinglan.exe` 1 971 200 → 2 148 864 字节（比 1.5 MiB 多 576 KB）。这一轮加的东西（分配器包装、`--mem` 的统计代码、条带绘制、`Rare` 访问器）让代码多了约 177 KB，没来得及拿回来。
 - 试过：`qinglan-win` 用 "s"、引擎用 opt-level 2：2 096 640（只省 51 KB），窗口里滚动中位数慢 8%，没采用。非 LTO 构建的链接映射（/MAP，v0 名字，脚本按模块累加）：.text 1.6 MB，其中 `qinglan_engine` 650 KB（`html::tokenizer::step` 42 KB、`layout::inline` 44、`css::parse_prop` 48、`cascade` 42、`selector` 34）、core 198（`drop_glue` 77）、std 112（`process::spawn` 24、mpmc 21）、hashbrown 90、alloc 97；.rdata 约 370 KB。要到 1.5 MiB 得把引擎里冷的部分（net、encoding、url、css 的属性解析）拆成单独的 crate 用 "s"，或者去掉 `--mem` 统计代码（用 feature 关掉），这一轮没做。
+
+## 第 1 层 · 热代码和冷代码、开发版内存统计（2026-10-16）
+
+背景：`PLAN.md` 已定第 6 条（体积）：保留崩溃保护；热点代码按速度优化，其余按体积优化；内存统计只放开发版；第 1 层 exe 目标 1.9 MiB（1 992 294 字节）。
+
+### 做了什么
+
+- 计数分配器（`CountingAlloc`）和 `--mem` 的分项统计（`qinglan-win` 的 `memstats`、`sys/alloc.rs`、两个 bench 里的拆分代码）放到 cargo feature `mem-stats` 后面，默认关；`qinglan`、`qinglan-app`、`qinglan-cli` 各有同名 feature 往下传。`#[global_allocator]` 只在开了 feature 时才有，发布版用系统分配器（以前每次分配多一次原子读）。不带 feature 的 `--mem` 在 `qinglan-cli` 里提示"忽略"，在 `qinglan.exe`（没有控制台）里不处理。`--bench` 里的私有字节（`GetProcessMemoryInfo`）发布版照样有。这一项单独就省了 172 032 字节（2 148 864 → 1 976 832）。
+- 按包设 `opt-level`（`Cargo.toml` 的 `[profile.release.package.*]`）：`qinglan-engine`、`qinglan-app`、`qinglan`（薄壳）、`qinglan-cli` 用 3，`qinglan-win` 用 "z"；`lto = true`（整体 LTO）、`codegen-units = 1`、`panic` 仍是 unwind，不变。
+- `qinglan` 拆成两个包：`qinglan-app`（库，原来 `qinglan/src` 里除 `main` 以外的全部，`pub fn run()` 是入口）和 `qinglan`（只剩 `main.rs`、`build.rs`、`/STACK`、`windows_subsystem`、开了 feature 时的全局分配器，调用 `qinglan_app::run()`）。
+
+### 实测结论（为什么是这样分）
+
+1. **整体 LTO 下按包设 opt-level 有效**。同一份代码，引擎 3、其余 "s"：1 955 328（vs 全 3 的 2 148 864）；全 "s"：1 620 480；全 "z"：1 408 000。LTO 前每个包按自己的级别生成代码，函数带 `optsize`/`minsize` 属性，LTO 后保留。不需要换成 thin LTO 或关 LTO。
+2. **但最后链接的那个包（二进制包）的 opt-level 决定 LTO 阶段的优化级别**。把 `qinglan`/`qinglan-cli` 设成 "s" 或 "z"，引擎里的热点代码（光栅化）明显变慢：`qinglan-cli bench` 滚动中位数 4.0 → 4.7–4.8 ms（+17–20%），p95 +18%，解析/样式/首屏几乎不变；设成 3 就回到 4.0。win 设 "s" 或 3 对这个没有帮助（单独试过）。所以二进制包必须留在 3，里面的代码要少：这就是把 `qinglan` 拆成薄壳 + `qinglan-app` 的原因（薄壳设 3，`qinglan-app` 不用跟着设 3 也能保住引擎速度）。
+3. **`qinglan-app` 里有窗口的绘制和滚动路径**（`draw_bands`、`page.rs` 的图片准备、条带绘制），设成 "z" 时窗口里 `qinglan.exe --bench` 的滚动中位数 4.8 → 5.3 ms（+10%，安静机器、插电、10 轮交替、范围不重叠），所以保留 3。`qinglan-win` 里的 DirectWrite 粘合、编码、WinHTTP 用 "z"，实测不影响速度（见下）。
+4. 拆出冷 crate 试过两次（`qinglan-base`：`url`、`lru`、`fx` 哈希、`net` 的策略/加载器/缓存/回放传输，设 "z"）：体积再省约 50 KB（1 864 704 → 1 814 528，那时 app 是 "z"），但 4 轮对比里 cli 的整页布局中位数 +6–8%、最小值 +6%，超过 5% 的上限；原因没查清（布局和绘制路径里没有这些代码，引擎各模块大小在拆前后几乎一样），没采用，代码没留。以后要拆的话，先单独量布局。`css` 的属性值解析（`parse_prop` 约 69 KB、`color`/`values`/`media`/`syntax` 等）也评估过没拆：它和 `types`、`computed` 互相引用（`types` 用 `color`/`values`/`syntax`），拆出去后热代码要跨 "z" 包调用小函数，LLVM 不会内联 `minsize` 函数。`encoding` 只有 8.6 KB 且依赖 `Platform` 特征，没拆。
+
+### 体积（release，字节）
+
+| 步骤 | `qinglan.exe` |
+| --- | --- |
+| 起点（c4e52f5） | 2 148 864 |
+| 关掉 `mem-stats` | 1 976 832 |
+| 另加 win/app/二进制包 "z"（速度不合格：滚动 +17–20%） | 1 779 712 |
+| 薄壳 3 + `qinglan-app` "z" + win "z"（窗口滚动 +10%） | 1 864 704 |
+| **采用：薄壳 3 + `qinglan-app` 3 + win "z"** | **1 925 120**（目标 1 992 294，余 67 174，3.4%） |
+
+`qinglan-cli.exe` 2 134 528 → 1 914 880。导入的 DLL 只有系统自带的：kernel32、ntdll、user32、gdi32、shell32、shlwapi、ole32、dwrite、winhttp、bcryptprimitives、api-ms-win-core-synch。
+
+链接映射（`cargo rustc --release -p qinglan -- -C link-arg=/MAP:...`，整体 LTO 下符号都在静态符号段，按 v0 名字累加）：.text 约 1.36 MB，其中 `qinglan_engine` 652 KB（css 327、layout 136、html 97、url 34、net 25、paint 21、encoding 9）、core 168、std 146、`qinglan`（app）107、win 66、hashbrown 52、alloc 51；.rdata 约 200 KB，.xdata + .pdata 约 194 KB（unwind 表，保留崩溃保护的代价）。其余零碎：`std::process::Command`（开新窗口用）约 28 KB，换成直接调 `CreateProcessW` 可以省，没做（要加一段 unsafe 和命令行转义）。
+
+### 速度和内存（插电，BatteryStatus = 2，旧二进制和新二进制交替跑）
+
+- 窗口 `qinglan.exe --bench`（zhwiki-rec，1920×1080，10 轮，安静机器，中位数 旧 → 新）：首屏 104.3 → 105.0 ms，整页布局 206.4 → 214.1（+3.7%），滚动中位数 4.9 → 4.8，p95 6.3 → 6.5。
+- `qinglan-cli bench`（同页面，结构相同的二进制，二进制包 3 + win "z"）：首屏 98.0 → 97.3，整页布局 196.1 → 199.6（+1.8%），滚动中位数 4.0 → 4.0，p95 5.0 → 5.0。
+- `cargo test --release -p qinglan-engine --test perf`（4 轮交替，另一个会话在编译，5 个 cargo/rustc 进程）：解析+样式合计 65.6 → 66.2 ms（+0.9%）。引擎包没变，级别也没变。
+- 内存：滚到底后私有字节 48.5–48.9 MB（十进制 MB），目标 ≤ 50 MB；旧二进制 47.6–49.7。峰值约 54 MB。
+- 噪声：另一个会话的 `cargo test`（qingpdf）经常占 CPU，负载高的时候数字能差 2–3 倍，甚至同一个二进制差 10%；上面的窗口数字是等它跑完、没有 cargo/rustc 进程时量的。

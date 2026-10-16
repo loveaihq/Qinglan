@@ -10,5 +10,9 @@ build = "build.rs"
 qinglan-engine = { path = "../qinglan-engine" }
 qinglan-win = { path = "../qinglan-win" }
 
+[features]
+# Dev-only: the counting allocator and the `--mem` breakdown of `--bench`.
+mem-stats = ["qinglan-win/mem-stats"]
+
 [lints]
 workspace = true

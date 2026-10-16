@@ -19,6 +19,7 @@ use qinglan_engine::paint::build_display_list;
 use qinglan_engine::platform::Platform;
 use qinglan_engine::url::Url;
 use qinglan_win::WicDecoder;
+#[cfg(feature = "mem-stats")]
 use qinglan_win::memstats::{Breakdown, dom_parts, layout_parts};
 
 use crate::render::{self, MAX_ROUNDS, ms};
@@ -198,47 +199,47 @@ pub fn run(cx: Ctx<'_>, url: &Url, a: &BenchArgs) -> ExitCode {
     println!("private-after-first-screen: {}", mib(mem_first));
     println!("private-after-full-layout-and-images: {}", mib(mem_layout));
     println!("private-at-start: {}", mib(mem_start));
-    if !qinglan_win::heap_counting() {
-        return ExitCode::SUCCESS;
-    }
-    let (heap, heap_peak, allocs) = (qinglan_win::heap_live(), qinglan_win::heap_peak(), qinglan_win::heap_allocs());
-    let mut bd = Breakdown::default();
-    bd.note("heap-live", heap);
-    bd.note("heap-peak", heap_peak);
-    bd.note("allocations", allocs as usize);
-    bd.note("live-blocks", qinglan_win::heap_blocks());
-    bd.note("peak-decoded-images", peak_decoded);
-    bd.note("response-cache-accounted", loader.cache().bytes());
-    let incomplete = layout.incomplete;
-    let (nodes, text, attrs) = dom_parts(&opened.doc);
-    bd.note("dom-detail-node-array", nodes);
-    bd.note("dom-detail-text", text);
-    bd.note("dom-detail-attributes", attrs);
-    bd.note("dom-node-count", opened.doc.nodes.len());
-    for (name, count, bytes) in layout_parts(&layout) {
-        bd.note(&format!("layout-detail-{name}"), bytes);
-        bd.note(&format!("layout-count-{name}"), count);
-    }
-    bd.freed("display-list", || drop(list));
-    bd.freed("box-and-fragment-tree", || drop(layout));
-    bd.freed("computed-styles", || drop(styled));
-    bd.freed("decoded-images", || drop(store));
-    bd.freed("response-cache", || loader.cache_mut().clear());
-    bd.freed("parsed-sheets-and-resources", || drop(res));
-    if let Some(w) = cx.win {
-        let stats = w.cache_stats();
-        bd.note("shaping-cache-accounted", stats.shape_bytes);
-        bd.note("glyph-cache-accounted", stats.glyph_bytes);
-        bd.freed("shaping-cache", || w.clear_shape_cache());
-        bd.freed("glyph-cache", || w.clear_glyph_cache());
-        bd.freed("word-tables", || w.clear_word_caches());
-    }
-    bd.freed("dom", || drop(opened));
-    bd.freed("frame-buffers", || drop(frame));
-    print!("{}", bd.lines());
-    println!("private-after-teardown: {}", mib(memory()));
-    if incomplete {
+    if layout.incomplete {
         eprintln!("note: page too complex, only part of it is laid out");
+    }
+    // Dev builds only: what each structure holds (`--mem`).
+    #[cfg(feature = "mem-stats")]
+    if qinglan_win::heap_counting() {
+        let (heap, heap_peak, allocs) = (qinglan_win::heap_live(), qinglan_win::heap_peak(), qinglan_win::heap_allocs());
+        let mut bd = Breakdown::default();
+        bd.note("heap-live", heap);
+        bd.note("heap-peak", heap_peak);
+        bd.note("allocations", allocs as usize);
+        bd.note("live-blocks", qinglan_win::heap_blocks());
+        bd.note("peak-decoded-images", peak_decoded);
+        bd.note("response-cache-accounted", loader.cache().bytes());
+        let (nodes, text, attrs) = dom_parts(&opened.doc);
+        bd.note("dom-detail-node-array", nodes);
+        bd.note("dom-detail-text", text);
+        bd.note("dom-detail-attributes", attrs);
+        bd.note("dom-node-count", opened.doc.nodes.len());
+        for (name, count, bytes) in layout_parts(&layout) {
+            bd.note(&format!("layout-detail-{name}"), bytes);
+            bd.note(&format!("layout-count-{name}"), count);
+        }
+        bd.freed("display-list", || drop(list));
+        bd.freed("box-and-fragment-tree", || drop(layout));
+        bd.freed("computed-styles", || drop(styled));
+        bd.freed("decoded-images", || drop(store));
+        bd.freed("response-cache", || loader.cache_mut().clear());
+        bd.freed("parsed-sheets-and-resources", || drop(res));
+        if let Some(w) = cx.win {
+            let stats = w.cache_stats();
+            bd.note("shaping-cache-accounted", stats.shape_bytes);
+            bd.note("glyph-cache-accounted", stats.glyph_bytes);
+            bd.freed("shaping-cache", || w.clear_shape_cache());
+            bd.freed("glyph-cache", || w.clear_glyph_cache());
+            bd.freed("word-tables", || w.clear_word_caches());
+        }
+        bd.freed("dom", || drop(opened));
+        bd.freed("frame-buffers", || drop(frame));
+        print!("{}", bd.lines());
+        println!("private-after-teardown: {}", mib(memory()));
     }
     ExitCode::SUCCESS
 }
