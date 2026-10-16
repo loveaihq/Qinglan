@@ -1,0 +1,20 @@
+viewport 200x300
+block html (0,0 200x130)
+  block body (0,0 200x130)
+    block div#a (0,0 200x30) [clip]
+      line (40,0 130x10) baseline=8
+        text "aaaaaaaaaaa" (40,0 110x10)
+      line (40,10 130x10) baseline=18
+        text "bbbbbbbbbbb" (40,10 110x10)
+      block div#fl1 (0,0 40x30) [float:left]
+      block div#fr1 (170,0 30x20) [float:right]
+    block div#c (0,30 200x50) [clip]
+      block (anonymous) (0,30 200x0)
+        block div#fl2 (0,30 50x40) [float:left]
+      block div#cl (0,70 200x10)
+    block div#d (0,80 200x50) [clip]
+      block (anonymous) (0,80 200x0)
+        block div#fl3 (0,80 50x40) [float:left]
+      block div#bfc (50,80 150x20) [clip]
+      block (anonymous) (0,100 200x0)
+        block div#fl4 (0,120 160x10) [float:left]

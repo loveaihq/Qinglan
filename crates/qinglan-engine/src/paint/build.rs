@@ -11,6 +11,7 @@ use crate::html::atoms::FxHashMap;
 use crate::html::dom::{Document, NodeId};
 use crate::layout::block::{border_px, pad_px};
 use crate::layout::boxtree::{BoxId, BoxKind, NO_BOX, ReplacedKind};
+use crate::layout::floats::is_float;
 use crate::layout::units::LayoutUnit as LU;
 use crate::layout::{BoxOut, FragKind, Fragment, LayoutResult, Positioned};
 use crate::platform::{FontQuery, Platform};
@@ -36,7 +37,7 @@ fn has_box_out(kind: BoxKind) -> bool {
 /// Build the display list of a layout. `doc` is read for the `checked` and `loading` attributes; the
 /// platform shapes the labels of placeholder boxes.
 pub fn build_display_list(doc: &Document, res: &LayoutResult, platform: &dyn Platform) -> DisplayList {
-    let mut b = Builder { doc, res, platform, list: DisplayList::empty(), clip: NO_CLIP, fixed: false, canvas_from: res.canvas.map_or(NO_BOX, |c| c.from) };
+    let mut b = Builder { doc, res, platform, list: DisplayList::empty(), clip: NO_CLIP, fixed: false, canvas_from: res.canvas.map_or(NO_BOX, |c| c.from), floats: Vec::new() };
     b.list.canvas = res.canvas.map(|c| c.color);
     b.list.partial = res.partial;
     let root = res.tree.root;
@@ -64,6 +65,8 @@ struct Builder<'a> {
     /// Items go to the fixed list.
     fixed: bool,
     canvas_from: BoxId,
+    /// Floats met on the way, waiting for the end of their stacking context: (box, page position, clip, fixed).
+    floats: Vec<(BoxId, LU, LU, u32, bool)>,
 }
 
 impl Builder<'_> {
@@ -192,6 +195,26 @@ impl Builder<'_> {
     /// Paint box `id` (block, atomic inline or replaced) whose border box starts at page position (`ax`, `ay`),
     /// and its flow descendants. Positioned descendants are painted later, at their own turn.
     fn paint_box(&mut self, id: BoxId, ax: LU, ay: LU) {
+        let first = self.floats.len();
+        self.paint_box_inner(id, ax, ay);
+        // Floats are painted above the in-flow blocks of their stacking context (CSS2 appendix E.2 step 5, simplified:
+        // the text of those blocks is below them too). A float, an atomic inline, a replaced box, a positioned box
+        // and the root are such contexts themselves: their floats go on top of them, at their end.
+        let bx = self.res.tree.get(id);
+        if self.floats.len() > first && (bx.kind != BoxKind::Block || id == self.res.tree.root || positioned(&bx.style) || is_float(bx)) {
+            let mut i = first;
+            while let Some(&(c, x, y, clip, fixed)) = self.floats.get(i) {
+                i += 1;
+                let saved = (self.clip, self.fixed);
+                (self.clip, self.fixed) = (clip, fixed);
+                self.paint_box(c, x, y);
+                (self.clip, self.fixed) = saved;
+            }
+            self.floats.truncate(first);
+        }
+    }
+
+    fn paint_box_inner(&mut self, id: BoxId, ax: LU, ay: LU) {
         let res = self.res;
         let bx = res.tree.get(id);
         let o = res.box_out(id);
@@ -215,6 +238,14 @@ impl Builder<'_> {
         }
         if bx.inline_children {
             self.lines(&o, ax, ay);
+            if res.has_floats {
+                let mut floats = Vec::new();
+                crate::layout::floats::floats_in(&res.tree, id, &mut floats);
+                for c in floats {
+                    let co = res.box_out(c);
+                    self.floats.push((c, ax + co.x, ay + co.y, self.clip, self.fixed));
+                }
+            }
         } else {
             for &c in &bx.children {
                 let cb = res.tree.get(c);

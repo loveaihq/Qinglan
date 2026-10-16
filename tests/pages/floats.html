@@ -1,0 +1,40 @@
+<!--
+viewport: 200x300
+Floats (CSS2 9.5, 9.5.1, 9.5.2, 9.4.1, 10.6.7; step 2a-1). Font 10px/10px Ahem, body margin 0; every section is in a
+block formatting context root (overflow:hidden) so that it starts where the one before it ends and holds its own floats.
+
+a      div#a (overflow:hidden, y=0). fl1 float:left 40x30 at (0,0); fr1 float:right 30x20 at (170,0) (right edge 200 - 30).
+       The lines are shortened by both floats: x = 40 .. 170 = 130 wide. "aaaaaaaaaaa" is 11 x 10 = 110 wide and fits, with the
+       space and "bbbbbbbbbbb" it would be 230: line 1 = (40,0 130x10) with "aaaaaaaaaaa" (40,0 110x10); line 2 at y=10 (both
+       floats still reach down there: fl1 to 30, fr1 to 20) = (40,10 130x10). The text is 20 high, the floats 30: div#a grows
+       to contain them (10.6.7): (0,0 200x30).
+c      div#c (overflow:hidden) starts at y=30. fl2 float:left 50x40 at (0,30). div#cl has clear:left and height 10: its
+       hypothetical position is y=30 (the top of div#c), but the float reaches down to 30 + 40 = 70: clearance puts the top
+       border edge at y=70: (0,70 200x10). div#c = 30 .. 80 = (0,30 200x50).
+d      div#d (overflow:hidden) starts at y=80. fl3 float:left 50x40 at (0,80). div#bfc (overflow:hidden, height 20, a new
+       formatting context in the flow) may not overlap fl3: it sits beside it with the room that is left, x=50, 150 wide:
+       (50,80 150x20). fl4 float:left 160 wide comes at y=100 (after div#bfc): beside fl3 only 200 - 50 = 150 are free, so it
+       goes down to where fl3 ends, y=80+40=120: (0,120 160x10). div#d reaches down to the lowest float: 130 - 80 = 50:
+       (0,80 200x50). body = 30 + 50 + 50 = 130 high.
+check: block div#a :: (0,0 200x30) [clip]
+check: block div#fl1 :: (0,0 40x30) [float:left]
+check: block div#fr1 :: (170,0 30x20) [float:right]
+check: text "aaaaaaaaaaa" :: (40,0 110x10)
+check: text "bbbbbbbbbbb" :: (40,10 110x10)
+check: block div#c :: (0,30 200x50) [clip]
+check: block div#fl2 :: (0,30 50x40) [float:left]
+check: block div#cl :: (0,70 200x10)
+check: block div#d :: (0,80 200x50) [clip]
+check: block div#fl3 :: (0,80 50x40) [float:left]
+check: block div#bfc :: (50,80 150x20) [clip]
+check: block div#fl4 :: (0,120 160x10) [float:left]
+check: block body :: (0,0 200x130)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+#a, #c, #d { overflow: hidden }
+</style>
+<div id="a"><div id="fl1" style="float:left;width:40px;height:30px"></div><div id="fr1" style="float:right;width:30px;height:20px"></div>aaaaaaaaaaa bbbbbbbbbbb</div>
+<div id="c"><div id="fl2" style="float:left;width:50px;height:40px"></div><div id="cl" style="clear:left;height:10px"></div></div>
+<div id="d"><div id="fl3" style="float:left;width:50px;height:40px"></div><div id="bfc" style="overflow:hidden;height:20px"></div><div id="fl4" style="float:left;width:160px;height:10px"></div></div>

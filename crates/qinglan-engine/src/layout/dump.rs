@@ -108,6 +108,13 @@ fn dump_box(doc: &Document, res: &LayoutResult, oof: &FxHashMap<BoxId, Vec<BoxId
                 dump_box(doc, res, oof, c, ax, ay, depth + 1, out);
             }
         }
+    } else if res.has_floats {
+        // The floats of the inline content, after its lines.
+        let mut floats = Vec::new();
+        super::floats::floats_in(&res.tree, id, &mut floats);
+        for c in floats {
+            dump_box(doc, res, oof, c, ax, ay, depth + 1, out);
+        }
     }
     if let Some(list) = oof.get(&id) {
         for &c in list {
@@ -136,6 +143,9 @@ fn dump_head(doc: &Document, res: &LayoutResult, id: BoxId, pos: (LU, LU), depth
         Position::Absolute => out.push_str(" [absolute]"),
         Position::Fixed => out.push_str(" [fixed]"),
         _ => {}
+    }
+    if super::floats::is_float(b) {
+        out.push_str(&format!(" [float:{}]", b.style.boxs.float.keyword()));
     }
     if o.clip {
         out.push_str(" [clip]");

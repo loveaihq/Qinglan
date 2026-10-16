@@ -45,6 +45,8 @@ enum ItemKind {
     End,
     /// An out-of-flow placeholder.
     Oof,
+    /// A float's place in the text.
+    Float,
 }
 
 #[derive(Clone, Copy)]
@@ -283,6 +285,8 @@ enum UnitKind {
     Edge,
     /// An out-of-flow placeholder.
     Oof,
+    /// A float's place in the text (zero width; its outer widths are in `atoms`).
+    Float,
 }
 
 /// The most bytes of one text item the platform shapes in a single call (see `Layouter::shape_item`).
@@ -400,7 +404,7 @@ impl Prepared {
     /// units do not matter.
     fn opp_before(&self, j: usize) -> bool {
         let Some(u) = self.units.get(j) else { return false };
-        if matches!(u.kind, UnitKind::Forced | UnitKind::Edge | UnitKind::Oof) {
+        if matches!(u.kind, UnitKind::Forced | UnitKind::Edge | UnitKind::Oof | UnitKind::Float) {
             return false;
         }
         let Some(pj) = self.prev_content.get(j).copied().filter(|&p| p != u32::MAX) else { return false };
@@ -701,6 +705,10 @@ impl Layouter<'_> {
             items.push(make_item(ItemKind::Oof, bid, b.parent, &b.style, String::new()));
             return;
         }
+        if super::floats::is_float(b) {
+            items.push(make_item(ItemKind::Float, bid, b.parent, &b.style, String::new()));
+            return;
+        }
         match b.kind {
             BoxKind::Text => {
                 let decor = if self.decorated.get(b.parent as usize).copied().unwrap_or(false) { self.decor_specs(b.parent) } else { Vec::new() };
@@ -816,6 +824,12 @@ impl Layouter<'_> {
                     units.push(u);
                 }
                 ItemKind::Oof => units.push(Unit::new(UnitKind::Oof, ii as u32)),
+                ItemKind::Float => {
+                    let mut u = Unit::new(UnitKind::Float, ii as u32);
+                    u.start = atoms.len() as u32;
+                    atoms.push(AtomInfo::default());
+                    units.push(u);
+                }
                 ItemKind::Text => {
                     para_text.push_str(&text);
                     work += text.len() as u64;
@@ -842,7 +856,7 @@ impl Layouter<'_> {
         let mut last = u32::MAX;
         for (j, u) in units.iter().enumerate() {
             prev_content.push(last);
-            if !matches!(u.kind, UnitKind::Edge | UnitKind::Oof) {
+            if !matches!(u.kind, UnitKind::Edge | UnitKind::Oof | UnitKind::Float) {
                 last = j as u32;
             }
         }
@@ -1033,7 +1047,7 @@ impl Layouter<'_> {
         let tree = self.tree;
         for k in 0..prep.units.len() {
             let Some(u) = prep.units.get(k) else { break };
-            if u.kind != UnitKind::Atomic {
+            if !matches!(u.kind, UnitKind::Atomic | UnitKind::Float) {
                 continue;
             }
             let Some(bid) = prep.items.get(u.item as usize).map(|i| i.box_id) else { continue };
@@ -1061,6 +1075,13 @@ impl Layouter<'_> {
                 (run_min, seg, seg_started) = (LU::ZERO, LU::ZERO, false);
                 continue;
             }
+            if u.kind == UnitKind::Float {
+                // A float is as wide as it is wherever it goes: its min-content width counts alone, its max-content
+                // width joins the line.
+                min = min.max(prep.atoms.get(u.start as usize).map_or(LU::ZERO, |a| a.min));
+                seg += u.adv;
+                continue;
+            }
             if prep.opp_before(j) {
                 min = min.max(run_min);
                 run_min = LU::ZERO;
@@ -1084,7 +1105,7 @@ impl Layouter<'_> {
 
     /// Lay out one atomic inline: the margin box width, its height above / below the baseline, the
     /// left and top margin and the `position: relative` offset.
-    fn layout_atomic(&mut self, id: BoxId, cbw: LU) -> (LU, LU, LU, LU, LU, (LU, LU)) {
+    pub(super) fn layout_atomic(&mut self, id: BoxId, cbw: LU) -> (LU, LU, LU, LU, LU, (LU, LU)) {
         let tree = self.tree;
         let bx = tree.get(id);
         let bs = &bx.style.boxs;
@@ -1137,12 +1158,27 @@ impl Layouter<'_> {
         let text_base = self.texts.len() as u32;
         self.texts.append(&mut prep.texts);
 
+        // Floats are laid out first too (a float is a formatting context of its own: where it ends up does not change it, and
+        // its lines must not come between those of this block); the loop below only places them.
+        let mut fdims: Vec<(usize, super::floats::FloatDims)> = Vec::new();
         // Atomic inlines are laid out first: their widths decide where lines break.
         for k in 0..prep.units.len() {
             if self.exhausted {
                 break;
             }
             let Some(u) = prep.units.get(k) else { break };
+            if u.kind == UnitKind::Float {
+                // Measured for the shrink-to-fit width of the container; in a line it takes no room (it is placed beside it).
+                let fid = prep.items.get(u.item as usize).map(|i| i.box_id);
+                if let Some(u) = prep.units.get_mut(k) {
+                    u.adv = LU::ZERO;
+                }
+                if let Some(fid) = fid {
+                    let d = self.measure_float(fid, content_w);
+                    fdims.push((k, d));
+                }
+                continue;
+            }
             if u.kind != UnitKind::Atomic {
                 continue;
             }
@@ -1169,6 +1205,11 @@ impl Layouter<'_> {
         let mut y = LU::ZERO;
         let mut s = 0usize;
         let mut emitted = 0usize;
+        // Floats in this paragraph: the units already placed, and those that wait for the end of their line.
+        let has_floats = prep.units.iter().any(|u| u.kind == UnitKind::Float);
+        let mut placed: Vec<usize> = Vec::new();
+        let mut deferred: Vec<(BoxId, super::floats::FloatDims)> = Vec::new();
+        let strut_h = strut_asc + strut_desc;
         let mut groups: Vec<Group> = Vec::new();
         let mut widths: Vec<LU> = Vec::new();
         let mut ents: Vec<Ent> = Vec::new();
@@ -1192,9 +1233,87 @@ impl Layouter<'_> {
                 break;
             }
             let line_indent = if emitted == 0 { indent } else { LU::ZERO };
-            let (mut end, forced) = prep.break_line(s, content_w - line_indent, line_indent);
-            if end <= s && !forced {
-                end = s + 1;
+            // Floats (CSS2 9.5, 9.4.2): the ones that open the line are placed first; the line is as wide as the room
+            // they and the earlier ones leave at its height. A float inside the line goes at its top when it fits next
+            // to the text before it (the line is broken again), else below the line. A line whose first piece does not
+            // fit beside the floats moves down to where they end.
+            let (mut line_left, mut line_w) = (LU::ZERO, content_w);
+            let (mut end, mut forced);
+            if has_floats || !self.fs.list.is_empty() {
+                let mut rounds = 0;
+                // The height of the line is not known before it is laid out: the strut's, or an atomic inline's if the
+                // line has one (the room the floats leave is looked up for that height).
+                let mut band_h = strut_h;
+                loop {
+                    rounds += 1;
+                    if has_floats {
+                        let mut k = s;
+                        while let Some(u) = prep.units.get(k) {
+                            match u.kind {
+                                UnitKind::Float if !placed.contains(&k) => {
+                                    if let Some(fid) = prep.items.get(u.item as usize).map(|i| i.box_id)
+                                        && let Some(&(_, d)) = fdims.iter().find(|(i, _)| *i == k)
+                                    {
+                                        self.put_float(fid, d, content_w, left, top + y);
+                                    }
+                                    placed.push(k);
+                                }
+                                UnitKind::Float | UnitKind::Edge | UnitKind::Oof => {}
+                                _ if u.collapsible_space => {}
+                                _ => break,
+                            }
+                            k += 1;
+                        }
+                    }
+                    (line_left, line_w) = self.line_band(left, content_w, top + y, band_h);
+                    (end, forced) = prep.break_line(s, line_w - line_indent, line_indent);
+                    if end <= s && !forced {
+                        end = s + 1;
+                    }
+                    if rounds > 200 {
+                        break;
+                    }
+                    let tall = (s..end)
+                        .filter_map(|k| prep.units.get(k).filter(|u| u.kind == UnitKind::Atomic))
+                        .filter_map(|u| prep.atoms.get(u.start as usize))
+                        .fold(band_h, |m, at| m.max(at.a + at.d));
+                    if tall > band_h {
+                        band_h = tall;
+                        continue;
+                    }
+                    if has_floats
+                        && let Some(f) = (s..end).find(|k| prep.units.get(*k).is_some_and(|u| u.kind == UnitKind::Float) && !placed.contains(k))
+                    {
+                        let before = (s..f).filter_map(|k| prep.units.get(k)).filter(|u| !u.collapsible_space).fold(LU::ZERO, |a, u| a + u.adv);
+                        if let Some(fid) = prep.units.get(f).and_then(|u| prep.items.get(u.item as usize)).map(|i| i.box_id)
+                            && let Some(&(_, d)) = fdims.iter().find(|(i, _)| *i == f)
+                        {
+                            placed.push(f);
+                            if before + d.w <= line_w - line_indent {
+                                self.put_float(fid, d, content_w, left, top + y);
+                                continue;
+                            }
+                            deferred.push((fid, d));
+                        }
+                        continue;
+                    }
+                    if line_w < content_w {
+                        let used = (s..end).filter_map(|k| prep.units.get(k)).filter(|u| !(u.collapsible_space || u.hang_space)).fold(LU::ZERO, |a, u| a + u.adv);
+                        if used > line_w - line_indent
+                            && let Some(nb) = self.line_next_bottom(top + y, band_h)
+                            && nb > top + y
+                        {
+                            y = nb - top;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+            } else {
+                (end, forced) = prep.break_line(s, content_w - line_indent, line_indent);
+                if end <= s && !forced {
+                    end = s + 1;
+                }
             }
             if !forced {
                 // Start edges before the break belong to the next line.
@@ -1259,11 +1378,11 @@ impl Layouter<'_> {
                 hang_n += 1;
                 k -= 1;
             }
-            if forced && x <= content_w {
+            if forced && x <= line_w {
                 hang = LU::ZERO;
                 hang_n = 0;
             }
-            let mut free = content_w - (x - hang);
+            let mut free = line_w - (x - hang);
 
             // Justification (css-text-3 7.3, 8.4): the line is stretched at spaces (Latin) and between
             // ideographs (CJK); the last line and lines ended by a break are left alone.
@@ -1336,7 +1455,7 @@ impl Layouter<'_> {
             let mut scratch = std::mem::take(&mut self.scratch);
             for g in &groups {
                 let Some(it) = prep.items.get(g.item as usize) else { continue };
-                if it.kind == ItemKind::Oof {
+                if matches!(it.kind, ItemKind::Oof | ItemKind::Float) {
                     continue;
                 }
                 scratch.clear();
@@ -1485,7 +1604,7 @@ impl Layouter<'_> {
             let frag_start = self.fragments.len() as u32;
             let line_top = top + y;
             let base_y = line_top + above;
-            let ox = left + offset;
+            let ox = left + line_left + offset;
             for en in ents.iter().filter(|e| !e.atomic) {
                 let cbx = tree.get(en.id);
                 let positioned = cbx.style.boxs.position == Position::Relative;
@@ -1584,13 +1703,13 @@ impl Layouter<'_> {
                             None => self.pending.push(pend),
                         }
                     }
-                    ItemKind::Start | ItemKind::End => {}
+                    ItemKind::Start | ItemKind::End | ItemKind::Float => {}
                 }
             }
             self.lines.push(Line {
-                x: left,
+                x: left + line_left,
                 y: line_top,
-                w: content_w,
+                w: line_w,
                 h: line_h,
                 baseline: above,
                 frags: (frag_start, self.fragments.len() as u32),
@@ -1599,6 +1718,9 @@ impl Layouter<'_> {
             y += line_h;
             emitted += 1;
             s = next;
+            for (fid, d) in deferred.drain(..) {
+                self.put_float(fid, d, content_w, left, top + y);
+            }
         }
 
         let last_line = self.lines.len() as u32;

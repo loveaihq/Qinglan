@@ -1,21 +1,22 @@
 <!--
 viewport: 200x300
 The layer 1 fallbacks (L1 task 9): flex, grid and table parts are laid out as blocks, their inline forms are atomic
-inlines (inline-block, step 1b-2), float is ignored (the element stays in the flow; a floated span is a block because the
+inlines (inline-block, step 1b-2). Floats are real since step 2a-1 (CSS2 9.5; a floated span is a block because the
 cascade blockifies it, CSS2 9.7). Font 10px/10px, body margin 0, widths are the full 200 unless set.
 
 flex   two children stack: f1 (0,0), f2 (0,10), the flex box is 20 high.
 grid   the text "g1" gets an anonymous block, then g2: 10 + 10 = 20 high at y=20.
 table  table > tbody > tr > td, td all become blocks and the cells stack: a td is 10 + 2 (padding 1px) = 12 high,
        so the row is 24 high at y=40; the text sits 1px inside: x=1, y=41 and 53.
-lft    float:left width 50: stays in the flow, (0,64 50x10).
-fr     float:right on a span: a block, 200 wide, y=74.
-ib     "before", an inline-block, "after" sit on one line (60 + 30 + 50 = 140 <= 200): the inline-block is shrink-to-fit,
-       "mid" = 30 wide, 10 high, x=60 (after "before"), baseline = its text's, so the line is 10 high: div#ib is 10 high at y=84.
+lft    float:left width 50: a float, (0,64 50x10); it takes no room in the flow.
+fr     float:right on a span: shrink-to-fit "x" = 10 wide, at the right edge: (190,64 10x10).
+ib     both floats are at y=64..74, so the line at y=64 is x=50..190 = 140 wide: "before" 60 + inline-block "mid" 30 + "after" 50
+       = 140 fits exactly. The inline-block is shrink-to-fit, "mid" = 30 wide, 10 high, x=50+60=110, baseline = its text's, so
+       the line is 10 high: div#ib is 10 high at y=64 (the floats do not push it down), "before" starts at x=50.
 abs    position:absolute;top:100px: out of flow, shrink-to-fit "abs" = 30 wide, top = 100 from the initial containing block,
        left = static position = 0: (0,100 30x10). It does not take room in the flow.
-iflex  display:inline-flex: an atomic inline, shrink-to-fit 20 wide, on the line after div#ib (y=94, the abs box takes no room).
-       body = 94 + 10 = 104 high.
+iflex  display:inline-flex: an atomic inline, shrink-to-fit 20 wide, on the line after div#ib (y=74, the abs box takes no room).
+       body = 74 + 10 = 84 high.
 check: block div#flex :: (0,0 200x20) [display:flex]
 check: block div#f1 :: (0,0 200x10)
 check: block div#f2 :: (0,10 200x10)
@@ -28,14 +29,14 @@ check: block tr :: (0,40 200x24) [display:table-row]
 check: block td :: (0,40 200x12) [display:table-cell]
 check: text "a" :: (1,41 10x10)
 check: text "b" :: (1,53 10x10)
-check: block div#lft :: (0,64 50x10)
-check: block span#fr :: (0,74 200x10)
-check: block div#ib :: (0,84 200x10)
-check: text "before" :: (0,84 60x10)
-check: inline-block span#ibs :: (60,84 30x10)
+check: block div#lft :: (0,64 50x10) [float:left]
+check: block span#fr :: (190,64 10x10) [float:right]
+check: block div#ib :: (0,64 200x10)
+check: text "before" :: (50,64 60x10)
+check: inline-block span#ibs :: (110,64 30x10)
 check: block div#abs :: (0,100 30x10) [absolute]
-check: inline-block span#iflex :: (0,94 20x10) [display:inline-flex]
-check: block body :: (0,0 200x104)
+check: inline-block span#iflex :: (0,74 20x10) [display:inline-flex]
+check: block body :: (0,0 200x84)
 -->
 <!doctype html>
 <style>

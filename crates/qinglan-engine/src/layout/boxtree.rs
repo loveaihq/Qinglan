@@ -558,16 +558,18 @@ impl Builder<'_> {
                     kind = Gen::Contents;
                 }
                 let oof = matches!(style.boxs.position, Position::Absolute | Position::Fixed);
+                // A float is a placeholder in the inline content around it, like an out-of-flow box (floats.rs).
+                let floated = !oof && style.boxs.float != crate::css::types::Float::None;
                 let special = if matches!(kind, Gen::Nothing | Gen::Contents) { Special::Plain } else { self.special(n, e.name, &style) };
                 match special {
                     Special::Replaced(rk) => {
                         let id = self.make_replaced(n, style, rk, None, order);
-                        outs.push(self.level_out(id, &kind, oof));
+                        outs.push(self.level_out(id, &kind, oof || floated));
                         return;
                     }
                     Special::Image(src) => {
                         let id = self.make_replaced(n, style, ReplacedKind::Image, src, order);
-                        outs.push(self.level_out(id, &kind, oof));
+                        outs.push(self.level_out(id, &kind, oof || floated));
                         return;
                     }
                     Special::Alt(text) => {
@@ -609,7 +611,7 @@ impl Builder<'_> {
                         }
                         self.set_order(id, order, oof);
                         self.finish_block(id, child_outs);
-                        outs.push(if oof || !block_level { Out::Inline(id) } else { Out::Block(id) });
+                        outs.push(if oof || floated || !block_level { Out::Inline(id) } else { Out::Block(id) });
                         return;
                     }
                     Special::Plain => {}
@@ -635,7 +637,7 @@ impl Builder<'_> {
                         }
                         self.set_order(id, order, oof);
                         self.finish_block(id, child_outs);
-                        outs.push(if oof || !block_level { Out::Inline(id) } else { Out::Block(id) });
+                        outs.push(if oof || floated || !block_level { Out::Inline(id) } else { Out::Block(id) });
                     }
                     Gen::Inline(fallback) => {
                         if e.name == a::BR {

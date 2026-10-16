@@ -18,6 +18,7 @@
 pub mod block;
 pub mod boxtree;
 pub mod dump;
+pub mod floats;
 pub mod image;
 pub mod inline;
 pub mod intrinsic;
@@ -214,6 +215,8 @@ pub struct LayoutResult {
     /// How each image box got its size (see [`replaced::ImageFit`]), by DOM node.
     pub fits: FxHashMap<NodeId, replaced::ImageFit>,
     pub viewport: (LayoutUnit, LayoutUnit),
+    /// Some box floats (the painter looks for floats only then).
+    pub has_floats: bool,
     /// The work budget ran out: the rest of the page was not laid out (1c shows
     /// "页面太复杂，只显示了一部分").
     pub incomplete: bool,
@@ -332,6 +335,15 @@ pub(crate) struct Layouter<'a> {
     pub no_stop: u32,
     /// Blocks whose children were cut off by the stop line (their heights are not final).
     pub cut: Vec<BoxId>,
+    /// The floats of the block formatting context being laid out (floats.rs).
+    pub fs: floats::FloatSpace,
+    /// Where the border box of the block being laid out starts, in the coordinates of that formatting context: set by
+    /// whoever lays the block out (a guess for blocks in the flow: the real position is only known afterwards).
+    pub pos: (LayoutUnit, LayoutUnit),
+    /// The layout looked at, or added to, the floats of its formatting context (so it depends on `pos`).
+    pub touched: bool,
+    /// The page has floats (when it has none none of the float machinery runs).
+    pub has_floats: bool,
 }
 
 impl Layouter<'_> {
@@ -407,9 +419,14 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
         origin_y: LayoutUnit::ZERO,
         no_stop: 0,
         cut: Vec::new(),
+        fs: floats::FloatSpace::default(),
+        pos: (LayoutUnit::ZERO, LayoutUnit::ZERO),
+        touched: false,
+        has_floats: tree.boxes.iter().any(floats::is_float),
     };
     l.prefetch_text();
     l.layout_root();
+    let has_floats = l.has_floats;
     let (boxes, mut lines, mut fragments, glyphs, texts, mut decorations, mut markers, oof, work, incomplete, partial) =
         (l.out, l.lines, l.fragments, l.glyphs, l.texts, l.decorations, l.markers, l.oof_list, l.work, l.exhausted || l.truncated, l.stopped);
     let mut fits = l.fits;
@@ -423,7 +440,7 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
     let canvas = canvas_background(doc, &tree);
     let (below, above) = paint_order(&tree);
     let images = tree.images.clone();
-    LayoutResult { tree, boxes, lines, fragments, glyphs, texts, decorations, markers, oof, below, above, canvas, images, fits, viewport, incomplete, work, partial }
+    LayoutResult { tree, boxes, lines, fragments, glyphs, texts, decorations, markers, oof, below, above, canvas, images, fits, viewport, has_floats, incomplete, work, partial }
 }
 
 /// CSS2 14.2: the root element's background covers the canvas; when it has none (transparent), the

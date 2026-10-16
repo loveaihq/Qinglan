@@ -13,7 +13,7 @@ use super::boxtree::{BoxId, BoxKind, Control, LayoutBox};
 use super::units::{LayoutUnit as LU, Margin};
 use super::{BoxOut, Fragment, FragKind, Layouter};
 use crate::css::computed::{BoxStyle, slant_of};
-use crate::css::types::{BoxSizing, Dim, Display, ListStylePosition, Overflow, Position};
+use crate::css::types::{BoxSizing, Clear, Dim, Display, ListStylePosition, Overflow, Position};
 use crate::css::values::Lp;
 use crate::platform::FontQuery;
 
@@ -114,7 +114,7 @@ fn overflow_bfc(bs: &BoxStyle) -> bool {
 /// Boxes that start a new block formatting context: their margins do not collapse with their
 /// children's (CSS2 9.4.1, 8.3.1).
 fn establishes_bfc(bx: &LayoutBox, bs: &BoxStyle) -> bool {
-    overflow_bfc(bs) || bs.display == Display::FlowRoot || bx.fallback.is_some() || bx.oof || matches!(bx.kind, BoxKind::InlineBlock | BoxKind::Replaced)
+    overflow_bfc(bs) || bs.display == Display::FlowRoot || super::floats::is_float(bx) || bx.fallback.is_some() || bx.oof || matches!(bx.kind, BoxKind::InlineBlock | BoxKind::Replaced)
 }
 
 /// CSS2 10.3.3 and 10.4: content width and the two horizontal margins.
@@ -201,6 +201,15 @@ impl Layouter<'_> {
         // sit in this frame while the children (the recursion) are laid out.
         let g = self.block_geometry(id, cb_w, cb_h, flow);
 
+        // Floats (floats.rs): a block formatting context root has floats of its own, and its position in it is its own
+        // corner; any other block lays out at the position `self.pos` its parent guessed for it.
+        let bfc = is_root || establishes_bfc(bx, &bx.style.boxs);
+        let saved_pos = self.pos;
+        let saved_touched = self.touched;
+        let saved_fs = bfc.then(|| std::mem::take(&mut self.fs));
+        let base = if bfc { (LU::ZERO, LU::ZERO) } else { (self.pos.0 + g.ml, self.pos.1) };
+        self.pos = base;
+
         let positioned = bx.style.boxs.position != Position::Static;
         if positioned {
             self.cb_stack.push(id);
@@ -208,7 +217,6 @@ impl Layouter<'_> {
         let pending_mark = self.pending.len();
 
         // Which margins of this box may collapse with its content (8.3.1).
-        let bfc = is_root || establishes_bfc(bx, &bx.style.boxs);
         let top_collapses = !bfc && g.bor[0] == LU::ZERO && g.pad[0] == LU::ZERO;
         let bottom_collapses = !bfc && g.bor[2] == LU::ZERO && g.pad[2] == LU::ZERO && g.spec_h.is_none() && g.min_h == LU::ZERO;
         // A box's own top and bottom margins collapse when its height is 0 or auto (CSS2 8.3.1); only with `auto`
@@ -253,31 +261,89 @@ impl Layouter<'_> {
                     break;
                 }
                 let saved_origin = std::mem::replace(&mut self.origin_y, est);
-                let r = self.layout_block(cid, g.content_w, g.spec_h, Flow::default());
-                self.origin_y = saved_origin;
-                let y;
-                if r.through {
-                    // Placed where it would be if it had a bottom border (8.3.1).
+                // Where the child will be, as far as the margins in sight tell (floats.rs); the real place is known only
+                // once it is laid out.
+                let cbx = tree.get(cid);
+                let floats_on = self.has_floats;
+                let gy = if at_top {
+                    content_top
+                } else if floats_on {
+                    cursor + strut.join(self.est_top_margin(cid, g.content_w, 0)).resolve()
+                } else {
+                    cursor
+                };
+                let avoid = floats_on && !self.fs.list.is_empty() && cbx.kind == BoxKind::Block && establishes_bfc(cbx, &cbx.style.boxs);
+                let (mut cw, mut shift, mut gy2) = (g.content_w, LU::ZERO, gy);
+                let mark = self.mark();
+                // The floats it clears are the ones before it, not those inside it.
+                let clear_b = if floats_on && cbx.style.boxs.clear != Clear::None { self.fs.clear_y(cbx.style.boxs.clear) } else { None };
+                let outer_touched = std::mem::replace(&mut self.touched, false);
+                if avoid {
+                    (cw, shift, gy2) = self.avoid_floats(cid, base, content_left, g.content_w, gy);
+                }
+                self.pos = (base.0 + content_left + shift, base.1 + gy2);
+                let mut r = self.layout_block(cid, cw, g.spec_h, Flow::default());
+                let place = |r: &BlockResult, at_top: bool, cursor: LU, strut: Margin| -> LU {
                     if at_top {
-                        y = content_top;
+                        content_top
+                    } else if r.through {
+                        // Placed where it would be if it had a bottom border (8.3.1).
+                        cursor + strut.join(r.top_only).resolve()
                     } else {
-                        y = cursor + strut.join(r.top_only).resolve();
+                        cursor + strut.join(r.mt).resolve()
                     }
+                };
+                let mut y = place(&r, at_top, cursor, strut);
+                if floats_on {
+                    if avoid {
+                        y = y.max(gy2);
+                        // It may not overlap a float anywhere along its height (9.5): where one comes in later and takes
+                        // too much room it goes down to where that float ends.
+                        for _ in 0..64 {
+                            let h = r.h.max(LU::from_raw(1));
+                            let width = self.out.get(cid as usize).map_or(LU::ZERO, |o| o.w);
+                            let (cl, cr) = (base.0 + content_left, base.0 + content_left + g.content_w);
+                            let (l2, r2) = self.fs.band(base.1 + y, h, cl, cr);
+                            let at = cl + shift;
+                            if (l2 <= at && at + r.ml + width <= r2) || (l2 == cl && r2 == cr) {
+                                break;
+                            }
+                            let Some(nb) = self.fs.next_bottom(base.1 + y, h) else { break };
+                            self.restore(mark);
+                            (cw, shift, y) = self.avoid_floats(cid, base, content_left, g.content_w, nb - base.1);
+                            self.pos = (base.0 + content_left + shift, base.1 + y);
+                            self.touched = false;
+                            r = self.layout_block(cid, cw, g.spec_h, Flow::default());
+                            gy2 = y;
+                        }
+                    }
+                    // Clearance (9.5.2): the top border edge goes down to the bottom of the floats it clears.
+                    if let Some(b) = clear_b {
+                        self.touched = true;
+                        y = y.max(b - base.1);
+                    }
+                    if self.touched && y != gy2 {
+                        self.restore(mark);
+                        self.pos = (base.0 + content_left + shift, base.1 + y);
+                        self.touched = false;
+                        r = self.layout_block(cid, cw, g.spec_h, Flow::default());
+                    }
+                }
+                self.touched |= outer_touched;
+                self.origin_y = saved_origin;
+                if r.through {
                     strut = strut.join(r.mt);
                 } else {
                     if at_top {
                         strut = strut.join(r.mt);
                         top_margin = strut;
-                        y = content_top;
                         at_top = false;
-                    } else {
-                        y = cursor + strut.join(r.mt).resolve();
                     }
                     cursor = y + r.h;
                     strut = r.mb;
                 }
                 if let Some(o) = self.out.get_mut(cid as usize) {
-                    o.x = content_left + r.ml + r.rel.0;
+                    o.x = content_left + shift + r.ml + r.rel.0;
                     o.y = y + r.rel.1;
                 }
             }
@@ -310,7 +376,17 @@ impl Layouter<'_> {
             }
         }
 
+        // A block formatting context root reaches down to the floats in it (10.6.7).
+        let content_h_auto = match (bfc, self.fs.max_bottom()) {
+            (true, Some(fb)) if g.repl.is_none() => content_h_auto.max(fb - content_top),
+            _ => content_h_auto,
+        };
         self.finish_box(id, &g, content_h_auto, content_top);
+        self.pos = saved_pos;
+        if let Some(fs) = saved_fs {
+            self.fs = fs;
+            self.touched = saved_touched;
+        }
         if positioned {
             self.cb_stack.pop();
             self.resolve_pending(Some(id), pending_mark);
