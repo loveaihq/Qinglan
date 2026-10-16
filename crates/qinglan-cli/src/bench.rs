@@ -28,10 +28,14 @@ const OPEN_TIMEOUT: Duration = Duration::from_secs(70);
 const SHEET_TIMEOUT: Duration = Duration::from_secs(30);
 const SCROLL_STEP: f32 = 100.0;
 
+/// Scroll frames at most (page height / 100 px): the longest real page is a few thousand frames.
+pub const DEFAULT_MAX_FRAMES: usize = 20_000;
+
 pub struct BenchArgs {
     pub width: f32,
     pub height: f32,
     pub dpr: f32,
+    pub max_frames: usize,
 }
 
 pub struct Ctx<'a> {
@@ -165,7 +169,7 @@ pub fn run(cx: Ctx<'_>, url: &Url, a: &BenchArgs) -> ExitCode {
         let t = Instant::now();
         render_frame(&list, platform, &mut store, View { scroll_y: y, dpr }, &mut frame);
         frames.push(ms(t.elapsed()));
-        if y >= last {
+        if y >= last || frames.len() >= a.max_frames {
             break;
         }
         y = (y + SCROLL_STEP).min(last);
@@ -189,6 +193,7 @@ pub fn run(cx: Ctx<'_>, url: &Url, a: &BenchArgs) -> ExitCode {
     println!("full-layout-wall-ms: {:.1}", ms(full_wall));
     println!("images-ms: {:.1} ({rounds} rounds)", ms(d_images));
     println!("scroll-frames: {}", frames.len());
+    println!("scroll-complete: {}", y >= last);
     println!("scroll-median-ms: {:.1}", q(0.5));
     println!("scroll-p95-ms: {:.1}", q(0.95));
     println!("scroll-max-ms: {:.1}", frames.last().copied().unwrap_or(0.0));

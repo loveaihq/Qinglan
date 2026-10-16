@@ -633,3 +633,25 @@
 - `cargo test --release -p qinglan-engine --test perf`（4 轮交替，另一个会话在编译，5 个 cargo/rustc 进程）：解析+样式合计 65.6 → 66.2 ms（+0.9%）。引擎包没变，级别也没变。
 - 内存：滚到底后私有字节 48.5–48.9 MB（十进制 MB），目标 ≤ 50 MB；旧二进制 47.6–49.7。峰值约 54 MB。
 - 噪声：另一个会话的 `cargo test`（qingpdf）经常占 CPU，负载高的时候数字能差 2–3 倍，甚至同一个二进制差 10%；上面的窗口数字是等它跑完、没有 cargo/rustc 进程时量的。
+
+## 第 1 层 · 1c-3 真实网页库、恶意网页、验收数据（2026-10-16）
+
+数据都在 `tests/corpus/RESULTS.md`；网址和日期在 `tests/corpus/PAGES.md`；跑法在 `tools/corpus_run.py`（`record`、`render`、`edge`、`compose`、`check`、`bench`、`winbench`、`pages` 各一步；测试用的脚本，不是产品代码）。
+
+### 选择
+
+- **Edge 对照怎么跑**：任务单的 `--blink-settings=scriptEnabled=false` 在这台机器的 Edge 155 上让无头模式不出截图（进程立刻退出，没有文件），所以改成：每次在临时目录里建一个新的空 profile，写 `Default/Preferences`（`profile.default_content_setting_values.javascript = 2`）关 JS；验证过脚本不执行、`<noscript>` 显示。不碰用户的 profile。Edge 写不进仓库目录，截图先写到临时目录再拷。Edge 起的进程按命令行里带的 profile 目录名找，没退干净的才杀。
+- **“文字完整、顺序对”怎么判**：肉眼不可能逐字看 49 页，所以用脚本：DOM 里显示的文字（去 script/style/template/head 和 `display:none` 子树，靠 `style` 输出和 `dom` 输出逐元素对齐）和 `layout` 输出里的文字，12 字符一块，在 4000 字符窗口内按序查找（窗口是为了页面里重复的标题不把指针拖走）。双向都查：多出的、丢的。已知的假差：`text-transform`、坏图的 `alt` 文字。
+- **Stack Overflow**：对我们的 User-Agent 回 Cloudflare 的 403 挑战页。不换 UA 去绕过（机器人检测不绕），录的就是挑战页；另录 Discourse 和 V2EX 的主题页当问答页。
+- **Big5**：试了约 80 个站，只有 cs.nthu.edu.tw/~king/ 还在用 Big5，一页，3.8 KB。
+- **图片缓存**：图片响应单个上限 = 缓存预算的一半（4 MB），其他仍是 1 MB（1c-2c 的决定留着，针对 2.4 MB 的维基页面）。原因：画图从缓存里取压缩字节解码，大于上限的图片永远画不出来，窗口还会无限重新下载（真实页面 xinhua 的 1.6 MB PNG 头图）。另外 `ImageStore` 对“字节不在缓存里”最多再请求 2 次（成功解码清零），之后标成失败，所以超过 4 MB 的图片不会死循环。
+- **`qinglan-cli bench --max-frames N`**：滚动帧数上限，默认 20 000；恶意页面测试用 10。没有它，高 1e9 像素的页面会滚几个小时。输出多一行 `scroll-complete`。
+- **恶意页面测试放在 `qinglan-cli/tests/hostile.rs`**：每个用例写成一份录制，在子进程里跑 `qinglan-cli bench`（解析、样式、排版、显示列表、光栅、滚 10 帧都走），子进程自己报 `PeakPagefileUsage`，所以峰值是页面自己的。用 `Mutex` 让用例一个一个跑（5 秒是单个页面的时间）。release 下按任务单的尺寸，debug 下尺寸缩到十分之一、只查内存（debug 太慢，时间不可比）；子进程有 60/300 秒的硬停。坏 UTF-8 用 2 MB（4 MB 196 MB、5 MB 198 MB，贴着 200 MB 上限，测试会不稳定；见 RESULTS 疑似问题 #8）。
+- **1 GB 的 gzip 炸弹**：测试里现场生成（固定霍夫曼块，一个字面量 0 加 400 多万个“长度 258、距离 1”的匹配，13 位一个，压缩流 6.7 MB），不往仓库里放 1 MB 的二进制；trailer 的 CRC 是假的，因为传输在 16 MB 上限处就停了。
+- **150% DPI 的滚动**：用 `--width 1280 --height 720 --dpr 1.5`（窗口 1920×1080 设备像素），和物理 1920×1080 屏幕 150% 缩放的工作量一致；1c-2b 用的 CSS 1920×1080 × 1.5 比它重 2.25 倍，不是验收要的。
+
+### 结果摘要
+
+- 真实网页 49 页：全部能打开，文字完整顺序对，方块 0、乱码 0；一个 bug 已修（图片缓存）；其余差别是第 2 层特性，加疑似 bug 清单（RESULTS 第 1 节）。
+- 恶意网页：18 项在 release 下都 ≤ 5 秒（最慢 2.1 秒）、峰值 ≤ 200 MB（最大 css 10 万行 171 MB、坏 UTF-8 179 MB），网络四项同；见 RESULTS 第 2 节。
+- 验收数字（release，插电）：exe 1 927 168 字节；启动 58 ms；冷首屏中位数 102.9 ms（整页排完 212.8 ms）；滚动 100%：4.9 / 7.0 ms，150%：5.6 / 7.4 ms；滚完私有内存 48.9 MB 中位数（47.5–51.8，第一次超了）。

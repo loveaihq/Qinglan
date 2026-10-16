@@ -542,3 +542,23 @@ fn record_then_replay_never_touches_the_network() {
     assert!(replay.fetch(&req("https://evil.example/2", 1 << 20)).is_ok());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn an_image_bigger_than_a_page_entry_is_still_kept() {
+    // 1.6 MB of image is kept for decoding (the painter decodes from the cached bytes); 1.6 MB of anything else is not.
+    use qinglan_engine::net::cache::ResponseCache;
+    let mut cache = ResponseCache::new();
+    let big = |ct: &str| {
+        let mut r = resp(&u("https://a.example/x"), 200, Some(ct), &vec![0u8; 1_600_000]);
+        r.headers.retain(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+        std::sync::Arc::new(r)
+    };
+    cache.insert("img".into(), &big("image/jpeg"));
+    cache.insert("html".into(), &big("text/html"));
+    assert_eq!(cache.len(), 1, "only the image is kept");
+    assert!(cache.get("img").is_some() && cache.get("html").is_none());
+    let mut huge = resp(&u("https://a.example/y"), 200, Some("image/png"), &vec![0u8; 5 * 1024 * 1024]);
+    huge.headers.retain(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+    cache.insert("huge".into(), &std::sync::Arc::new(huge));
+    assert!(cache.get("huge").is_none(), "over half the budget: not kept");
+}

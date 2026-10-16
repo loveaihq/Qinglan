@@ -16,6 +16,46 @@ use qinglan_engine::url::Url;
 use qinglan_win::{WinHttpConfig, WinHttpTransport, decode_legacy};
 
 const BOMB: &[u8] = include_bytes!("fixtures/bomb-100m.gz");
+
+/// A gzip stream that inflates to `total` zero bytes (CRC and size in the trailer are not real: nobody gets that far).
+/// One literal 0, then matches of length 258 at distance 1 in a fixed-Huffman block, 13 bits per 258 bytes: 1 GiB is
+/// 6.7 MB on the wire.
+fn gzip_zeros(total: u64) -> Vec<u8> {
+    struct Bits {
+        out: Vec<u8>,
+        acc: u32,
+        n: u32,
+    }
+    impl Bits {
+        fn put(&mut self, v: u32, bits: u32) {
+            self.acc |= v << self.n;
+            self.n += bits;
+            while self.n >= 8 {
+                self.out.push(self.acc as u8);
+                self.acc >>= 8;
+                self.n -= 8;
+            }
+        }
+        /// Huffman codes go in most significant bit first.
+        fn code(&mut self, c: u32, len: u32) {
+            for i in (0..len).rev() {
+                self.put((c >> i) & 1, 1);
+            }
+        }
+    }
+    let mut b = Bits { out: vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff], acc: 0, n: 0 };
+    b.put(1, 1); // final block
+    b.put(1, 2); // fixed Huffman codes
+    b.code(0x30, 8); // literal 0
+    for _ in 0..(total - 1) / 258 {
+        b.code(0xC5, 8); // length 258 (symbol 285)
+        b.code(0, 5); // distance 1
+    }
+    b.code(0, 7); // end of block
+    b.put(0, 7); // pad to a byte
+    b.out.extend([0; 8]);
+    b.out
+}
 const HELLO_GZ: &[u8] = include_bytes!("fixtures/hello.gz");
 
 #[derive(Clone, Debug)]
@@ -98,6 +138,7 @@ fn handle(mut s: TcpStream, log: &Mutex<Vec<Seen>>) {
         "/hello" => reply(&mut s, "200 OK", &[("Content-Type", "text/html; charset=GBK"), ("Set-Cookie", "a=1; Path=/")], &[0xD6, 0xD0, 0xCE, 0xC4]),
         "/gzip" => reply(&mut s, "200 OK", &[("Content-Type", "text/html"), ("Content-Encoding", "gzip")], HELLO_GZ),
         "/bomb" => reply(&mut s, "200 OK", &[("Content-Type", "text/html"), ("Content-Encoding", "gzip")], BOMB),
+        "/bomb1g" => reply(&mut s, "200 OK", &[("Content-Type", "text/html"), ("Content-Encoding", "gzip")], &gzip_zeros(1 << 30)),
         "/redir1" => reply(&mut s, "302 Found", &[("Location", "/redir2")], b""),
         "/redir2" => reply(&mut s, "301 Moved Permanently", &[("Location", "/hello#frag")], b""),
         "/loop" => reply(&mut s, "302 Found", &[("Location", "/loop")], b""),
@@ -184,6 +225,15 @@ fn gzip_bomb_is_capped_on_decompressed_bytes() {
     assert_eq!(e, NetError::TooLarge { limit: MAX }, "100 MB of zeros must stop at the cap");
     assert!(t0.elapsed() < Duration::from_secs(10), "took {:?}", t0.elapsed());
     assert!(e.to_string().contains("16 MB"), "{e}");
+}
+
+#[test]
+fn gzip_bomb_of_one_gigabyte_is_capped_in_seconds() {
+    let srv = Server::start();
+    let t0 = Instant::now();
+    let e = transport().fetch(&req(srv.url("/bomb1g"), MAX)).unwrap_err();
+    assert_eq!(e, NetError::TooLarge { limit: MAX }, "1 GiB of zeros must stop at the cap");
+    assert!(t0.elapsed() < Duration::from_secs(5), "took {:?}", t0.elapsed());
 }
 
 #[test]

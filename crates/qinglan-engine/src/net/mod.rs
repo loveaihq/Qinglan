@@ -45,6 +45,10 @@ pub const CACHE_BUDGET: usize = 8 * 1024 * 1024;
 /// A response bigger than this is not kept: the page itself is parsed and then dead weight (zhwiki's is 2.4 MB, more
 /// than the rest together), and going back to a page that big fetches it again.
 pub const CACHE_ENTRY_MAX: usize = 1024 * 1024;
+/// The same limit for an image (`Content-Type: image/*`): its compressed bytes are what the painter decodes from
+/// again and again, so an image that is not kept can never be shown (a 1.6 MB photo was fetched over and over and never
+/// drawn). Half the budget, so one image cannot push everything else out.
+pub const CACHE_IMAGE_ENTRY_MAX: usize = CACHE_BUDGET / 2;
 
 /// What a request is for. It sets the size cap, the `Accept` header and the queue priority.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]

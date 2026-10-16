@@ -115,7 +115,13 @@ pub struct ImageStore {
     keys: FxHashMap<NodeId, (String, u32, u32)>,
     /// Nodes whose bytes would not decode: not tried again.
     failed: FxHashMap<NodeId, ()>,
+    /// How many times in a row the bytes of a node were gone from the response cache after being asked for again.
+    refetched: FxHashMap<NodeId, u8>,
 }
+
+/// Bytes that are gone from the response cache are asked for again this many times in a row; then the image is given up
+/// (an image too big for the cache would otherwise be downloaded again and again).
+const MAX_REFETCH: u8 = 2;
 
 impl Default for ImageStore {
     fn default() -> Self {
@@ -129,7 +135,7 @@ impl ImageStore {
     }
 
     pub fn with_cache(cache: DecodedCache) -> ImageStore {
-        ImageStore { urls: FxHashMap::default(), cache, keys: FxHashMap::default(), failed: FxHashMap::default() }
+        ImageStore { urls: FxHashMap::default(), cache, keys: FxHashMap::default(), failed: FxHashMap::default(), refetched: FxHashMap::default() }
     }
 
     /// The image of `node` comes from `url` (the key of the response cache: `Url::serialize(true)`).
@@ -137,6 +143,7 @@ impl ImageStore {
         if self.urls.get(&node).map(String::as_str) != Some(url) {
             self.urls.insert(node, url.to_string());
             self.failed.remove(&node);
+            self.refetched.remove(&node);
         }
     }
 
@@ -158,11 +165,18 @@ impl ImageStore {
                 continue;
             }
             let Some(resp) = bytes(&url) else {
-                report.missing.push(p.node);
+                let n = self.refetched.entry(p.node).or_insert(0);
+                if *n >= MAX_REFETCH {
+                    self.failed.insert(p.node, ());
+                } else {
+                    *n += 1;
+                    report.missing.push(p.node);
+                }
                 continue;
             };
             match self.cache.get_or_decode(dec, &url, &resp.body, w, h) {
                 Ok(_) => {
+                    self.refetched.remove(&p.node);
                     if let Some((u, ow, oh)) = self.keys.insert(p.node, (url.clone(), w, h))
                         && (u != url || ow != w || oh != h)
                     {

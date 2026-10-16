@@ -90,7 +90,7 @@ fn usage() -> ExitCode {
     eprintln!(
         "usage:\n  qinglan-cli dom <file|url> [--replay <dir>]\n  qinglan-cli style <file|url> [--width W] [--height H] [--time] [--replay <dir>]\n  qinglan-cli layout <file|url> [--width W] [--height H] [--test-font] [--time] [--replay <dir>]\n  qinglan-cli record <url> <dir> [--width W] [--height H]
   qinglan-cli render <file|url> -o out.png [--width W] [--height H | --full] [--dpr D] [--scroll Y] [--replay <dir>] [--test-font] [--time] [--scroll-bench]
-  qinglan-cli bench <url> --replay <dir> [--width W] [--height H] [--dpr D] [--mem]"
+  qinglan-cli bench <url> --replay <dir> [--width W] [--height H] [--dpr D] [--max-frames N] [--mem]"
     );
     ExitCode::from(2)
 }
@@ -113,6 +113,8 @@ struct Args {
     scroll_bench: bool,
     no_prewarm: bool,
     no_stop: bool,
+    /// `bench`: stop scrolling after this many frames (a page a billion pixels high would scroll for hours).
+    max_frames: usize,
 }
 
 fn parse_args() -> Option<Args> {
@@ -135,6 +137,7 @@ fn parse_args() -> Option<Args> {
         scroll_bench: false,
         no_prewarm: false,
         no_stop: false,
+        max_frames: bench::DEFAULT_MAX_FRAMES,
     };
     let mut i = 2;
     if a.cmd == "record" {
@@ -166,6 +169,10 @@ fn parse_args() -> Option<Args> {
             "--scroll" => {
                 i += 1;
                 a.scroll = args.get(i)?.parse().ok().filter(|s: &f32| s.is_finite() && *s >= 0.0)?;
+            }
+            "--max-frames" => {
+                i += 1;
+                a.max_frames = args.get(i)?.parse().ok().filter(|n: &usize| *n >= 1)?;
             }
             "--full" => a.full = true,
             "--scroll-bench" => a.scroll_bench = true,
@@ -290,7 +297,7 @@ fn main() -> ExitCode {
 
     if args.cmd == "bench" {
         let cx = bench::Ctx { loader: &mut loader, platform, win: win.as_ref() };
-        return bench::run(cx, &url, &bench::BenchArgs { width: args.width, height: args.height, dpr: args.dpr });
+        return bench::run(cx, &url, &bench::BenchArgs { width: args.width, height: args.height, dpr: args.dpr, max_frames: args.max_frames });
     }
     let t0 = Instant::now();
     let mut opened = match blocking::open(&mut loader, &url, platform, OPEN_TIMEOUT) {

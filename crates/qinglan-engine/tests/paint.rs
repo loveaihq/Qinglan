@@ -470,3 +470,23 @@ fn a_viewport_drawn_in_bands_is_the_same_picture() {
         }
     }
 }
+
+#[test]
+fn bytes_that_never_stay_in_the_cache_are_asked_for_only_twice() {
+    // An image whose bytes are gone each time they are asked for (too big for the response cache) is given up on, not
+    // downloaded over and over.
+    let page = lay(&image_page(1, &[]), 100, 200, 1.0, None);
+    let mut store = ImageStore::new();
+    let node = page.res.images[0].node;
+    store.set_url(node, "http://x.test/i0.png");
+    let dec = FakeDecoder { decodes: Default::default() };
+    let mut gone = |_: &str| None;
+    let band = Band::new(0.0, 200.0);
+    let counts: Vec<usize> = (0..5).map(|_| store.prepare(&page.list, band, 1.0, &dec, &mut gone).missing.len()).collect();
+    assert_eq!(counts, [1, 1, 0, 0, 0]);
+    // A new address starts afresh, and bytes that do come back reset the count.
+    store.set_url(node, "http://x.test/i1.png");
+    assert_eq!(store.prepare(&page.list, band, 1.0, &dec, &mut gone).missing.len(), 1);
+    let mut ok = |u: &str| Some(Arc::new(Response { url: Url::parse(u, None).unwrap(), status: 200, headers: vec![], body: b"png".to_vec() }));
+    assert_eq!(store.prepare(&page.list, band, 1.0, &dec, &mut ok).decoded, 1);
+}

@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use super::{CACHE_BUDGET, CACHE_ENTRY_MAX, Response};
+use super::{CACHE_BUDGET, CACHE_ENTRY_MAX, CACHE_IMAGE_ENTRY_MAX, Response};
 use crate::lru::ByteLru;
 
 pub struct ResponseCache {
@@ -29,7 +29,9 @@ impl ResponseCache {
             return;
         }
         let no_store = resp.header("cache-control").is_some_and(|v| v.to_ascii_lowercase().contains("no-store"));
-        if no_store || resp.cost() > CACHE_ENTRY_MAX {
+        let is_image = resp.header("content-type").is_some_and(|v| v.trim_start().to_ascii_lowercase().starts_with("image/"));
+        let limit = if is_image { CACHE_IMAGE_ENTRY_MAX } else { CACHE_ENTRY_MAX };
+        if no_store || resp.cost() > limit {
             return;
         }
         self.lru.insert(key, resp.clone(), resp.cost());
