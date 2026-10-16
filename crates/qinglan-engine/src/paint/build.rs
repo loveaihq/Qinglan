@@ -11,7 +11,6 @@ use crate::html::atoms::FxHashMap;
 use crate::html::dom::{Document, NodeId};
 use crate::layout::block::{border_px, pad_px};
 use crate::layout::boxtree::{BoxId, BoxKind, NO_BOX, ReplacedKind};
-use crate::layout::floats::is_float;
 use crate::layout::units::LayoutUnit as LU;
 use crate::layout::{BoxOut, FragKind, Fragment, LayoutResult, Positioned};
 use crate::platform::{FontQuery, Platform};
@@ -192,29 +191,31 @@ impl Builder<'_> {
 
     // ---- boxes ----------------------------------------------------------------------------------------
 
-    /// Paint box `id` (block, atomic inline or replaced) whose border box starts at page position (`ax`, `ay`),
-    /// and its flow descendants. Positioned descendants are painted later, at their own turn.
+    /// Paint box `id`, the root of a stacking context (the root, a positioned box, a float, an atomic inline or a
+    /// replaced box; a plain in-flow block is only reached through [`Self::walk`]), whose border box starts at page
+    /// position (`ax`, `ay`), and its flow descendants. Positioned descendants are painted later, at their own turn.
+    ///
+    /// CSS2 appendix E.2: the backgrounds and borders of the in-flow blocks first (step 3), then the floats (step 4,
+    /// each one as a context of its own), then the in-flow inline content, text included (step 7). Two walks of the
+    /// block tree make that order without a buffer: one for the blocks, one for the lines.
     fn paint_box(&mut self, id: BoxId, ax: LU, ay: LU) {
         let first = self.floats.len();
-        self.paint_box_inner(id, ax, ay);
-        // Floats are painted above the in-flow blocks of their stacking context (CSS2 appendix E.2 step 5, simplified:
-        // the text of those blocks is below them too). A float, an atomic inline, a replaced box, a positioned box
-        // and the root are such contexts themselves: their floats go on top of them, at their end.
-        let bx = self.res.tree.get(id);
-        if self.floats.len() > first && (bx.kind != BoxKind::Block || id == self.res.tree.root || positioned(&bx.style) || is_float(bx)) {
-            let mut i = first;
-            while let Some(&(c, x, y, clip, fixed)) = self.floats.get(i) {
-                i += 1;
-                let saved = (self.clip, self.fixed);
-                (self.clip, self.fixed) = (clip, fixed);
-                self.paint_box(c, x, y);
-                (self.clip, self.fixed) = saved;
-            }
-            self.floats.truncate(first);
+        self.walk(id, ax, ay, false);
+        let mut i = first;
+        while let Some(&(c, x, y, clip, fixed)) = self.floats.get(i) {
+            i += 1;
+            let saved = (self.clip, self.fixed);
+            (self.clip, self.fixed) = (clip, fixed);
+            self.paint_box(c, x, y);
+            (self.clip, self.fixed) = saved;
         }
+        self.floats.truncate(first);
+        self.walk(id, ax, ay, true);
     }
 
-    fn paint_box_inner(&mut self, id: BoxId, ax: LU, ay: LU) {
+    /// One walk over the in-flow blocks of a stacking context: `inline` false paints the decoration of the blocks
+    /// and queues the floats, true paints the lines (and list markers, atomic inlines).
+    fn walk(&mut self, id: BoxId, ax: LU, ay: LU, inline: bool) {
         let res = self.res;
         let bx = res.tree.get(id);
         let o = res.box_out(id);
@@ -223,22 +224,26 @@ impl Builder<'_> {
             return;
         }
         let rect = Rect::new(ax, ay, o.w, o.h);
-        self.box_decor(id, rect);
-        if bx.replaced().is_some() {
-            self.replaced(id, rect);
+        if !inline {
+            self.box_decor(id, rect);
+            if bx.replaced().is_some() {
+                self.replaced(id, rect);
+            }
         }
         let prev = o.clip.then(|| {
             let pb = self.padding_box(id, rect);
             self.push_clip(pb)
         });
-        if o.marker > 0
+        if inline
+            && o.marker > 0
             && let Some(m) = res.markers.get(o.marker as usize - 1)
         {
             self.fragment(m, ax, ay);
         }
         if bx.inline_children {
-            self.lines(&o, ax, ay);
-            if res.has_floats {
+            if inline {
+                self.lines(&o, ax, ay);
+            } else if res.has_floats {
                 let mut floats = Vec::new();
                 crate::layout::floats::floats_in(&res.tree, id, &mut floats);
                 for c in floats {
@@ -253,7 +258,12 @@ impl Builder<'_> {
                     continue;
                 }
                 let co = res.box_out(c);
-                self.paint_box(c, ax + co.x, ay + co.y);
+                if cb.kind == BoxKind::Block {
+                    self.walk(c, ax + co.x, ay + co.y, inline);
+                } else if !inline {
+                    // A block-level replaced box is a context of its own, painted whole at its place among the blocks.
+                    self.paint_box(c, ax + co.x, ay + co.y);
+                }
             }
         }
         if let Some(p) = prev {

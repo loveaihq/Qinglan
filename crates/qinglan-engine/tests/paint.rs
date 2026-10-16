@@ -704,3 +704,16 @@ fn a_decode_that_fails_is_reported_once_so_the_host_can_show_the_alt_text() {
     sync.prepare(&page.list, band, 1.0, &BrokenBody, &mut |u| bytes.get(u).cloned());
     assert_eq!(sync.take_decode_failed().len(), 2);
 }
+
+/// CSS2 appendix E.2: the backgrounds of the in-flow blocks, then the floats, then the inline content on top.
+#[test]
+fn floats_paint_over_block_backgrounds_and_under_inline_text() {
+    let html = "<body style='margin:0;font:10px/10px Ahem;color:#00f'>\
+        <div style='width:100px;background:#ff0'>aaaaaaaaaa<br>bbbbbbbbbb</div>\
+        <div style='float:left;width:30px;height:20px;margin-top:-10px;background:#f00'></div>\
+        <div style='height:40px;background:#0f0'></div></body>";
+    let f = paint(html, 100, 70);
+    // The float is y 10..30, x 0..30. Line 2 of the text (y 10..20) is on top of it, the green block (y 20..60)
+    // is below it.
+    expect(&f, &[(5, 15, BLUE), (35, 15, BLUE), (5, 25, RED), (29, 29, RED), (30, 25, GREEN), (5, 30, GREEN), (5, 5, BLUE)]);
+}
