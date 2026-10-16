@@ -864,3 +864,60 @@ bug 类共 51 条，**没有修完**：每条在 `notes.txt` 里有原因（家�
 ### 6. 数字（见本节上面的各项）
 
 `qinglan.exe` = 1 989 120 字节（2-0 末 1 969 664，**本步增量 +19 456 B**；2a 全部的预算 +80 KB，剩 ≈ 62 KB）。zhwiki-rec 1920×1080 滚到底私有字节 5 次 45.49 / 45.58 / 46.19 / 46.55 / 45.64 MB（最大 46.55，预算 50）。首屏（`--bench`，5 次中位数）：zhwiki-rec 147.5 ms，gh-rust 168.8 ms，gh-ripgrep 225.3 ms（**超 200**；这一组跑到一半另一个会话开始编译，不干净）。随后把 2-0 末的程序（92fd668，scratchpad 工作树）和现在的交替跑 6 轮（每轮三个页面，两个程序顺序轮换），但**另一个会话的 5 个 cargo/rustc 进程一直在跑**，每组 6 个数从 130 到 360 ms 散开，只有最小值有参考价值：首屏最小值 旧 → 新：zhwiki-rec 130.2 → 142.7（+9.6%），gh-ripgrep 158.1 → 171.8（+8.7%），gh-rust 159.9 → 203.5（噪声大）；中位数 zhwiki-rec 225 → 285，gh-ripgrep 290 → 290，gh-rust 301 → 324，都被占用的机器淹没。结论：**首屏可能慢了约 9%（浮动的检查：每个块多一个 `Mark`/`est_top_margin` 判断只在有浮动的页面才进；有浮动的页面，如 zhwiki 的缩略图，会多排一次），没有在空闲机器上证实或排除；在 2a-2 开工前先在空闲机器上量一次。**
+
+## 第 2 层 · 2a-1 续：浮动的绘制顺序、生成内容、浮动 WPT（2026-10-16）
+
+接着上一节（`95af212`）。上一节"没做的"里的（d）文字在浮动之上、生成内容，和 WPT 里的浮动 bug 类，这一节做了。
+
+### 1. 浮动的绘制顺序（CSS2 附录 E.2 第 3、4、7 步，`paint/build.rs`）
+
+- 一个层叠上下文（根、定位盒、浮动、原子行内、替换盒）画两遍：第一遍只走流内块的背景和边框（第 3 步），遇到的浮动先攒着；然后每个浮动各自作为一个上下文画（第 4 步）；第二遍只画行（文字、行内盒背景、列表标记、原子行内，第 7 步）。没有缓冲区，没有重排显示项，多走一遍块树的代价可忽略。
+- 副作用是对的：负外边距让后一个块的背景盖到前一个块的文字上，现在文字在上（以前是后一个块的背景盖住文字）。`tests/paint.rs` 的 `floats_paint_over_block_backgrounds_and_under_inline_text`（浮动的上半在文字下面、下半盖住后一个块的背景）。
+- 完整的层叠上下文（`z-index`、命中检测按绘制顺序）仍是 2a-2。
+
+### 2. 生成内容（CSS2 第 12 章，css-lists-3；`css/`、`layout/generated.rs`、`layout/boxtree.rs`）
+
+- **属性**：`content`、`quotes`（继承）、`counter-reset`、`counter-increment`、`counter-set`，进了 `PropId`（`all` 也复位它们）。`content` 解析 `normal`/`none`、字符串、`attr(名)`、`counter(名[, 样式])`、`counters(名, 分隔[, 样式])`、四个引号关键字、`url()`；`/` 之后的替代文字丢掉。上限：每个声明 64 项，字符串 4096 字符，`attr()` 值 2048 字符，生成文字 8192 字符，同时存在的计数器 4096 个，`counters()` 一次连 64 层，引号嵌套深度 65536。`counter(c, none)` 无效（`none` 不是 `<counter-style-name>`，整个 `content` 作废）。
+- **层叠**：`::before`、`::after`、`::marker` 的规则单独存（`RuleSet::pseudo_rules`，同样按 id/class/标签分桶），每个元素算完样式后只在有这种规则时才匹配（没有这类规则的页面一点不多花）；匹配用 `Matcher::matches_owner`（选择器里 `::` 前面的部分对元素匹配）。结果在 `StyleTree::pseudo`，父样式是元素自己的样式（所以继承、`display`、`float`、`position` 都和普通元素一样）。UA 样式表加了 `q::before/::after`（`open-quote`/`close-quote`）。
+- **盒子树**：`::before`/`::after` 是元素的第一个/最后一个孩子：`content` 是项目列表才生成盒（`normal`/`none` 不生成；`display: none`/`contents` 也不生成）；盒子匿名（节点 `NONE`），样式是伪元素自己的，文字是普通的 `Text` 盒（`synth`），所以排版、断行（中日韩也是）、`white-space`、`text-transform` 都和文档里的文字一样。连续的文字项合成一个盒。空串 `content: ""` 也生成盒（清除浮动的 `::after { content:""; display:block; clear:both }` 要用）。
+- **计数器**（`generated.rs`，CSS2 12.4.1）：一个栈，每个实例记下作用域（父元素的孩子列表，`frame`）和创造它的元素。进入孩子列表时记栈高，离开时截断；`counter-reset` 先删掉同一列表里同名的实例（前面兄弟做的被替换），祖先的留在下面（`counters()` 显示整条链）；`counter-increment`/`counter-set` 找不到计数器就先在这个元素上 `reset 0`；`counter()`/`counters()` 用到不存在的名字也一样。顺序是 reset → increment → set。伪元素的计数器属性像它元素的孩子一样生效。
+- **`list-item` 计数器**取代原来的 `next_ordinal`：`ol`/`ul`/`menu` 隐含 `counter-reset: list-item`（`ol start`、`reversed` 按 HTML 4.4.5 折算），列表项隐含 `counter-increment: list-item`（父是 `ol reversed` 则 -1；作者写了 `list-item` 的 increment/set 就不隐含），`li value` 是 `counter-set`。结果和以前相同；改变的是：`display: list-item` 的 `div` 在 `ol` 里继续同一个计数器（以前每个父元素各自从 1 开始），生成的 `display: list-item` 伪元素也有标记。`counter(list-item)` 可用。
+- **`::marker { content }`**：`none` 是没有标记，字符串/计数器等替代整个标记（没有后缀 ". "）；`normal` 是原来的标记。只做 `content`：标记框的颜色、字体等不做（`marker-*`、`nested-marker-styling` 这类 WPT 失败，在 notes.txt）。存在 `Rare::marker`，布局的 `lists::marker_string` 统一取。
+- **引号**（CSS2 12.3.1）：`open-quote` 取嵌套深度对应的一对，之后深度加一，`close-quote` 先减一再取；深度为 0 的 `close-quote` 什么也不做（css-content-3 3.2）；`no-open-quote`/`no-close-quote` 只改深度；对数超过的深度用最后一对；`quotes: auto` 按 `lang`：日文、zh-TW/HK/Hant 用「」『』，fr « » ‹ ›，de „ " ‚ '，其他 " " ' '。
+- **`url()` 图片**：生成一个替换盒（`Replaced`，样式是 `display: inline` 的匿名样式，所以盒子的内边距、边框不套在图上），节点号取文档节点数之后的顺序号（每次排版都一样，宿主按节点号收图）。**不准确的地方**：网址按文档地址解析，不是按样式表的地址（外部样式表里的相对网址会错；2c 的背景图一起解决）。
+- **计数器作用域的选择**：CSS2 12.4.1（和 CSS2 的 `content-counter-006/007/008`）说 `counter-reset` 的计数器后面的兄弟都看得到；css-lists-3 4.4.1 的算法（浏览器现在的做法，`css-lists/counter-001`、`counters-scope-002` 是同样的页面、新的期望）是：后面的兄弟从前一个兄弟继承计数器时，如果父元素的计数器里已经有同名的就不继承。**照 css-lists-3 做**，CSS2 那 3 个页面因此不过（notes.txt 有一条，类别 `limit`）。
+- 没做：`counter-reset: reversed(名)`（css-lists-3，32 个 WPT 页面）、`counter-style` 的自定义（`@counter-style`，格鲁吉亚、亚美尼亚等命名计数制：退回十进制）、`::marker` 的样式、`::first-line`/`::first-letter`、`content` 里的 `image-set()`/渐变、`display: list-item` 的行内项目的标记。
+
+### 3. 浮动 WPT 里改了的
+
+- **清除间距让空块不再穿透**（`block.rs`）：带 `clear` 的空块，如果真的被清除（位置被浮动底边推下去了），它的上下外边距不再折叠穿过自己：它的位置是清除之后的位置，之后的游标从这里起算，下外边距只剩它自己的（`BlockResult::bot_only`）。这是清除浮动 `::after { content:""; display:block; clear:both }` 的写法，之前父元素高度不含浮动。floats-clear +6。
+- **BFC 盒子旁边放得下**（`floats.rs::avoid_floats`）：给了宽度时，宽度超定的外边距里放弃右外边距（10.3.3），只算宽度加左外边距。`new-fc-beside-float-with-margin`。
+- **浮动不换序**（`inline.rs`）：同一行里一个浮动因为放不下被推到下一行时，它后面的浮动也一起推（9.5.1 规则 5）。`floats-placement-vertical-003`。
+- **比容器宽的浮动**（`floats.rs::place`）：可以从远的一边伸出去，但不能越过另一侧的浮动，旁边有同一侧的浮动（不管在容器里外）就不行（规则 3、7）。`floats-rule3-outside-*`、`floats-rule7-outside-*`。
+- **试过没留的**：让"装着浮动的块"不再折叠穿过自己——修好 `new-fc-separates-from-float`，但弄坏 `clear-clearance-calculation-001` 到 `005`、`clear-float-003`、`adjoining-float-nested-forced-clearance-003`，净亏 3 个，撤掉。真正的做法是 LayoutNG 那样带"排除空间"的外边距累积，不在这一步。
+
+### 4. WPT 通过率（`qinglan-cli wpt <目录>`，前 → 后）
+
+| 目录 | 通过 / 可判定 | bug 类 | 说明 |
+|---|---|---|---|
+| css/CSS2/floats | 66 → 70 / 100 | 22 → 18 | 剩下的每条在 notes.txt（外边距折叠 + 清除间距 + BFC 盒子旁边的家族、nowrap、浮动在行内元素里、静态位置、零宽浮动） |
+| css/CSS2/floats-clear | 133 → 139 / 211 | 27 → 17 | 家族同上；5 个是 XHTML 自闭合标签（`limit`），1 个要 2c 背景图 |
+| css/CSS2/generated-content | 19 → 181 / 205 | 0 → 2 | 剩下：表格 2a-2（7 个）、bidi 2d（2 个）、XHTML（4 个）、测试平台（3 个）、计数制（2 个）、CSS2 计数器作用域（3 个）、bug 2 个（行尾换行之后的行、计数器 `square` 对列表标记） |
+| css/css-lists | 68 → 80 / 143 | 2 → 14 | `reversed()` 32 个（`limit`）、`::marker` 样式 8 个（`limit`）、行内列表项的标记 4 个、计数器继承细节 10 个（`bug (open)`） |
+
+- 分类器不再把"用了生成内容"当成"还没做"（`classify` 里去掉了），所以以前"通过"的页面里有不少是两边都空白的假通过（`css-lists` 的 `counter-reset-reversed-*`、`generated-content` 的几个），现在如实失败；`passing.txt` 重写（470 条，`--check` 全过）。
+- 测试平台里每个字 1em 见方，所以 `white-space: pre` 的长行、制表符和等宽字体宽度和真实字体不同的页面（3 个）不是引擎的错，记作 `limit (test platform)`。`.xht` 当 HTML 解析，`<div/>`、`<span />` 这类自闭合写法变成开标签（`limit (xhtml as html)`）。
+- `about:blank` 作参考页：harness 补了（以前 404）。
+
+### 5. 数字
+
+- `qinglan.exe` = 2 024 960 字节（上一节末 1 989 120，**本步增量 +35 840 B**；2a 全部 +55 296 B，预算 +80 KB，剩 ≈ 26 KB）。
+- zhwiki-rec 1920×1080（`qinglan.exe --bench <网址> --replay tests/corpus/local/zhwiki-rec --width 1920 --height 1080`，插电，新进程 5 次）滚到底私有字节 47 329 280 / 48 209 920 / 47 722 496 / 47 566 848 / 47 464 448（最大 48 209 920 = 45.98 MiB；峰值最大 48 779 264 = 46.52 MiB），预算 50 MB。速度这一步不量（另一个会话在编译，2a 末在安静的机器上统一量）；这 5 次的首屏 188 / 194 / 204 / 148 / ？ms 只是顺带，不作数。
+- 栈：`gen_node` 的 `Special` 分支拆成 `gen_special`（`deep_atomic_and_positioned_nesting_fits_in_one_megabyte` 在加了生成内容之后一度栈溢出，调试构建里每层递归的栈帧要小）。
+
+### 6. 没做的 / 留给 2a-2
+
+- 外边距折叠 + 清除间距 + "相邻浮动"的真正做法（带排除空间的外边距累积）：floats-clear 的 17 条和 floats 里的 `new-fc-*`、`floats-wrap-*` 8 条。
+- `white-space: nowrap` 的行和浮动、浮动在行内元素里的盒边。
+- 表格里的生成内容、层叠上下文和命中检测（2a-2）。
+- 行尾保留换行之后的空行（`content-175`）。

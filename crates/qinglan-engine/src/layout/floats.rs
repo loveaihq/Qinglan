@@ -87,8 +87,18 @@ impl FloatSpace {
     pub fn place(&mut self, right: bool, w: LU, h: LU, y_min: LU, cl: LU, cr: LU) -> (LU, LU) {
         let mut y = y_min.max(self.last_top);
         for _ in 0..MAX_FLOATS + 2 {
-            let (l, r) = self.band(y, h, cl, cr);
-            let fits = r - l >= w;
+            let (mut l, mut r) = self.band(y, h, cl, cr);
+            let mut fits = r - l >= w;
+            if !fits && w > cr - cl {
+                // Wider than the container, a float sticks out on its far side, but stays clear of the floats there
+                // (9.5.1 rules 3 and 7: it may not reach past a float of the other side).
+                let (l2, r2) = if right { self.band(y, h, cl - w, cr) } else { self.band(y, h, cl, cr + w) };
+                // Only when no float of its own side is beside it, in the container or not (rule 7).
+                if r2 - l2 >= w && !self.list.iter().any(|f| f.right == right && f.t < y + h && f.b > y) {
+                    (l, r) = (l2, r2);
+                    fits = true;
+                }
+            }
             let next = if fits { None } else { self.next_bottom(y, h) };
             if fits || next.is_none() {
                 // Fits, or nothing is in the way any more (too wide for the container: it overflows on its side).
@@ -260,7 +270,8 @@ impl Layouter<'_> {
                 let m = |i: usize| bs.margin.get(i).and_then(|d| block::resolve_margin(d, cbw)).unwrap_or(LU::ZERO);
                 let w = LU::from_f32(l.resolve(0.0));
                 let extra = block::pad_px(&bs.padding[1], cbw) + block::pad_px(&bs.padding[3], cbw) + block::border_px(bx.style.border.width[1]) + block::border_px(bx.style.border.width[3]);
-                Some(if bs.box_sizing == crate::css::types::BoxSizing::BorderBox { w } else { w + extra } + m(1) + m(3))
+                // A given width over-constrains the margins, and the right one is the one given up (10.3.3): only the left margin counts.
+                Some(if bs.box_sizing == crate::css::types::BoxSizing::BorderBox { w } else { w + extra } + m(3))
             }
             _ => None,
         };

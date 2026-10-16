@@ -18,13 +18,15 @@
 
 use std::rc::Rc;
 
+use super::generated::{Counters, Piece};
 use super::image::{ImageRequest, ImageSizes, ImageState, SelectEnv, select_source};
 use crate::css::cascade::StyleTree;
 use crate::css::color::Color;
 use crate::css::computed::{BoxStyle, ComputedStyle};
-use crate::css::types::{Dim, Display, Position, TextWrapMode, WhiteSpaceCollapse};
+use crate::css::selector::PseudoElement;
+use crate::css::types::{Content, Dim, Display, Position, TextWrapMode, WhiteSpaceCollapse};
 use crate::css::values::Lp;
-use crate::html::atoms::{Atom, FxHashMap, a};
+use crate::html::atoms::{Atom, a};
 use crate::html::dom::{Document, NONE, Namespace, NodeData, NodeId};
 
 pub type BoxId = u32;
@@ -127,12 +129,14 @@ pub struct Rare {
     pub synth: Option<Rc<str>>,
     /// The number of a list item (shown in its marker).
     pub ordinal: Option<i32>,
+    /// The text `::marker { content }` makes for a list item (empty: no marker); `None`: the usual marker.
+    pub marker: Option<Rc<str>>,
     pub image: Option<ImageSource>,
 }
 
 impl Default for Rare {
     fn default() -> Self {
-        Rare { replaced: None, control: Control::None, synth: None, ordinal: None, image: None }
+        Rare { replaced: None, control: Control::None, synth: None, ordinal: None, marker: None, image: None }
     }
 }
 
@@ -169,6 +173,10 @@ impl LayoutBox {
 
     pub fn ordinal(&self) -> Option<i32> {
         self.rare.as_ref().and_then(|r| r.ordinal)
+    }
+
+    pub fn marker_content(&self) -> Option<&str> {
+        self.rare.as_ref().and_then(|r| r.marker.as_deref())
     }
 
     pub fn image(&self) -> Option<&ImageSource> {
@@ -269,11 +277,6 @@ enum Special {
     Container(Control, Option<(String, bool)>),
 }
 
-struct ListCounter {
-    next: i32,
-    step: i32,
-}
-
 struct Builder<'a> {
     doc: &'a Document,
     styles: &'a StyleTree,
@@ -281,7 +284,9 @@ struct Builder<'a> {
     boxes: Vec<LayoutBox>,
     init: Rc<ComputedStyle>,
     next_order: u32,
-    counters: FxHashMap<NodeId, ListCounter>,
+    gc: Counters,
+    /// Images made by `content: url()`, counted so each gets a node number of its own (past the nodes of the document).
+    gen_images: u32,
     images: Vec<ImageRequest>,
     video: Option<Atom>,
     audio: Option<Atom>,
@@ -305,7 +310,8 @@ pub fn build_box_tree_with(doc: &Document, styles: &StyleTree, env: &BuildEnv<'_
         boxes: Vec::new(),
         init: init.clone(),
         next_order: 0,
-        counters: FxHashMap::default(),
+        gc: Counters::new(),
+        gen_images: 0,
         images: Vec::new(),
         video: doc.atoms.lookup("video"),
         audio: doc.atoms.lookup("audio"),
@@ -377,6 +383,7 @@ impl Builder<'_> {
             font: p.font.clone(),
             text: p.text.clone(),
             misc: self.init.misc.clone(),
+            gen_: self.init.gen_.clone(),
             custom: p.custom.clone(),
         })
     }
@@ -384,10 +391,169 @@ impl Builder<'_> {
     fn gen_children(&mut self, n: NodeId, style: &Rc<ComputedStyle>, depth: usize) -> Vec<Out> {
         let doc = self.doc;
         let mut outs = Vec::new();
+        // The children are in a counter frame of their own; `::before` and `::after` are the first and the last child.
+        let saved = self.gc.enter();
+        self.gen_pseudo(n, PseudoElement::Before, depth, &mut outs);
         for c in doc.children(n) {
             self.gen_node(c, style, depth + 1, &mut outs);
         }
+        self.gen_pseudo(n, PseudoElement::After, depth, &mut outs);
+        self.gc.leave(saved);
         outs
+    }
+
+    /// The generated-content boxes of `::before` / `::after` of element `n` (CSS2 12.1): a box only when `content` is a
+    /// list of items. It takes its `display`, `float`, `position` ... from its own style, which inherits from the element.
+    fn gen_pseudo(&mut self, n: NodeId, which: PseudoElement, depth: usize, outs: &mut Vec<Out>) {
+        let Some(style) = self.styles.pseudo(n, which).cloned() else { return };
+        let Content::Items(items) = &style.gen_.content else { return };
+        let items = items.clone();
+        let kind = classify(style.boxs.display);
+        if matches!(kind, Gen::Nothing | Gen::Contents) || depth >= MAX_BOX_DEPTH {
+            return;
+        }
+        let order = self.next_order;
+        self.next_order = self.next_order.wrapping_add(1);
+        // The counters of the pseudo-element act as those of a child of its element.
+        self.gc.begin_element();
+        self.gc.apply(&style.gen_);
+        // A generated list item counts in `list-item` and gets a marker like any other (css-lists-3 3).
+        let ordinal = (style.boxs.display == Display::ListItem).then(|| {
+            let item: Rc<str> = Rc::from("list-item");
+            if !style.gen_.counter_increment.iter().chain(style.gen_.counter_set.iter()).any(|(c, _)| &**c == "list-item") {
+                self.gc.increment(&item, 1);
+            }
+            self.gc.value("list-item")
+        });
+        let kids = self.content_boxes(n, &items, &style);
+        let oof = matches!(style.boxs.position, Position::Absolute | Position::Fixed);
+        let floated = !oof && style.boxs.float != crate::css::types::Float::None;
+        match kind {
+            Gen::Block(f) | Gen::Atomic(f) => {
+                let block_level = matches!(kind, Gen::Block(_));
+                let id = self.new_box(if block_level { BoxKind::Block } else { BoxKind::InlineBlock }, NONE, style, true);
+                if let Some(b) = self.box_mut(id) {
+                    b.fallback = f;
+                    if ordinal.is_some() {
+                        b.rare_mut().ordinal = ordinal;
+                    }
+                }
+                self.set_order(id, order, oof);
+                self.finish_block(id, kids);
+                outs.push(if oof || floated || !block_level { Out::Inline(id) } else { Out::Block(id) });
+            }
+            Gen::Inline(f) => {
+                let first = outs.len();
+                self.finish_inline(NONE, style, f, kids, outs);
+                for o in outs.iter().skip(first) {
+                    if let Out::Inline(id) | Out::Block(id) = o
+                        && let Some(b) = self.box_mut(*id)
+                    {
+                        b.order = order;
+                        b.anonymous = true;
+                    }
+                }
+            }
+            Gen::Nothing | Gen::Contents => {}
+        }
+    }
+
+    /// The boxes of the content `items` of a pseudo-element of element `n`: text boxes (one per run, shaped and broken
+    /// like any text, CJK included) and, for `url()`, nothing yet.
+    fn content_boxes(&mut self, n: NodeId, items: &[crate::css::types::ContentItem], style: &Rc<ComputedStyle>) -> Vec<Out> {
+        let doc = self.doc;
+        let attr = |name: &str| doc.atoms.lookup(&name.to_ascii_lowercase()).and_then(|a| doc.attr(n, a)).map(str::to_string);
+        let pieces = self.gc.content(items, style, &attr);
+        let mut outs = Vec::new();
+        for p in pieces {
+            match p {
+                Piece::Text(t) => {
+                    let id = self.new_box(BoxKind::Text, NONE, style.clone(), true);
+                    if let Some(b) = self.box_mut(id) {
+                        b.rare_mut().synth = Some(Rc::from(t));
+                    }
+                    outs.push(Out::Inline(id));
+                }
+                Piece::Image(url) => {
+                    // The image has no DOM node: it gets a number past the document's, the same on every layout.
+                    let node = (self.doc.nodes.len() as u32).saturating_add(self.gen_images);
+                    self.gen_images = self.gen_images.saturating_add(1);
+                    let src = ImageSource { src: url.to_string(), density: 1.0 };
+                    self.images.push(ImageRequest { node, src: src.src.clone(), density: 1.0 });
+                    let mut bs = BoxStyle::initial();
+                    bs.display = Display::Inline;
+                    let img_style = Rc::new(ComputedStyle { boxs: Rc::new(bs), border: self.init.border.clone(), misc: self.init.misc.clone(), gen_: self.init.gen_.clone(), ..(**style).clone() });
+                    let id = self.new_box(BoxKind::Replaced, node, img_style, true);
+                    if let Some(b) = self.box_mut(id) {
+                        let r = b.rare_mut();
+                        r.replaced = Some(ReplacedKind::Image);
+                        r.image = Some(src);
+                    }
+                    outs.push(Out::Inline(id));
+                }
+            }
+        }
+        outs
+    }
+
+    /// The counters of element `n` (CSS2 12.4, css-lists-3 4): the `list-item` counter of lists and list items (HTML 4.4.5,
+    /// 4.4.8: `<ol start reversed>`, `<li value>`), then the element's own `counter-reset`, `counter-increment` and
+    /// `counter-set`. Returns the value of the `list-item` counter for a list item.
+    fn element_counters(&mut self, n: NodeId, style: &ComputedStyle) -> Option<i32> {
+        let doc = self.doc;
+        let g = &style.gen_;
+        self.gc.begin_element();
+        let names_list_item = |v: &[(Rc<str>, i32)]| v.iter().any(|(name, _)| &**name == "list-item");
+        let item: Rc<str> = Rc::from("list-item");
+        let is_item = style.boxs.display == Display::ListItem;
+        let at = |e: NodeId, name: &str| doc.atoms.lookup(name).and_then(|a| doc.attr(e, a));
+        if (doc.is_html_element(n, a::OL) || doc.is_html_element(n, a::UL) || doc.is_html_element(n, a::MENU)) && !names_list_item(&g.counter_reset) {
+            // The counter of a list starts so that the first item shows `start` (reversed: counts down from the number of items).
+            let ol = doc.is_html_element(n, a::OL);
+            let reversed = ol && at(n, "reversed").is_some();
+            let start = if ol { at(n, "start").and_then(parse_html_int) } else { None };
+            let first = start.unwrap_or_else(|| {
+                if reversed { doc.children(n).filter(|&c| doc.is_html_element(c, a::LI)).count().min(i32::MAX as usize) as i32 } else { 1 }
+            });
+            self.gc.reset(&item, if reversed { first.saturating_add(1) } else { first.saturating_sub(1) });
+        }
+        for (name, v) in g.counter_reset.iter() {
+            self.gc.reset(name, *v);
+        }
+        if is_item && !names_list_item(&g.counter_increment) && !names_list_item(&g.counter_set) {
+            let parent = doc.parent(n);
+            let step = if doc.is_html_element(parent, a::OL) && at(parent, "reversed").is_some() { -1 } else { 1 };
+            self.gc.increment(&item, step);
+        }
+        for (name, v) in g.counter_increment.iter() {
+            self.gc.increment(name, *v);
+        }
+        if is_item
+            && doc.is_html_element(n, a::LI)
+            && !names_list_item(&g.counter_set)
+            && let Some(v) = at(n, "value").and_then(parse_html_int)
+        {
+            self.gc.set(&item, v);
+        }
+        for (name, v) in g.counter_set.iter() {
+            self.gc.set(name, *v);
+        }
+        is_item.then(|| self.gc.value("list-item"))
+    }
+
+    /// `::marker { content }` of list item `n`: the text it makes (empty for `none`), or `None` for the usual marker.
+    fn marker_content(&mut self, n: NodeId) -> Option<Rc<str>> {
+        let style = self.styles.pseudo(n, PseudoElement::Marker)?.clone();
+        match &style.gen_.content {
+            Content::Normal => None,
+            Content::None => Some(Rc::from("")),
+            Content::Items(items) => {
+                let doc = self.doc;
+                let attr = |name: &str| doc.atoms.lookup(&name.to_ascii_lowercase()).and_then(|a| doc.attr(n, a)).map(str::to_string);
+                let text: String = self.gc.content(items, &style, &attr).into_iter().filter_map(|p| if let Piece::Text(t) = p { Some(t) } else { None }).collect();
+                Some(Rc::from(text))
+            }
+        }
     }
 
     /// A text box with text layout made up. `single_line` keeps the text on one line, as in a text field.
@@ -406,27 +572,6 @@ impl Builder<'_> {
             b.rare_mut().synth = Some(Rc::from(text));
         }
         Out::Inline(id)
-    }
-
-    fn next_ordinal(&mut self, n: NodeId) -> i32 {
-        let doc = self.doc;
-        let parent = doc.parent(n);
-        let is_li = doc.is_html_element(n, a::LI);
-        let ctr = self.counters.entry(parent).or_insert_with(|| {
-            let ol = doc.is_html_element(parent, a::OL);
-            let at = |name: &str| doc.atoms.lookup(name).and_then(|a| doc.attr(parent, a));
-            let reversed = ol && at("reversed").is_some();
-            let step = if reversed { -1 } else { 1 };
-            let start = if ol { at("start").and_then(parse_html_int) } else { None };
-            let start = start.unwrap_or_else(|| {
-                if reversed { doc.children(parent).filter(|&c| doc.is_html_element(c, a::LI)).count().min(i32::MAX as usize) as i32 } else { 1 }
-            });
-            ListCounter { next: start, step }
-        });
-        let value = if is_li { doc.atoms.lookup("value").and_then(|a| doc.attr(n, a)).and_then(parse_html_int) } else { None };
-        let ord = value.unwrap_or(ctr.next);
-        ctr.next = ord.saturating_add(ctr.step);
-        ord
     }
 
     /// Decide what an element is besides its `display`: replaced element, control, image with alt text.
@@ -558,63 +703,14 @@ impl Builder<'_> {
                     kind = Gen::Contents;
                 }
                 let oof = matches!(style.boxs.position, Position::Absolute | Position::Fixed);
+                // An element that makes no box cannot set counters (CSS2 12.4).
+                let list_value = if matches!(kind, Gen::Nothing) { None } else { self.element_counters(n, &style) };
                 // A float is a placeholder in the inline content around it, like an out-of-flow box (floats.rs).
                 let floated = !oof && style.boxs.float != crate::css::types::Float::None;
                 let special = if matches!(kind, Gen::Nothing | Gen::Contents) { Special::Plain } else { self.special(n, e.name, &style) };
-                match special {
-                    Special::Replaced(rk) => {
-                        let id = self.make_replaced(n, style, rk, None, order);
-                        outs.push(self.level_out(id, &kind, oof || floated));
-                        return;
-                    }
-                    Special::Image(src) => {
-                        let id = self.make_replaced(n, style, ReplacedKind::Image, src, order);
-                        outs.push(self.level_out(id, &kind, oof || floated));
-                        return;
-                    }
-                    Special::Alt(text) => {
-                        let child = self.synth_text(&text, &style, false, false);
-                        let id = self.new_box(BoxKind::Inline, n, style, false);
-                        if let Out::Inline(c) = child {
-                            self.adopt(id, vec![c]);
-                        }
-                        self.set_order(id, order, false);
-                        outs.push(Out::Inline(id));
-                        return;
-                    }
-                    Special::Container(ctl, text) => {
-                        let child_outs = match (&text, ctl) {
-                            (Some((t, gray)), _) => {
-                                if t.is_empty() {
-                                    Vec::new()
-                                } else {
-                                    let single = !matches!(ctl, Control::None);
-                                    vec![self.synth_text(t, &style, *gray, single)]
-                                }
-                            }
-                            (None, Control::TextArea(..)) => self.gen_children(n, &style, depth),
-                            _ => Vec::new(),
-                        };
-                        let block_level = matches!(kind, Gen::Block(_));
-                        let bk = if block_level { BoxKind::Block } else { BoxKind::InlineBlock };
-                        let fallback = match kind {
-                            Gen::Block(f) | Gen::Atomic(f) | Gen::Inline(f) => f,
-                            _ => None,
-                        };
-                        let id = self.new_box(bk, n, style, false);
-                        if let Some(b) = self.box_mut(id) {
-                            if ctl != Control::None {
-                                b.rare_mut().control = ctl;
-                            }
-                            b.force_clip = matches!(ctl, Control::TextInput(_) | Control::Select);
-                            b.fallback = fallback;
-                        }
-                        self.set_order(id, order, oof);
-                        self.finish_block(id, child_outs);
-                        outs.push(if oof || floated || !block_level { Out::Inline(id) } else { Out::Block(id) });
-                        return;
-                    }
-                    Special::Plain => {}
+                if !matches!(special, Special::Plain) {
+                    self.gen_special(n, special, style, &kind, (oof, floated, order), depth, outs);
+                    return;
                 }
                 match kind {
                     Gen::Nothing => {}
@@ -625,14 +721,17 @@ impl Builder<'_> {
                     }
                     Gen::Block(fallback) | Gen::Atomic(fallback) => {
                         let block_level = matches!(kind, Gen::Block(_));
-                        let ordinal = (display == Display::ListItem).then(|| self.next_ordinal(n));
+                        let ordinal = list_value;
+                        let marker = if ordinal.is_some() { self.marker_content(n) } else { None };
                         let child_outs = self.gen_children(n, &style, depth);
                         let bk = if block_level { BoxKind::Block } else { BoxKind::InlineBlock };
                         let id = self.new_box(bk, n, style, false);
                         if let Some(b) = self.box_mut(id) {
                             b.fallback = fallback;
                             if ordinal.is_some() {
-                                b.rare_mut().ordinal = ordinal;
+                                let r = b.rare_mut();
+                                r.ordinal = ordinal;
+                                r.marker = marker;
                             }
                         }
                         self.set_order(id, order, oof);
@@ -658,6 +757,64 @@ impl Builder<'_> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// The elements that are more than their `display` (replaced elements, images with alt text, form controls).
+    /// Kept out of `gen_node` so its frame, which recurses once per nesting level, stays small.
+    #[allow(clippy::too_many_arguments)]
+    fn gen_special(&mut self, n: NodeId, special: Special, style: Rc<ComputedStyle>, kind: &Gen, flags: (bool, bool, u32), depth: usize, outs: &mut Vec<Out>) {
+        let (oof, floated, order) = flags;
+        match special {
+                    Special::Replaced(rk) => {
+                        let id = self.make_replaced(n, style, rk, None, order);
+                        outs.push(self.level_out(id, kind, oof || floated));
+                    }
+                    Special::Image(src) => {
+                        let id = self.make_replaced(n, style, ReplacedKind::Image, src, order);
+                        outs.push(self.level_out(id, kind, oof || floated));
+                    }
+                    Special::Alt(text) => {
+                        let child = self.synth_text(&text, &style, false, false);
+                        let id = self.new_box(BoxKind::Inline, n, style, false);
+                        if let Out::Inline(c) = child {
+                            self.adopt(id, vec![c]);
+                        }
+                        self.set_order(id, order, false);
+                        outs.push(Out::Inline(id));
+                    }
+                    Special::Container(ctl, text) => {
+                        let child_outs = match (&text, ctl) {
+                            (Some((t, gray)), _) => {
+                                if t.is_empty() {
+                                    Vec::new()
+                                } else {
+                                    let single = !matches!(ctl, Control::None);
+                                    vec![self.synth_text(t, &style, *gray, single)]
+                                }
+                            }
+                            (None, Control::TextArea(..)) => self.gen_children(n, &style, depth),
+                            _ => Vec::new(),
+                        };
+                        let block_level = matches!(kind, Gen::Block(_));
+                        let bk = if block_level { BoxKind::Block } else { BoxKind::InlineBlock };
+                        let fallback = match kind {
+                            Gen::Block(f) | Gen::Atomic(f) | Gen::Inline(f) => *f,
+                            _ => None,
+                        };
+                        let id = self.new_box(bk, n, style, false);
+                        if let Some(b) = self.box_mut(id) {
+                            if ctl != Control::None {
+                                b.rare_mut().control = ctl;
+                            }
+                            b.force_clip = matches!(ctl, Control::TextInput(_) | Control::Select);
+                            b.fallback = fallback;
+                        }
+                        self.set_order(id, order, oof);
+                        self.finish_block(id, child_outs);
+                        outs.push(if oof || floated || !block_level { Out::Inline(id) } else { Out::Block(id) });
+                    }
+            Special::Plain => {}
         }
     }
 

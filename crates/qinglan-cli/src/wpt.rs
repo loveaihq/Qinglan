@@ -93,6 +93,10 @@ impl Transport for WptTransport {
             file.push(part);
         }
         let mut found = if ok { std::fs::read(&file).ok() } else { None };
+        // `<link rel=match href="about:blank">`: the blank page, resolved against the test's address.
+        if rel.ends_with("about:blank") {
+            return Ok(Response { url: req.url.clone(), status: 200, headers: vec![("Content-Type".to_string(), "text/html".to_string())], body: b"<!doctype html>".to_vec() });
+        }
         // XHTML tests are parsed as HTML here (the engine has no XML parser); what XML would have unwrapped is unwrapped
         // by hand: `<style><![CDATA[ ... ]]></style>`.
         if file.extension().is_some_and(|e| e == "xht" || e == "xhtml")
@@ -349,9 +353,6 @@ fn compare(x: &Frame, y: &Frame, fuzzy: Option<(u32, u32)>) -> Result<(), String
 fn classify(src: &str) -> Option<(&'static str, &'static str)> {
     let s = src.to_ascii_lowercase().replace(": ", ":");
     let has = |ns: &[&str]| ns.iter().any(|n| s.contains(n));
-    if has(&["::before", "::after", ":before", ":after", "counter-", "counter(", "content:", "::marker", "quotes:", "open-quote"]) {
-        return Some(("2a-1 (generated content, not done)", "generated content"));
-    }
     if has(&["display:table", "display:inline-table", "<table", "table-cell", "table-row", "table-caption"]) {
         return Some(("2a-2", "tables"));
     }

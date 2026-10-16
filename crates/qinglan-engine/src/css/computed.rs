@@ -83,6 +83,8 @@ pub struct TextStyle {
     pub list_style_type: ListStyleType,
     pub list_style_position: ListStylePosition,
     pub tab_size: TabSize,
+    /// `quotes` (inherited, CSS2 12.3.1).
+    pub quotes: Quotes,
     /// The element's language (nearest `lang` attribute), inherited.
     pub lang: Option<Rc<str>>,
 }
@@ -97,6 +99,22 @@ pub struct MiscStyle {
     pub background_color: ColorValue,
 }
 
+/// Generated content (CSS2 12.2, 12.4): `content` and the counter properties. None of them is inherited.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GenStyle {
+    pub content: Content,
+    pub counter_reset: Rc<Vec<(Rc<str>, i32)>>,
+    pub counter_increment: Rc<Vec<(Rc<str>, i32)>>,
+    pub counter_set: Rc<Vec<(Rc<str>, i32)>>,
+}
+
+impl GenStyle {
+    pub fn initial() -> GenStyle {
+        let none = Rc::new(Vec::new());
+        GenStyle { content: Content::Normal, counter_reset: none.clone(), counter_increment: none.clone(), counter_set: none }
+    }
+}
+
 /// The computed style of an element.
 #[derive(Clone, Debug)]
 pub struct ComputedStyle {
@@ -105,6 +123,7 @@ pub struct ComputedStyle {
     pub font: Rc<FontStyle>,
     pub text: Rc<TextStyle>,
     pub misc: Rc<MiscStyle>,
+    pub gen_: Rc<GenStyle>,
     pub custom: Rc<CustomProps>,
 }
 
@@ -170,6 +189,7 @@ impl TextStyle {
             list_style_type: ListStyleType::Disc,
             list_style_position: ListStylePosition::Outside,
             tab_size: TabSize::Spaces(8.0),
+            quotes: Quotes::Auto,
             lang: None,
         }
     }
@@ -196,6 +216,7 @@ impl ComputedStyle {
             font: Rc::new(FontStyle::initial()),
             text: Rc::new(TextStyle::initial()),
             misc: Rc::new(MiscStyle::initial()),
+            gen_: Rc::new(GenStyle::initial()),
             custom: Rc::new(CustomProps::default()),
         }
     }
@@ -524,6 +545,7 @@ pub fn compute_text(parent: &Rc<TextStyle>, d: &Declared<'_>, ctx: &LenCtx, lang
     simple!(PropId::Cursor, Cursor, cursor);
     simple!(PropId::ListStyleType, ListStyleType, list_style_type);
     simple!(PropId::ListStylePosition, ListStylePosition, list_style_position);
+    simple!(PropId::Quotes, Quotes, quotes);
     match pick(d, PropId::TabSize) {
         Pick::Inherit => {}
         Pick::Initial => t.tab_size = TabSize::Spaces(8.0),
@@ -746,6 +768,34 @@ pub fn compute_misc(parent: &Rc<MiscStyle>, init_rc: &Rc<MiscStyle>, d: &Declare
     Rc::new(m)
 }
 
+/// `content` and the counter properties (not inherited: a missing or `inherit`-less declaration is the initial value).
+pub fn compute_gen(parent: &Rc<GenStyle>, init_rc: &Rc<GenStyle>, d: &Declared<'_>) -> Rc<GenStyle> {
+    if !d.touches(GEN_BITS) {
+        return init_rc.clone();
+    }
+    let mut g = GenStyle::initial();
+    match pick(d, PropId::Content) {
+        Pick::Inherit => g.content = parent.content.clone(),
+        Pick::Initial => {}
+        Pick::Value(Value::Content(c)) => g.content = c.clone(),
+        Pick::Value(_) => {}
+    }
+    macro_rules! counters {
+        ($prop:expr, $field:ident) => {
+            match pick(d, $prop) {
+                Pick::Inherit => g.$field = parent.$field.clone(),
+                Pick::Initial => {}
+                Pick::Value(Value::Counters(c)) => g.$field = c.clone(),
+                Pick::Value(_) => {}
+            }
+        };
+    }
+    counters!(PropId::CounterReset, counter_reset);
+    counters!(PropId::CounterIncrement, counter_increment);
+    counters!(PropId::CounterSet, counter_set);
+    Rc::new(g)
+}
+
 // -----------------------------------------------------------------------------------------------
 // Serialization (for `qinglan-cli style` and tests)
 
@@ -842,6 +892,12 @@ impl ComputedStyle {
         add(PropId::TextDecorationColor, colors(m.text_decoration_color));
         add(PropId::TextDecorationThickness, m.text_decoration_thickness.as_ref().map_or("auto".into(), Lp::to_css));
         add(PropId::BackgroundColor, colors(m.background_color));
+        let g = &self.gen_;
+        add(PropId::Content, g.content.to_css());
+        add(PropId::Quotes, t.quotes.to_css());
+        add(PropId::CounterReset, counters_to_css(&g.counter_reset));
+        add(PropId::CounterIncrement, counters_to_css(&g.counter_increment));
+        add(PropId::CounterSet, counters_to_css(&g.counter_set));
         v.push(("lang", t.lang.as_deref().unwrap_or("").to_string()));
         v
     }

@@ -223,6 +223,85 @@ impl Dim {
     }
 }
 
+/// One item of a `content` value (CSS2 12.2).
+#[derive(Clone, Debug, PartialEq)]
+pub enum ContentItem {
+    Str(Rc<str>),
+    /// `attr(name)`: the value of that attribute of the element the pseudo-element belongs to.
+    Attr(Rc<str>),
+    /// `counter(name, style)`.
+    Counter(Rc<str>, ListStyleType),
+    /// `counters(name, separator, style)`.
+    Counters(Rc<str>, Rc<str>, ListStyleType),
+    OpenQuote,
+    CloseQuote,
+    NoOpenQuote,
+    NoCloseQuote,
+    /// `url(...)`, as written (resolved against the page when the image is asked for).
+    Url(Rc<str>),
+}
+
+/// `content` (CSS2 12.2): `normal` and `none` make no pseudo-element box (on `::marker`, `normal` is the usual marker).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Content {
+    Normal,
+    None,
+    Items(Rc<Vec<ContentItem>>),
+}
+
+/// `quotes` (CSS2 12.3.1): `auto` is picked by language.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Quotes {
+    Auto,
+    None,
+    Pairs(Rc<Vec<(Rc<str>, Rc<str>)>>),
+}
+
+/// Longest `content` list, `quotes` list and counter list taken from one declaration.
+pub const MAX_GEN_ITEMS: usize = 64;
+
+impl Content {
+    pub fn to_css(&self) -> String {
+        match self {
+            Content::Normal => "normal".into(),
+            Content::None => "none".into(),
+            Content::Items(v) => v
+                .iter()
+                .map(|i| match i {
+                    ContentItem::Str(s) => format!("\"{s}\""),
+                    ContentItem::Attr(n) => format!("attr({n})"),
+                    ContentItem::Counter(n, t) => format!("counter({n}, {})", t.to_css()),
+                    ContentItem::Counters(n, sep, t) => format!("counters({n}, \"{sep}\", {})", t.to_css()),
+                    ContentItem::OpenQuote => "open-quote".into(),
+                    ContentItem::CloseQuote => "close-quote".into(),
+                    ContentItem::NoOpenQuote => "no-open-quote".into(),
+                    ContentItem::NoCloseQuote => "no-close-quote".into(),
+                    ContentItem::Url(u) => format!("url({u})"),
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        }
+    }
+}
+
+impl Quotes {
+    pub fn to_css(&self) -> String {
+        match self {
+            Quotes::Auto => "auto".into(),
+            Quotes::None => "none".into(),
+            Quotes::Pairs(p) => p.iter().map(|(a, b)| format!("\"{a}\" \"{b}\"")).collect::<Vec<_>>().join(" "),
+        }
+    }
+}
+
+/// `counter-reset` and friends as text.
+pub fn counters_to_css(v: &[(Rc<str>, i32)]) -> String {
+    if v.is_empty() {
+        return "none".into();
+    }
+    v.iter().map(|(n, i)| format!("{n} {i}")).collect::<Vec<_>>().join(" ")
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum FontSizeSpec {
     /// Absolute-size keyword index 0..=6 (xx-small .. xxx-large) or 7 (xxx-large).
@@ -362,6 +441,10 @@ pub enum Value {
     ListStylePosition(ListStylePosition),
     TabSize(TabSize),
     Cursor(CursorKind),
+    Content(Content),
+    Quotes(Quotes),
+    /// `counter-reset` / `counter-increment` / `counter-set`: the counters named and their numbers.
+    Counters(Rc<Vec<(Rc<str>, i32)>>),
     /// A property that is parsed and validated but has no effect in layer 1 (`border-radius`, ...).
     Ignored,
 }
@@ -459,9 +542,14 @@ pub enum PropId {
     BorderTopRightRadius,
     BorderBottomRightRadius,
     BorderBottomLeftRadius,
+    Content,
+    Quotes,
+    CounterReset,
+    CounterIncrement,
+    CounterSet,
 }
 
-pub const PROP_COUNT: usize = PropId::BorderBottomLeftRadius as usize + 1;
+pub const PROP_COUNT: usize = PropId::CounterSet as usize + 1;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Group {
@@ -470,6 +558,8 @@ pub enum Group {
     Font,
     Text,
     Misc,
+    /// Generated content: `content` and the counter properties (not inherited).
+    Gen,
     Ignored,
 }
 
@@ -494,7 +584,8 @@ impl PropId {
             }
             FontFamily | FontSize | FontWeight | FontStyle | LineHeight | LetterSpacing | WordSpacing => Group::Font,
             Color | TextAlign | TextIndent | TextTransform | WhiteSpaceCollapse | TextWrapMode | WordBreak | OverflowWrap
-            | Direction | Visibility | Cursor | ListStyleType | ListStylePosition | TabSize => Group::Text,
+            | Direction | Visibility | Cursor | ListStyleType | ListStylePosition | TabSize | Quotes => Group::Text,
+            Content | CounterReset | CounterIncrement | CounterSet => Group::Gen,
             VerticalAlign | TextDecorationLine | TextDecorationStyle | TextDecorationColor | TextDecorationThickness
             | BackgroundColor => Group::Misc,
             BorderTopLeftRadius | BorderTopRightRadius | BorderBottomRightRadius | BorderBottomLeftRadius => Group::Ignored,
@@ -578,6 +669,11 @@ impl PropId {
             BorderTopRightRadius => "border-top-right-radius",
             BorderBottomRightRadius => "border-bottom-right-radius",
             BorderBottomLeftRadius => "border-bottom-left-radius",
+            Content => "content",
+            Quotes => "quotes",
+            CounterReset => "counter-reset",
+            CounterIncrement => "counter-increment",
+            CounterSet => "counter-set",
         }
     }
 
@@ -598,7 +694,7 @@ pub const ALL_PROPS: [PropId; PROP_COUNT] = {
         TextIndent, TextTransform, WhiteSpaceCollapse, TextWrapMode, WordBreak, OverflowWrap, Direction, Visibility, Cursor,
         ListStyleType, ListStylePosition, TabSize, VerticalAlign, TextDecorationLine, TextDecorationStyle, TextDecorationColor,
         TextDecorationThickness, BackgroundColor, BorderTopLeftRadius, BorderTopRightRadius, BorderBottomRightRadius,
-        BorderBottomLeftRadius,
+        BorderBottomLeftRadius, Content, Quotes, CounterReset, CounterIncrement, CounterSet,
     ]
 };
 
@@ -622,6 +718,7 @@ pub const BORDER_BITS: u128 = group_bits(Group::Border);
 pub const FONT_BITS: u128 = group_bits(Group::Font);
 pub const TEXT_BITS: u128 = group_bits(Group::Text);
 pub const MISC_BITS: u128 = group_bits(Group::Misc);
+pub const GEN_BITS: u128 = group_bits(Group::Gen);
 
 /// One declaration of a declaration block: a longhand (or a custom property) with its value.
 #[derive(Clone, Debug, PartialEq)]

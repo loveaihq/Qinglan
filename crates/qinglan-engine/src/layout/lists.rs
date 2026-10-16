@@ -51,34 +51,64 @@ fn cjk_decimal(n: i32) -> String {
         .collect()
 }
 
-/// The marker text for list item number `n`: the counter text plus its suffix (css-counter-styles-3
-/// 6.1 "suffix"), or `None` for `list-style-type: none`.
-pub(crate) fn marker_text(ty: &ListStyleType, n: i32) -> Option<String> {
+/// The text of counter value `n` in counter style `ty` (css-counter-styles-3 3: the counter representation, without
+/// the suffix), as `counter()` shows it (CSS2 12.4.2). Values a style cannot show fall back to decimal (6.1 "fallback").
+pub(crate) fn representation(ty: &ListStyleType, n: i32) -> String {
     const GREEK: [char; 24] = ['α', 'β', 'γ', 'δ', 'ε', 'ζ', 'η', 'θ', 'ι', 'κ', 'λ', 'μ', 'ν', 'ξ', 'ο', 'π', 'ρ', 'σ', 'τ', 'υ', 'φ', 'χ', 'ψ', 'ω'];
     let lower: Vec<char> = ('a'..='z').collect();
     let upper: Vec<char> = ('A'..='Z').collect();
-    let dot = |s: String| Some(format!("{s}. "));
     match ty {
-        ListStyleType::None => None,
-        ListStyleType::Disc => Some("\u{2022} ".to_string()),
-        ListStyleType::Circle => Some("\u{25E6} ".to_string()),
-        ListStyleType::Square => Some("\u{25AA} ".to_string()),
-        ListStyleType::Decimal => dot(decimal(n)),
+        ListStyleType::None => String::new(),
+        ListStyleType::Disc => "\u{2022}".to_string(),
+        ListStyleType::Circle => "\u{25E6}".to_string(),
+        ListStyleType::Square => "\u{25AA}".to_string(),
+        ListStyleType::Decimal => decimal(n),
         ListStyleType::DecimalLeadingZero => {
             let body = format!("{:02}", n.unsigned_abs());
-            dot(if n < 0 { format!("-{body}") } else { body })
+            if n < 0 { format!("-{body}") } else { body }
         }
-        ListStyleType::LowerAlpha => dot(alphabetic(n, &lower).unwrap_or_else(|| decimal(n))),
-        ListStyleType::UpperAlpha => dot(alphabetic(n, &upper).unwrap_or_else(|| decimal(n))),
-        ListStyleType::LowerRoman => dot(roman(n, false).unwrap_or_else(|| decimal(n))),
-        ListStyleType::UpperRoman => dot(roman(n, true).unwrap_or_else(|| decimal(n))),
-        ListStyleType::LowerGreek => dot(alphabetic(n, &GREEK).unwrap_or_else(|| decimal(n))),
-        ListStyleType::CjkDecimal => Some(format!("{}\u{3001}", cjk_decimal(n))),
+        ListStyleType::LowerAlpha => alphabetic(n, &lower).unwrap_or_else(|| decimal(n)),
+        ListStyleType::UpperAlpha => alphabetic(n, &upper).unwrap_or_else(|| decimal(n)),
+        ListStyleType::LowerRoman => roman(n, false).unwrap_or_else(|| decimal(n)),
+        ListStyleType::UpperRoman => roman(n, true).unwrap_or_else(|| decimal(n)),
+        ListStyleType::LowerGreek => alphabetic(n, &GREEK).unwrap_or_else(|| decimal(n)),
+        ListStyleType::CjkDecimal => cjk_decimal(n),
         // `<details>` is always open in layer 1, so "closed" shows the open triangle too.
-        ListStyleType::Other(name) if name.starts_with("disclosure-") => Some("\u{25BE} ".to_string()),
-        // Counter styles layer 1 does not know fall back to decimal (6.1 "fallback").
-        ListStyleType::Other(_) => dot(decimal(n)),
-        ListStyleType::Str(s) => Some(s.to_string()),
+        ListStyleType::Other(name) if name.starts_with("disclosure-") => "\u{25BE}".to_string(),
+        // Counter styles layer 1 does not know fall back to decimal.
+        ListStyleType::Other(_) => decimal(n),
+        ListStyleType::Str(s) => s.to_string(),
+    }
+}
+
+/// The suffix a marker puts after the representation (css-counter-styles-3 6.1 to 6.4).
+fn suffix(ty: &ListStyleType) -> &'static str {
+    match ty {
+        ListStyleType::None | ListStyleType::Str(_) => "",
+        ListStyleType::Disc | ListStyleType::Circle | ListStyleType::Square => " ",
+        ListStyleType::CjkDecimal => "\u{3001}",
+        ListStyleType::Other(name) if name.starts_with("disclosure-") => " ",
+        _ => ". ",
+    }
+}
+
+/// The marker text for list item number `n`: the counter text plus its suffix (css-counter-styles-3
+/// 6.1 "suffix"), or `None` for `list-style-type: none`.
+pub(crate) fn marker_text(ty: &ListStyleType, n: i32) -> Option<String> {
+    if *ty == ListStyleType::None {
+        return None;
+    }
+    Some(format!("{}{}", representation(ty, n), suffix(ty)))
+}
+
+/// What list item `bx` shows as its marker: the text of `::marker { content }` when that is set, else the counter in
+/// the item's `list-style-type`. `None`: no marker.
+pub(crate) fn marker_string(bx: &super::boxtree::LayoutBox) -> Option<String> {
+    let ordinal = bx.ordinal()?;
+    match bx.marker_content() {
+        Some("") => None,
+        Some(t) => Some(t.to_string()),
+        None => marker_text(&bx.style.text.list_style_type, ordinal),
     }
 }
 

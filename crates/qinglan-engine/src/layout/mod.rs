@@ -19,6 +19,7 @@ pub mod block;
 pub mod boxtree;
 pub mod dump;
 pub mod floats;
+pub(crate) mod generated;
 pub mod image;
 pub mod inline;
 pub mod intrinsic;

@@ -1,0 +1,73 @@
+<!--
+viewport: 200x300
+Generated content (CSS2 12.1 to 12.5; step 2a-1). Font 10px/10px Ahem (every glyph 10x10), body margin 0, every block one line
+of 10 unless said otherwise. Generated text is shaped and broken like text from the document.
+
+a      div#a: ::before "ab", the text "xy", ::after "cd": one line of 6 glyphs, "ab" at x=0, "xy" at x=20, "cd" at x=40;
+       line (0,0 200x10).
+b      div#b has title="Q": its ::before is attr(title) ":" = "Q:" (a single run, 2 glyphs, 20 wide) and the text "z" follows
+       at x=20. y=10.
+c      div#c resets counter n; each p adds 1 and shows counter(n) "." : "1." "2." "3." (20 wide), then the letter of the p at
+       x=20. The three p are at y=20, 30, 40.
+d      Nested lists with counters() (CSS2 12.4.1): div.ol resets "item", div.li adds 1 and shows counters(item, ".") ")".
+       The outer li "a" is item 1: "1)" at x=0 (20 wide), "a" at x=20, y=50. Inside it a new div.ol makes a nested counter:
+       li b = "1.1)" (40 wide) at y=60, li c = "1.2)" at y=70. The second outer li d = "2)" at y=80.
+e      div#e quotes: "<" ">" "[" "]"; <q> has open-quote / close-quote (UA style). q a q b /q c /q: "<" a "[" b "]" c ">":
+       glyphs at x=0, 10, 20, 30, 40, 50, 60, y=90.
+f      ol#f li::marker { content: counter(list-item) ") " }: the marker replaces the usual "1. " and shows the list-item
+       counter: "1) " 30 wide, outside, just left of its li. ol padding-left is 40 (UA), so li starts at x=40 and the marker
+       at x=10. li p at y=100, li q at y=110: markers "1) " and "2) ".
+g      div#g has a float 20x25 and ::after { content:""; display:block; clear:both } : the generated block is cleared below
+       the float (y = 120 + 25 = 145 for its top, 0 high), so div#g is 25 high: (0,120 200x25). Next section at y=145.
+h      div#h is 50 wide; its ::before is "一二三四五六七八" (8 CJK glyphs of 10): breaks after 5: "一二三四五" (0,145 50x10)
+       and "六七八" (0,155 30x10), as text of the document would.
+i      div#i counter-set: k 7; ::before counter(k, upper-roman) "/" counter(k, lower-alpha) = "VII/g" (5 glyphs, 50 wide),
+       y=165. body = 175 high.
+check: text "ab" :: (0,0 20x10)
+check: text "xy" :: (20,0 20x10)
+check: text "cd" :: (40,0 20x10)
+check: block div#a :: (0,0 200x10)
+check: text "Q:" :: (0,10 20x10)
+check: text "z" :: (20,10 10x10)
+check: text "1." :: (0,20 20x10)
+check: text "2." :: (0,30 20x10)
+check: text "3." :: (0,40 20x10)
+check: text "1)" :: (0,50 20x10)
+check: text "1.1)" :: (0,60 40x10)
+check: text "1.2)" :: (0,70 40x10)
+check: text "2)" :: (0,80 20x10)
+check: text "<" :: (0,90 10x10)
+check: text "[" :: (20,90 10x10)
+check: text "]" :: (40,90 10x10)
+check: text ">" :: (60,90 10x10)
+check: marker "1) " :: (10,100 30x10)
+check: marker "2) " :: (10,110 30x10)
+check: block div#g :: (0,120 200x25)
+check: text "一二三四五" :: (0,145 50x10)
+check: text "六七八" :: (0,155 30x10)
+check: text "VII/g" :: (0,165 50x10)
+check: block body :: (0,0 200x175)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+#a::before { content: "ab" } #a::after { content: "cd" }
+#b::before { content: attr(title) ":" }
+#c { counter-reset: n } #c p { margin: 0; counter-increment: n } #c p::before { content: counter(n) "." }
+.ol { counter-reset: item } .li { counter-increment: item } .li::before { content: counters(item, ".") ")" }
+#e { quotes: "<" ">" "[" "]" }
+#f li::marker { content: counter(list-item) ") " }
+#f { margin: 0 }
+#g::after { content: ""; display: block; clear: both }
+#h { width: 50px } #h::before { content: "一二三四五六七八" }
+#i { counter-set: k 7 } #i::before { content: counter(k, upper-roman) "/" counter(k, lower-alpha) }
+</style>
+<div id="a">xy</div>
+<div id="b" title="Q">z</div>
+<div id="c"><p>a</p><p>b</p><p>c</p></div>
+<div class="ol"><div class="li">a<div class="ol"><div class="li">b</div><div class="li">c</div></div></div><div class="li">d</div></div>
+<div id="e"><q>a<q>b</q>c</q></div>
+<ol id="f"><li>p</li><li>q</li></ol>
+<div id="g"><div style="float:left;width:20px;height:25px"></div></div>
+<div id="h"></div>
+<div id="i"></div>

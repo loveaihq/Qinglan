@@ -20,6 +20,6 @@ qinglan-cli wpt [--root tests/wpt] --check                  # 跑 passing.txt �
   跑之前去掉 `<![CDATA[` 和 `]]>`。
 - 跳过：有 `<script>` 的（要 JS）、`reftest-wait`、打印（`reftest-paged`）、没有 `rel=match|mismatch` 的（testharness 等）。
 - `passing.txt`：现在通过的测试，`cargo test -p qinglan-cli --test wpt` 会跑它，退步就失败。`--update` 在跑完一个目录后重写这个目录的条目。
-- `notes.txt`：`路径<TAB>类别<TAB>原因`，人看过失败之后写的说明，优先于自动分类。自动分类按测试页里出现的特性（表格、flex、渐变、
+- `notes.txt`：`路径<TAB>类别<TAB>原因`，人看过失败之后写的说明，优先于自动分类。类别以 `bug` 开头的算 bug 类（要修或逐条写明原因）；`limit (…)` 是引擎或测试平台已知的限制（XHTML 当 HTML 解析、测试平台的字宽、没做的计数制等），`step 2x` 是后面步骤的特性。自动分类按测试页里出现的特性（表格、flex、渐变、
   生成内容……）猜"要第几步的特性"，没有命中的就是 `bug`。
 - `RESULTS-*.md`：每个目录的通过率、失败分类和每条失败的一行原因（`qinglan-cli wpt` 写的，不要手改）。

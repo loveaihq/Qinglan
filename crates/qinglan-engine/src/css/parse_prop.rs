@@ -1075,6 +1075,10 @@ fn parse_longhand(prop: PropId, cvs: &[Cv], items: &[&Cv], q: bool) -> Option<Va
         TextDecorationLine => parse_text_decoration_line(items),
         TextDecorationStyle => kw(one_ref?, super::types::TextDecorationStyle::from_keyword).map(Value::TextDecorationStyle),
         TextDecorationThickness => parse_text_decoration_thickness(one_ref?, q),
+        Content => parse_content(items),
+        Quotes => parse_quotes(items),
+        CounterReset | CounterSet => parse_counters(items, 0),
+        CounterIncrement => parse_counters(items, 1),
         BorderTopLeftRadius | BorderTopRightRadius | BorderBottomRightRadius | BorderBottomLeftRadius => {
             if (1..=2).contains(&items.len()) && items.iter().all(|c| radius_ok(c, q)) {
                 Some(Value::Ignored)
@@ -1083,6 +1087,173 @@ fn parse_longhand(prop: PropId, cvs: &[Cv], items: &[&Cv], q: bool) -> Option<Va
             }
         }
     }
+}
+
+/// A string of a `content` or `quotes` value, cut to a sane length.
+fn gen_str(s: &str) -> Rc<str> {
+    const MAX_GEN_STR: usize = 4096;
+    match s.char_indices().nth(MAX_GEN_STR) {
+        Some((i, _)) => Rc::from(s.get(..i).unwrap_or(s)),
+        None => Rc::from(s),
+    }
+}
+
+/// A counter name: any identifier but `none` and the CSS-wide keywords (css-lists-3 4.1, css-values-4 2.1).
+fn counter_name(c: &Cv) -> Option<Rc<str>> {
+    let id = c.ident()?;
+    let l = id.to_ascii_lowercase();
+    (!matches!(l.as_str(), "none" | "inherit" | "initial" | "unset" | "default" | "revert" | "revert-layer")).then(|| gen_str(id))
+}
+
+/// The arguments of a function split at the commas, white space dropped.
+fn comma_groups(args: &[Cv]) -> Vec<Vec<&Cv>> {
+    let mut groups: Vec<Vec<&Cv>> = vec![Vec::new()];
+    for a in args {
+        match a {
+            Cv::Tok(Token::Comma) => groups.push(Vec::new()),
+            c if c.is_ws() => {}
+            c => {
+                if let Some(g) = groups.last_mut() {
+                    g.push(c);
+                }
+            }
+        }
+    }
+    groups
+}
+
+/// `counter-style` of `counter()` / `counters()`: absent is `decimal`.
+fn counter_style(g: Option<&Vec<&Cv>>) -> Option<ListStyleType> {
+    match g.map(Vec::as_slice) {
+        None => Some(ListStyleType::Decimal),
+        // `none` is not a <counter-style-name> (css-counter-styles-3 2): the whole `content` is invalid.
+        Some([c]) if c.ident().is_some_and(|i| i.eq_ignore_ascii_case("none")) => None,
+        Some([c]) => ListStyleType::from_keyword(c.ident()?),
+        Some(_) => None,
+    }
+}
+
+/// `content` (CSS2 12.2). What follows a `/` is alternative text (css-content-3 2), not shown.
+fn parse_content(items: &[&Cv]) -> Option<Value> {
+    use super::types::{Content, ContentItem};
+    if let [c] = items
+        && let Some(id) = c.ident()
+    {
+        if id.eq_ignore_ascii_case("normal") {
+            return Some(Value::Content(Content::Normal));
+        }
+        if id.eq_ignore_ascii_case("none") {
+            return Some(Value::Content(Content::None));
+        }
+    }
+    let mut out: Vec<ContentItem> = Vec::new();
+    for c in items {
+        let item = match c {
+            Cv::Tok(Token::Str(s)) => ContentItem::Str(gen_str(s)),
+            Cv::Tok(Token::Url(u)) => ContentItem::Url(gen_str(u)),
+            Cv::Tok(Token::Delim('/')) if !out.is_empty() => break,
+            Cv::Tok(Token::Ident(k)) => match k.to_ascii_lowercase().as_str() {
+                "open-quote" => ContentItem::OpenQuote,
+                "close-quote" => ContentItem::CloseQuote,
+                "no-open-quote" => ContentItem::NoOpenQuote,
+                "no-close-quote" => ContentItem::NoCloseQuote,
+                _ => return None,
+            },
+            Cv::Func(n, args) => {
+                let g = comma_groups(args);
+                match n.to_ascii_lowercase().as_str() {
+                    "url" => match g.first().map(Vec::as_slice) {
+                        Some([Cv::Tok(Token::Str(u))]) => ContentItem::Url(gen_str(u)),
+                        _ => return None,
+                    },
+                    "attr" => match g.first().map(Vec::as_slice) {
+                        Some([n]) => ContentItem::Attr(gen_str(n.ident()?)),
+                        _ => return None,
+                    },
+                    "counter" if (1..=2).contains(&g.len()) => {
+                        let name = match g.first().map(Vec::as_slice) {
+                            Some([n]) => counter_name(n)?,
+                            _ => return None,
+                        };
+                        ContentItem::Counter(name, counter_style(g.get(1))?)
+                    }
+                    "counters" if (2..=3).contains(&g.len()) => {
+                        let name = match g.first().map(Vec::as_slice) {
+                            Some([n]) => counter_name(n)?,
+                            _ => return None,
+                        };
+                        let sep = match g.get(1).map(Vec::as_slice) {
+                            Some([Cv::Tok(Token::Str(s))]) => gen_str(s),
+                            _ => return None,
+                        };
+                        ContentItem::Counters(name, sep, counter_style(g.get(2))?)
+                    }
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        if out.len() < super::types::MAX_GEN_ITEMS {
+            out.push(item);
+        }
+    }
+    (!out.is_empty()).then(|| Value::Content(Content::Items(Rc::new(out))))
+}
+
+/// `quotes`: `auto`, `none` or pairs of strings (CSS2 12.3.1).
+fn parse_quotes(items: &[&Cv]) -> Option<Value> {
+    use super::types::Quotes;
+    if let [c] = items
+        && let Some(id) = c.ident()
+    {
+        if id.eq_ignore_ascii_case("auto") {
+            return Some(Value::Quotes(Quotes::Auto));
+        }
+        if id.eq_ignore_ascii_case("none") {
+            return Some(Value::Quotes(Quotes::None));
+        }
+        return None;
+    }
+    if items.is_empty() || !items.len().is_multiple_of(2) {
+        return None;
+    }
+    let strs: Vec<Rc<str>> = items
+        .iter()
+        .map(|c| match c {
+            Cv::Tok(Token::Str(s)) => Some(gen_str(s)),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let pairs: Vec<(Rc<str>, Rc<str>)> = strs.chunks(2).filter_map(|p| Some((p.first()?.clone(), p.get(1)?.clone()))).take(super::types::MAX_GEN_ITEMS).collect();
+    Some(Value::Quotes(Quotes::Pairs(Rc::new(pairs))))
+}
+
+/// `counter-reset`, `counter-increment`, `counter-set`: `none` or names each with an optional integer
+/// (`default` when there is none).
+fn parse_counters(items: &[&Cv], default: i32) -> Option<Value> {
+    if let [c] = items
+        && c.ident().is_some_and(|i| i.eq_ignore_ascii_case("none"))
+    {
+        return Some(Value::Counters(Rc::new(Vec::new())));
+    }
+    let mut out: Vec<(Rc<str>, i32)> = Vec::new();
+    let mut i = 0;
+    while let Some(c) = items.get(i) {
+        let name = counter_name(c)?;
+        i += 1;
+        let mut value = default;
+        if let Some(Cv::Tok(Token::Number { value: v, is_int, .. })) = items.get(i) {
+            if !*is_int {
+                return None;
+            }
+            value = (*v).clamp(i32::MIN as f64, i32::MAX as f64) as i32;
+            i += 1;
+        }
+        if out.len() < super::types::MAX_GEN_ITEMS {
+            out.push((name, value));
+        }
+    }
+    (!out.is_empty()).then(|| Value::Counters(Rc::new(out)))
 }
 
 #[allow(dead_code)]

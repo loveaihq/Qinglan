@@ -1024,6 +1024,11 @@ impl<'a> Matcher<'a> {
         if sel.pseudo_element.is_some() {
             return false;
         }
+        self.matches_owner(sel, el, ancestors)
+    }
+
+    /// Does the part of `sel` before its pseudo-element match `el`, the element the pseudo-element belongs to?
+    pub fn matches_owner(&mut self, sel: &Selector, el: NodeId, ancestors: Option<&AncestorFilter>) -> bool {
         if let Some(b) = ancestors {
             if sel.ancestor_keys.iter().any(|&k| !b.may_contain(k)) {
                 return false;

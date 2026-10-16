@@ -28,6 +28,8 @@ pub(crate) struct BlockResult {
     /// For a block that collapses through: the top margin alone, which decides where it is placed
     /// ("as if it had a non-zero bottom border", CSS2 8.3.1). Equal to `mt` otherwise.
     pub top_only: Margin,
+    /// The block's own bottom margin alone (what is left of it when clearance keeps it from collapsing through).
+    pub bot_only: Margin,
     /// An empty block whose top and bottom margins are adjoining (CSS2 8.3.1 last paragraphs).
     pub through: bool,
     /// The `position: relative` offset (CSS2 9.3.2), added to the box's position by whoever places it.
@@ -195,7 +197,7 @@ impl Layouter<'_> {
         let is_root = flow.root;
 
         if !self.charge(4 + bx.children.len() as u64) {
-            return BlockResult { h: LU::ZERO, ml: LU::ZERO, mt: Margin::default(), mb: Margin::default(), top_only: Margin::default(), through: false, rel: (LU::ZERO, LU::ZERO) };
+            return BlockResult { h: LU::ZERO, ml: LU::ZERO, mt: Margin::default(), mb: Margin::default(), top_only: Margin::default(), bot_only: Margin::default(), through: false, rel: (LU::ZERO, LU::ZERO) };
         }
         // The geometry is worked out in a function of its own so that its many temporaries do not
         // sit in this frame while the children (the recursion) are laid out.
@@ -294,6 +296,7 @@ impl Layouter<'_> {
                     }
                 };
                 let mut y = place(&r, at_top, cursor, strut);
+                let mut cleared = false;
                 if floats_on {
                     if avoid {
                         y = y.max(gy2);
@@ -320,6 +323,8 @@ impl Layouter<'_> {
                     // Clearance (9.5.2): the top border edge goes down to the bottom of the floats it clears.
                     if let Some(b) = clear_b {
                         self.touched = true;
+                        // Clearance also keeps an empty block's margins from collapsing through it (CSS2 8.3.1).
+                        cleared = b - base.1 > y;
                         y = y.max(b - base.1);
                     }
                     if self.touched && y != gy2 {
@@ -331,16 +336,17 @@ impl Layouter<'_> {
                 }
                 self.touched |= outer_touched;
                 self.origin_y = saved_origin;
-                if r.through {
+                if r.through && !cleared {
                     strut = strut.join(r.mt);
                 } else {
+                    let (top_m, bot_m) = if r.through { (r.top_only, r.bot_only) } else { (r.mt, r.mb) };
                     if at_top {
-                        strut = strut.join(r.mt);
+                        strut = strut.join(top_m);
                         top_margin = strut;
                         at_top = false;
                     }
                     cursor = y + r.h;
-                    strut = r.mb;
+                    strut = bot_m;
                 }
                 if let Some(o) = self.out.get_mut(cid as usize) {
                     o.x = content_left + shift + r.ml + r.rel.0;
@@ -392,7 +398,7 @@ impl Layouter<'_> {
             self.resolve_pending(Some(id), pending_mark);
         }
         let rel = relative_offset(&bx.style.boxs, cb_w, cb_h);
-        BlockResult { h: self.out.get(id as usize).map_or(LU::ZERO, |o| o.h), ml: g.ml, mt, mb, top_only, through, rel }
+        BlockResult { h: self.out.get(id as usize).map_or(LU::ZERO, |o| o.h), ml: g.ml, mt, mb, top_only, bot_only: Margin::from(m_bot), through, rel }
     }
 
     /// Edges, width and height specifications of block `id` in a containing block `cb_w` wide.
@@ -526,7 +532,7 @@ impl Layouter<'_> {
     /// plus its suffix, shaped in the item's font.
     pub(super) fn marker_shape(&mut self, id: BoxId) -> Option<(String, Vec<crate::platform::Glyph>, LU)> {
         let bx = self.tree.get(id);
-        let text = super::lists::marker_text(&bx.style.text.list_style_type, bx.ordinal()?)?;
+        let text = super::lists::marker_string(bx)?;
         let rf = self.font_for(&bx.style);
         let f = &bx.style.font;
         let q = FontQuery { families: &f.family, weight: f.weight, slant: slant_of(f.style), lang: bx.style.text.lang.as_deref() };

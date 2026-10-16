@@ -1,92 +1,80 @@
 # WPT `css/css-lists`
 
-测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-lists`，用时 12.4 秒。
+测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-lists`，用时 1.2 秒。
 
-- 通过 **68 / 143**（47.6%）
-- bug 类失败：**2**
+- 通过 **80 / 143**（55.9%）
+- bug 类失败：**14**
 - 跳过：needs JS 28，no reftest 48
 
-失败分类：bug (open) 2，step 2a-1 (generated content, not done) 71，step 2a-2 1，step 2d 1
+失败分类：bug (open) 14，limit (::marker style) 8，limit (css-lists-3 reversed()) 32，limit (list-style-image) 1，step 2a-2 1，step 2b 2，step 2c 2，step 2d 3
 
 ## 失败
 
 | 测试 | 类别 | 说明 |
 |---|---|---|
-| content-property/marker-text-matches-circle.html | step 2a-1 (generated content, not done) | uses generated content (1536 pixels differ (largest difference 255); first at (32,0): #ffffff, the reference has #000000) |
-| content-property/marker-text-matches-disc.html | step 2a-1 (generated content, not done) | uses generated content (1536 pixels differ (largest difference 255); first at (32,0): #ffffff, the reference has #000000) |
-| content-property/marker-text-matches-square.html | step 2a-1 (generated content, not done) | uses generated content (1536 pixels differ (largest difference 255); first at (32,0): #ffffff, the reference has #000000) |
-| counter-001.html | step 2a-1 (generated content, not done) | uses generated content (7680 pixels differ (largest difference 255); first at (8,64): #ffffff, the reference has #000000) |
-| counter-002.html | step 2a-1 (generated content, not done) | uses generated content (15872 pixels differ (largest difference 255); first at (8,80): #ffffff, the reference has #000000) |
-| counter-003.html | step 2a-1 (generated content, not done) | uses generated content (15872 pixels differ (largest difference 255); first at (8,80): #ffffff, the reference has #000000) |
-| counter-004.html | step 2a-1 (generated content, not done) | uses generated content (11776 pixels differ (largest difference 255); first at (8,80): #ffffff, the reference has #000000) |
-| counter-increment-inside-display-contents.html | step 2a-1 (generated content, not done) | uses generated content (256 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #000000) |
-| counter-list-item.html | step 2a-1 (generated content, not done) | uses generated content (27648 pixels differ (largest difference 255); first at (80,136): #ffffff, the reference has #000000) |
-| counter-reset-increment-overflow-underflow.html | step 2a-1 (generated content, not done) | uses generated content (22401 pixels differ (largest difference 255); first at (8,19): #ffffff, the reference has #000000) |
-| counter-reset-increment-set-display-contents.html | step 2a-1 (generated content, not done) | uses generated content (256 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #000000) |
-| counter-reset-increment-set-display-none.html | step 2a-1 (generated content, not done) | uses generated content (256 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #000000) |
-| counter-reset-inside-display-contents.html | step 2a-1 (generated content, not done) | uses generated content (256 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #000000) |
-| counter-reset-reversed-list-item-start.html | step 2a-1 (generated content, not done) | uses generated content (256 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #000000) |
-| counter-reset-reversed-list-item.html | step 2a-1 (generated content, not done) | uses generated content (256 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #000000) |
-| counter-reset-reversed-not-list-item-start.html | step 2a-1 (generated content, not done) | uses generated content (256 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #000000) |
-| counter-reset-reversed-not-list-item.html | step 2a-1 (generated content, not done) | uses generated content (512 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #000000) |
-| counter-set-001.html | step 2a-1 (generated content, not done) | uses generated content (3328 pixels differ (largest difference 255); first at (0,0): #ffffff, the reference has #000000) |
-| counters-001.html | step 2a-1 (generated content, not done) | uses generated content (9216 pixels differ (largest difference 255); first at (8,80): #ffffff, the reference has #000000) |
-| counters-002.html | step 2a-1 (generated content, not done) | uses generated content (19712 pixels differ (largest difference 255); first at (8,80): #ffffff, the reference has #000000) |
-| counters-003.html | step 2a-1 (generated content, not done) | uses generated content (19712 pixels differ (largest difference 255); first at (8,80): #ffffff, the reference has #000000) |
-| counters-004.html | step 2a-1 (generated content, not done) | uses generated content (33792 pixels differ (largest difference 255); first at (8,112): #ffffff, the reference has #000000) |
-| counters-005.html | step 2a-1 (generated content, not done) | uses generated content (1792 pixels differ (largest difference 255); first at (8,64): #ffffff, the reference has #000000) |
-| counters-006.html | step 2a-1 (generated content, not done) | uses generated content (6144 pixels differ (largest difference 255); first at (48,0): #ffffff, the reference has #000000) |
-| counters-scope-001.html | step 2a-1 (generated content, not done) | uses generated content (3072 pixels differ (largest difference 255); first at (8,64): #ffffff, the reference has #000000) |
-| counters-scope-002.html | step 2a-1 (generated content, not done) | uses generated content (13824 pixels differ (largest difference 255); first at (8,80): #ffffff, the reference has #000000) |
-| counters-scope-003.html | step 2a-1 (generated content, not done) | uses generated content (5120 pixels differ (largest difference 255); first at (8,64): #ffffff, the reference has #000000) |
-| counters-scope-004.html | step 2a-1 (generated content, not done) | uses generated content (1280 pixels differ (largest difference 255); first at (8,64): #ffffff, the reference has #000000) |
-| foo-counter-reversed-006a.html | step 2a-1 (generated content, not done) | uses generated content (5700 pixels differ (largest difference 255); first at (48,10): #ffffff, the reference has #000000) |
-| foo-counter-reversed-006b.html | step 2a-1 (generated content, not done) | uses generated content (5700 pixels differ (largest difference 255); first at (48,10): #ffffff, the reference has #000000) |
-| foo-counter-reversed-006c.html | step 2a-1 (generated content, not done) | uses generated content (5700 pixels differ (largest difference 255); first at (48,10): #ffffff, the reference has #000000) |
-| foo-counter-reversed-006d.html | step 2a-1 (generated content, not done) | uses generated content (5700 pixels differ (largest difference 255); first at (48,10): #ffffff, the reference has #000000) |
-| foo-counter-reversed-006e.html | step 2a-1 (generated content, not done) | uses generated content (5700 pixels differ (largest difference 255); first at (48,10): #ffffff, the reference has #000000) |
-| foo-counter-reversed-007a.html | step 2a-1 (generated content, not done) | uses generated content (380 pixels differ (largest difference 255); first at (0,10): #ffffff, the reference has #000000) |
-| foo-counter-reversed-007b.html | step 2a-1 (generated content, not done) | uses generated content (380 pixels differ (largest difference 255); first at (0,10): #ffffff, the reference has #000000) |
-| foo-counter-reversed-008a.html | step 2a-1 (generated content, not done) | uses generated content (5400 pixels differ (largest difference 255); first at (8,10): #ffffff, the reference has #000000) |
-| foo-counter-reversed-008b.html | step 2a-1 (generated content, not done) | uses generated content (5400 pixels differ (largest difference 255); first at (8,10): #ffffff, the reference has #000000) |
-| foo-counter-reversed-009a.html | step 2a-1 (generated content, not done) | uses generated content (200 pixels differ (largest difference 255); first at (8,10): #ffffff, the reference has #000000) |
-| foo-counter-reversed-009b.html | step 2a-1 (generated content, not done) | uses generated content (200 pixels differ (largest difference 255); first at (8,10): #ffffff, the reference has #000000) |
-| implicit-and-explicit-list-item-counters.html | step 2a-1 (generated content, not done) | uses generated content (4608 pixels differ (largest difference 255); first at (40,8): #000000, the reference has #ffffff) |
-| inline-block-list-marker.html | step 2a-1 (generated content, not done) | uses generated content (40140 pixels differ (largest difference 255); first at (56,30): #000000, the reference has #ffffff) |
-| inline-block-list.html | bug (open) | display:inline-block / inline list items: the marker of an inline-level list item (css-lists-3 3.1: only block-level list items get an outside marker) is drawn at the wrong place; not related to floats, not analysed further in 2a-1 (40140 pixels differ (largest difference 255); first at (56,30): #000000, the reference has #ffffff) |
-| inline-list-marker.html | step 2a-1 (generated content, not done) | uses generated content (52265 pixels differ (largest difference 255); first at (57,0): #000000, the reference has #ffffff) |
-| inline-list-with-table-child.html | step 2a-2 | uses tables (140693 pixels differ (largest difference 255); first at (25,25): #ffffff, the reference has #000000) |
-| inline-list.html | bug (open) | display:inline list items: same as inline-block-list.html (51933 pixels differ (largest difference 255); first at (55,0): #000000, the reference has #ffffff) |
-| li-list-item-counter-001.html | step 2a-1 (generated content, not done) | uses generated content (256 pixels differ (largest difference 255); first at (136,144): #ffffff, the reference has #000000) |
-| li-list-item-counter-005.html | step 2a-1 (generated content, not done) | uses generated content (256 pixels differ (largest difference 255); first at (24,48): #ffffff, the reference has #000000) |
-| li-value-counter-reset-001.html | step 2a-1 (generated content, not done) | uses generated content (1280 pixels differ (largest difference 255); first at (136,32): #ffffff, the reference has #000000) |
-| li-value-reversed-006a.html | step 2a-1 (generated content, not done) | uses generated content (5700 pixels differ (largest difference 255); first at (48,10): #ffffff, the reference has #000000) |
-| li-value-reversed-006b.html | step 2a-1 (generated content, not done) | uses generated content (5700 pixels differ (largest difference 255); first at (48,10): #ffffff, the reference has #000000) |
-| li-value-reversed-006c.html | step 2a-1 (generated content, not done) | uses generated content (5700 pixels differ (largest difference 255); first at (48,10): #ffffff, the reference has #000000) |
-| li-value-reversed-006d.html | step 2a-1 (generated content, not done) | uses generated content (5700 pixels differ (largest difference 255); first at (48,10): #ffffff, the reference has #000000) |
-| li-value-reversed-006e.html | step 2a-1 (generated content, not done) | uses generated content (5700 pixels differ (largest difference 255); first at (48,10): #ffffff, the reference has #000000) |
-| li-value-reversed-007a.html | step 2a-1 (generated content, not done) | uses generated content (380 pixels differ (largest difference 255); first at (0,10): #ffffff, the reference has #000000) |
-| li-value-reversed-007b.html | step 2a-1 (generated content, not done) | uses generated content (380 pixels differ (largest difference 255); first at (0,10): #ffffff, the reference has #000000) |
-| li-value-reversed-008a.html | step 2a-1 (generated content, not done) | uses generated content (5400 pixels differ (largest difference 255); first at (8,10): #ffffff, the reference has #000000) |
-| li-value-reversed-008b.html | step 2a-1 (generated content, not done) | uses generated content (5400 pixels differ (largest difference 255); first at (8,10): #ffffff, the reference has #000000) |
-| li-value-reversed-009a.html | step 2a-1 (generated content, not done) | uses generated content (200 pixels differ (largest difference 255); first at (8,10): #ffffff, the reference has #000000) |
-| li-value-reversed-009b.html | step 2a-1 (generated content, not done) | uses generated content (200 pixels differ (largest difference 255); first at (8,10): #ffffff, the reference has #000000) |
-| list-item-definition.html | step 2a-1 (generated content, not done) | uses generated content (6400 pixels differ (largest difference 255); first at (144,64): #000000, the reference has #ffffff) |
-| list-style-type-decimal-vertical-lr.html | step 2a-1 (generated content, not done) | uses generated content (17600 pixels differ (largest difference 255); first at (8,40): #000000, the reference has #ffffff) |
-| list-style-type-decimal-vertical-rl.html | step 2a-1 (generated content, not done) | uses generated content (17600 pixels differ (largest difference 255); first at (8,40): #000000, the reference has #ffffff) |
-| list-style-type-string-001a.html | step 2a-1 (generated content, not done) | uses generated content (7168 pixels differ (largest difference 255); first at (64,16): #ffffff, the reference has #000000) |
-| list-style-type-string-001b.html | step 2a-1 (generated content, not done) | uses generated content (7168 pixels differ (largest difference 255); first at (64,16): #ffffff, the reference has #000000) |
-| list-style-type-string-002.html | step 2a-1 (generated content, not done) | uses generated content (4608 pixels differ (largest difference 255); first at (0,32): #000000, the reference has #ffffff) |
-| list-style-type-string-003.html | step 2a-1 (generated content, not done) | uses generated content (4608 pixels differ (largest difference 255); first at (0,32): #000000, the reference has #ffffff) |
-| list-style-type-string-005a.html | step 2a-1 (generated content, not done) | uses generated content (19456 pixels differ (largest difference 255); first at (200,12): #000000, the reference has #ffffff) |
-| list-style-type-string-005b.html | step 2a-1 (generated content, not done) | uses generated content (48640 pixels differ (largest difference 255); first at (200,12): #000000, the reference has #ffffff) |
-| list-style-type-string-006.html | step 2a-1 (generated content, not done) | uses generated content (23552 pixels differ (largest difference 255); first at (296,12): #000000, the reference has #ffffff) |
+| content-property/marker-text-matches-circle.html | limit (::marker style) | ::marker supports only `content` (and list-style-type); the test needs the marker box styled (color, font, text-fill) or compared glyph for glyph with the built-in marker (1280 pixels differ (largest difference 255); first at (16,0): #000000, the reference has #ffffff) |
+| content-property/marker-text-matches-disc.html | limit (::marker style) | ::marker supports only `content` (and list-style-type); the test needs the marker box styled (color, font, text-fill) or compared glyph for glyph with the built-in marker (1280 pixels differ (largest difference 255); first at (16,0): #000000, the reference has #ffffff) |
+| content-property/marker-text-matches-square.html | limit (::marker style) | ::marker supports only `content` (and list-style-type); the test needs the marker box styled (color, font, text-fill) or compared glyph for glyph with the built-in marker (1280 pixels differ (largest difference 255); first at (16,0): #000000, the reference has #ffffff) |
+| counter-002.html | bug (open) | css-lists-3 4.4.1 counter inheritance (a following sibling inherits the previous sibling counters, then value-source copy) is approximated by a scope stack with the sibling-hiding rule; this page differs from the first nested or sibling-reset counter on (23808 pixels differ (largest difference 255); first at (216,64): #000000, the reference has #ffffff) |
+| counter-003.html | bug (open) | css-lists-3 4.4.1 counter inheritance (a following sibling inherits the previous sibling counters, then value-source copy) is approximated by a scope stack with the sibling-hiding rule; this page differs from the first nested or sibling-reset counter on (23808 pixels differ (largest difference 255); first at (216,64): #000000, the reference has #ffffff) |
+| counter-004.html | bug (open) | css-lists-3 4.4.1 counter inheritance (a following sibling inherits the previous sibling counters, then value-source copy) is approximated by a scope stack with the sibling-hiding rule; this page differs from the first nested or sibling-reset counter on (28160 pixels differ (largest difference 255); first at (312,48): #000000, the reference has #ffffff) |
+| counter-list-item.html | bug (open) | css-lists-3 4.4.1 counter inheritance (a following sibling inherits the previous sibling counters, then value-source copy) is approximated by a scope stack with the sibling-hiding rule; this page differs from the first nested or sibling-reset counter on (3584 pixels differ (largest difference 255); first at (184,280): #ffffff, the reference has #000000) |
+| counter-reset-increment-set-display-contents.html | bug (open) | css-lists-3 4.4.1 counter inheritance (a following sibling inherits the previous sibling counters, then value-source copy) is approximated by a scope stack with the sibling-hiding rule; this page differs from the first nested or sibling-reset counter on (512 pixels differ (largest difference 255); first at (24,48): #000000, the reference has #ffffff) |
+| counter-reset-reversed-display-none.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (512 pixels differ (largest difference 255); first at (24,8): #000000, the reference has #ffffff) |
+| counter-reset-reversed-multiple.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (1024 pixels differ (largest difference 255); first at (56,8): #000000, the reference has #ffffff) |
+| counter-reset-reversed-nested.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (2304 pixels differ (largest difference 255); first at (80,16): #000000, the reference has #ffffff) |
+| counter-reset-reversed-pseudo-001.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (1024 pixels differ (largest difference 255); first at (72,8): #000000, the reference has #ffffff) |
+| counter-reset-reversed-pseudo-002.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (256 pixels differ (largest difference 255); first at (24,8): #000000, the reference has #ffffff) |
+| counter-reset-reversed-pseudo-003.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (512 pixels differ (largest difference 255); first at (72,8): #000000, the reference has #ffffff) |
+| counter-reset-reversed-siblings-001a.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (512 pixels differ (largest difference 255); first at (24,8): #000000, the reference has #ffffff) |
+| counter-reset-reversed-siblings-001b.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (512 pixels differ (largest difference 255); first at (24,8): #000000, the reference has #ffffff) |
+| counter-reset-reversed-siblings-002.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (512 pixels differ (largest difference 255); first at (24,8): #000000, the reference has #ffffff) |
+| counter-reset-reversed-with-regular.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (256 pixels differ (largest difference 255); first at (56,48): #000000, the reference has #ffffff) |
+| counters-001.html | bug (open) | css-lists-3 4.4.1 counter inheritance (a following sibling inherits the previous sibling counters, then value-source copy) is approximated by a scope stack with the sibling-hiding rule; this page differs from the first nested or sibling-reset counter on (10496 pixels differ (largest difference 255); first at (136,48): #000000, the reference has #ffffff) |
+| counters-002.html | bug (open) | css-lists-3 4.4.1 counter inheritance (a following sibling inherits the previous sibling counters, then value-source copy) is approximated by a scope stack with the sibling-hiding rule; this page differs from the first nested or sibling-reset counter on (38656 pixels differ (largest difference 255); first at (104,48): #000000, the reference has #ffffff) |
+| counters-003.html | bug (open) | css-lists-3 4.4.1 counter inheritance (a following sibling inherits the previous sibling counters, then value-source copy) is approximated by a scope stack with the sibling-hiding rule; this page differs from the first nested or sibling-reset counter on (38656 pixels differ (largest difference 255); first at (104,48): #000000, the reference has #ffffff) |
+| counters-004.html | bug (open) | css-lists-3 4.4.1 counter inheritance (a following sibling inherits the previous sibling counters, then value-source copy) is approximated by a scope stack with the sibling-hiding rule; this page differs from the first nested or sibling-reset counter on (55808 pixels differ (largest difference 255); first at (88,48): #000000, the reference has #ffffff) |
+| counters-scope-002.html | bug (open) | css-lists-3 4.4.1 counter inheritance (a following sibling inherits the previous sibling counters, then value-source copy) is approximated by a scope stack with the sibling-hiding rule; this page differs from the first nested or sibling-reset counter on (2816 pixels differ (largest difference 255); first at (728,48): #000000, the reference has #ffffff) |
+| counters-scope-003.html | bug (open) | css-lists-3 4.4.1 counter inheritance (a following sibling inherits the previous sibling counters, then value-source copy) is approximated by a scope stack with the sibling-hiding rule; this page differs from the first nested or sibling-reset counter on (1024 pixels differ (largest difference 255); first at (264,48): #000000, the reference has #ffffff) |
+| counters-scope-004.html | bug (open) | css-lists-3 4.4.1 counter inheritance (a following sibling inherits the previous sibling counters, then value-source copy) is approximated by a scope stack with the sibling-hiding rule; this page differs from the first nested or sibling-reset counter on (1024 pixels differ (largest difference 255); first at (120,48): #000000, the reference has #ffffff) |
+| foo-counter-reversed-006a.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (2740 pixels differ (largest difference 255); first at (8,20): #000000, the reference has #ffffff) |
+| foo-counter-reversed-006b.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (2740 pixels differ (largest difference 255); first at (8,20): #000000, the reference has #ffffff) |
+| foo-counter-reversed-006c.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (2740 pixels differ (largest difference 255); first at (8,20): #000000, the reference has #ffffff) |
+| foo-counter-reversed-006d.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (2740 pixels differ (largest difference 255); first at (8,20): #000000, the reference has #ffffff) |
+| foo-counter-reversed-006e.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (2740 pixels differ (largest difference 255); first at (8,20): #000000, the reference has #ffffff) |
+| foo-counter-reversed-007a.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (9920 pixels differ (largest difference 255); first at (8,20): #000000, the reference has #ffffff) |
+| foo-counter-reversed-007b.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (9920 pixels differ (largest difference 255); first at (8,20): #000000, the reference has #ffffff) |
+| foo-counter-reversed-008a.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (1300 pixels differ (largest difference 255); first at (58,10): #ffffff, the reference has #000000) |
+| foo-counter-reversed-008b.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (1300 pixels differ (largest difference 255); first at (58,10): #ffffff, the reference has #000000) |
+| foo-counter-reversed-009a.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (5100 pixels differ (largest difference 255); first at (8,20): #000000, the reference has #ffffff) |
+| foo-counter-reversed-009b.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (5100 pixels differ (largest difference 255); first at (8,20): #000000, the reference has #ffffff) |
+| inline-block-list-marker.html | limit (::marker style) | ::marker supports only `content` (and list-style-type); the test needs the marker box styled (color, font, text-fill) or compared glyph for glyph with the built-in marker (38796 pixels differ (largest difference 255); first at (56,30): #000000, the reference has #ffffff) |
+| inline-block-list.html | bug (open) | marker of an inline-level list item (display:inline / inline-block list-item): css-lists-3 3.1 gives them no outside marker; the engine draws one at the wrong place; not related to floats (40140 pixels differ (largest difference 255); first at (56,30): #000000, the reference has #ffffff) |
+| inline-list-marker.html | limit (::marker style) | ::marker supports only `content` (and list-style-type); the test needs the marker box styled (color, font, text-fill) or compared glyph for glyph with the built-in marker (51113 pixels differ (largest difference 255); first at (57,0): #000000, the reference has #ffffff) |
+| inline-list-with-table-child.html | step 2a-2 | uses tables (140756 pixels differ (largest difference 255); first at (25,25): #ffffff, the reference has #000000) |
+| inline-list.html | bug (open) | marker of an inline-level list item (display:inline / inline-block list-item): css-lists-3 3.1 gives them no outside marker; the engine draws one at the wrong place; not related to floats (51933 pixels differ (largest difference 255); first at (55,0): #000000, the reference has #ffffff) |
+| li-value-reversed-006a.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (2360 pixels differ (largest difference 255); first at (8,40): #000000, the reference has #ffffff) |
+| li-value-reversed-006b.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (2740 pixels differ (largest difference 255); first at (8,20): #000000, the reference has #ffffff) |
+| li-value-reversed-006c.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (2360 pixels differ (largest difference 255); first at (8,40): #000000, the reference has #ffffff) |
+| li-value-reversed-006d.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (2740 pixels differ (largest difference 255); first at (8,20): #000000, the reference has #ffffff) |
+| li-value-reversed-006e.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (2740 pixels differ (largest difference 255); first at (8,20): #000000, the reference has #ffffff) |
+| li-value-reversed-007a.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (6260 pixels differ (largest difference 255); first at (118,40): #ffffff, the reference has #000000) |
+| li-value-reversed-007b.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (6260 pixels differ (largest difference 255); first at (118,40): #ffffff, the reference has #000000) |
+| li-value-reversed-008a.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (700 pixels differ (largest difference 255); first at (58,10): #ffffff, the reference has #000000) |
+| li-value-reversed-008b.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (700 pixels differ (largest difference 255); first at (58,10): #ffffff, the reference has #000000) |
+| li-value-reversed-009a.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (1400 pixels differ (largest difference 255); first at (118,230): #ffffff, the reference has #000000) |
+| li-value-reversed-009b.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (1600 pixels differ (largest difference 255); first at (68,170): #000000, the reference has #ffffff) |
+| list-style-type-decimal-vertical-lr.html | step 2c | uses painting effects (17600 pixels differ (largest difference 255); first at (8,40): #000000, the reference has #ffffff) |
+| list-style-type-decimal-vertical-rl.html | step 2c | uses painting effects (17600 pixels differ (largest difference 255); first at (8,40): #000000, the reference has #ffffff) |
+| list-style-type-string-002.html | step 2d | uses text features (21504 pixels differ (largest difference 255); first at (0,32): #000000, the reference has #ffffff) |
+| list-style-type-string-003.html | step 2d | uses text features (21504 pixels differ (largest difference 255); first at (0,32): #000000, the reference has #ffffff) |
+| list-style-type-string-005a.html | step 2b | uses flex or grid (19456 pixels differ (largest difference 255); first at (200,12): #000000, the reference has #ffffff) |
+| list-style-type-string-005b.html | step 2b | uses flex or grid (48640 pixels differ (largest difference 255); first at (200,12): #000000, the reference has #ffffff) |
 | list-style-type-string-007.html | step 2d | uses text features (5660 pixels differ (largest difference 255); first at (188,18): #ffffff, the reference has #000000) |
-| list-type-none-style-image.html | step 2a-1 (generated content, not done) | uses generated content (256 pixels differ (largest difference 255); first at (16,16): #ffffff, the reference has #000000) |
-| marker-counter.html | step 2a-1 (generated content, not done) | uses generated content (1536 pixels differ (largest difference 255); first at (184,96): #ffffff, the reference has #000000) |
-| marker-webkit-text-fill-color.html | step 2a-1 (generated content, not done) | uses generated content (28835 pixels differ (largest difference 255); first at (8,13): #ff0000, the reference has #008000) |
-| nested-marker-styling.html | step 2a-1 (generated content, not done) | uses generated content (9216 pixels differ (largest difference 255); first at (8,8): #ffffff, the reference has #000000) |
-| nested-marker.html | step 2a-1 (generated content, not done) | uses generated content (7680 pixels differ (largest difference 255); first at (96,16): #ffffff, the reference has #000000) |
+| list-type-none-style-image.html | limit (list-style-image) | list-style-image is not supported (an image marker is a later step) (256 pixels differ (largest difference 255); first at (16,16): #ffffff, the reference has #000000) |
+| marker-counter.html | limit (::marker style) | ::marker supports only `content` (and list-style-type); the test needs the marker box styled (color, font, text-fill) or compared glyph for glyph with the built-in marker (2432 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #000000) |
+| marker-webkit-text-fill-color.html | limit (::marker style) | ::marker supports only `content` (and list-style-type); the test needs the marker box styled (color, font, text-fill) or compared glyph for glyph with the built-in marker (28835 pixels differ (largest difference 255); first at (8,13): #ff0000, the reference has #008000) |
+| nested-marker-styling.html | limit (::marker style) | ::marker supports only `content` (and list-style-type); the test needs the marker box styled (color, font, text-fill) or compared glyph for glyph with the built-in marker (5888 pixels differ (largest difference 255); first at (24,8): #ffffff, the reference has #000000) |
 
 ## 通过
 
@@ -99,24 +87,31 @@
 - content-property/marker-text-matches-lower-roman.html
 - content-property/marker-text-matches-upper-latin.html
 - content-property/marker-text-matches-upper-roman.html
+- counter-001.html
+- counter-increment-inside-display-contents.html
 - counter-invalid.htm
 - counter-list-item-2.html
 - counter-list-item-3.html
 - counter-order-display-contents.html
-- counter-reset-reversed-display-none.html
-- counter-reset-reversed-multiple.html
-- counter-reset-reversed-nested.html
-- counter-reset-reversed-pseudo-001.html
-- counter-reset-reversed-pseudo-002.html
-- counter-reset-reversed-pseudo-003.html
-- counter-reset-reversed-siblings-001a.html
-- counter-reset-reversed-siblings-001b.html
-- counter-reset-reversed-siblings-002.html
+- counter-reset-increment-overflow-underflow.html
+- counter-reset-increment-set-display-none.html
+- counter-reset-inside-display-contents.html
+- counter-reset-reversed-list-item-start.html
+- counter-reset-reversed-list-item.html
+- counter-reset-reversed-not-list-item-start.html
+- counter-reset-reversed-not-list-item.html
 - counter-reset-reversed-siblings-003.html
-- counter-reset-reversed-with-regular.html
+- counter-set-001.html
+- counters-005.html
+- counters-006.html
+- counters-scope-001.html
+- implicit-and-explicit-list-item-counters.html
+- li-list-item-counter-001.html
 - li-list-item-counter-002.html
 - li-list-item-counter-003.html
 - li-list-item-counter-004.html
+- li-list-item-counter-005.html
+- li-value-counter-reset-001.html
 - li-value-reversed-001.html
 - li-value-reversed-002.html
 - li-value-reversed-003.html
@@ -146,6 +141,7 @@
 - list-and-block-in-inline.html
 - list-and-flex-001.html
 - list-and-grid-001.html
+- list-item-definition.html
 - list-marker-alignment.html
 - list-marker-counter-style-fallback-rtl.html
 - list-marker-rtl-string-width.html
@@ -154,7 +150,11 @@
 - list-style-image-gradients.html
 - list-style-position-001.html
 - list-style-type-decimal-line-height.html
+- list-style-type-string-001a.html
+- list-style-type-string-001b.html
+- list-style-type-string-006.html
 - marker-quotes.html
+- nested-marker.html
 - outside-marker-covered-by-relpos-block-link.html
 - outside-marker-in-multicol-relpos-content.html
 - outside-marker-with-relpos-block-content.html

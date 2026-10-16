@@ -8,11 +8,11 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use super::computed::{
-    ComputedStyle, CustomProps, Declared, Env, compute_border, compute_box, compute_font, compute_misc, compute_text,
+    ComputedStyle, CustomProps, Declared, Env, compute_border, compute_box, compute_font, compute_gen, compute_misc, compute_text,
 };
 use super::media::MediaEnv;
 use super::parse_prop::{ParseEnv, parse_declaration};
-use super::selector::{AncestorFilter, AttrOp, AttrSel, CaseSens, Matcher, PseudoClass, Selector, Simple, selector_sensitive};
+use super::selector::{AncestorFilter, AttrOp, AttrSel, CaseSens, Matcher, PseudoClass, PseudoElement, Selector, Simple, selector_sensitive};
 use super::stylesheet::{ImportRule, Rule, Stylesheet};
 use super::syntax::{Cv, trim_ws};
 use super::tokenizer::Token;
@@ -139,6 +139,9 @@ pub struct RuleSet {
     layers: LayerTree,
     layer_ord: Vec<u32>,
     next_order: u32,
+    /// The rules of `::before`, `::after` and `::marker` (matched against the element they belong to).
+    pseudo_rules: Vec<IndexedRule>,
+    pseudo: Buckets,
 }
 
 impl Default for RuleSet {
@@ -157,6 +160,8 @@ impl RuleSet {
             layers: LayerTree::new(),
             layer_ord: vec![1],
             next_order: 0,
+            pseudo_rules: Vec::new(),
+            pseudo: Buckets::default(),
         }
     }
 
@@ -226,8 +231,16 @@ impl RuleSet {
     }
 
     fn push(&mut self, sel: &Rc<Selector>, block: &Rc<DeclBlock>, origin: Origin, layer: u32) {
-        // Selectors with a pseudo-element never match an element's own style.
-        if sel.pseudo_element.is_some() {
+        // Selectors with a pseudo-element never match an element's own style; the generated-content ones are kept
+        // apart and matched against the element they belong to (`pseudo_styles`).
+        if let Some(pe) = sel.pseudo_element {
+            if matches!(pe, PseudoElement::Before | PseudoElement::After | PseudoElement::Marker) {
+                let idx = self.pseudo_rules.len() as u32;
+                let order = self.next_order;
+                self.next_order += 1;
+                self.pseudo_rules.push(IndexedRule { selector: sel.clone(), block: block.clone(), origin, layer_node: layer, order });
+                self.pseudo.add(idx, sel);
+            }
             return;
         }
         let idx = self.rules.len() as u32;
@@ -350,7 +363,13 @@ impl Buckets {
         let start = out.len();
         let test = |idx: u32, matcher: &mut Matcher<'_>, out: &mut Vec<u32>| {
             if let Some(r) = rules.get(idx as usize)
-                && (if relaxed { matcher.may_match_ignoring_siblings(&r.selector, el, Some(bloom)) } else { matcher.matches(&r.selector, el, Some(bloom)) })
+                && (if relaxed {
+                    matcher.may_match_ignoring_siblings(&r.selector, el, Some(bloom))
+                } else if r.selector.pseudo_element.is_some() {
+                    matcher.matches_owner(&r.selector, el, Some(bloom))
+                } else {
+                    matcher.matches(&r.selector, el, Some(bloom))
+                })
             {
                 out.push(idx);
             }
@@ -476,6 +495,8 @@ pub struct StyleInput<'a> {
 /// The result of styling a document: a style per element node.
 pub struct StyleTree {
     pub styles: Vec<Option<Rc<ComputedStyle>>>,
+    /// The styles of `::before`, `::after` and `::marker` of the elements that have rules for them.
+    pub pseudo: FxHashMap<NodeId, [Option<Rc<ComputedStyle>>; 3]>,
     /// Counters and (when `StyleOptions::profile` is set) the time spent in each part of the cascade.
     pub timings: CascadeTimings,
 }
@@ -534,6 +555,17 @@ impl Lap {
 impl StyleTree {
     pub fn get(&self, id: NodeId) -> Option<&Rc<ComputedStyle>> {
         self.styles.get(id as usize).and_then(Option::as_ref)
+    }
+
+    /// The style of a generated-content pseudo-element of element `id`, if some rule matches it.
+    pub fn pseudo(&self, id: NodeId, which: PseudoElement) -> Option<&Rc<ComputedStyle>> {
+        let i = match which {
+            PseudoElement::Before => 0,
+            PseudoElement::After => 1,
+            PseudoElement::Marker => 2,
+            _ => return None,
+        };
+        self.pseudo.get(&id)?.get(i)?.as_ref()
     }
 }
 
@@ -652,6 +684,8 @@ pub fn compute_styles(input: StyleInput<'_>) -> StyleTree {
     let mut lap = Lap::new(profile);
     let n = doc.nodes.len();
     let mut styles: Vec<Option<Rc<ComputedStyle>>> = vec![None; n];
+    let mut pseudo: FxHashMap<NodeId, [Option<Rc<ComputedStyle>>; 3]> = FxHashMap::default();
+    let has_pseudo = !ua.pseudo_rules.is_empty() || !author.pseudo_rules.is_empty();
     let mut matcher = Matcher::new(doc);
     let mut ancestors = AncestorFilter::new();
     let init = Rc::new(ComputedStyle::initial());
@@ -898,6 +932,36 @@ pub fn compute_styles(input: StyleInput<'_>) -> StyleTree {
         if let Some(slot) = styles.get_mut(el as usize) {
             *slot = Some(style.clone());
         }
+        if has_pseudo {
+            let mut found: [Vec<Entry>; 3] = Default::default();
+            for set in [ua, author] {
+                matched.clear();
+                set.pseudo.gather(&set.pseudo_rules, &mut matcher, el, name, is_root, &ancestors, false, &mut matched);
+                for &i in &matched {
+                    let Some(r) = set.pseudo_rules.get(i as usize) else { continue };
+                    let k = match r.selector.pseudo_element {
+                        Some(PseudoElement::Before) => 0,
+                        Some(PseudoElement::After) => 1,
+                        Some(PseudoElement::Marker) => 2,
+                        _ => continue,
+                    };
+                    if let Some(v) = found.get_mut(k) {
+                        push_entries(v, r, set);
+                    }
+                }
+            }
+            let mut slots: [Option<Rc<ComputedStyle>>; 3] = Default::default();
+            for (slot, entries) in slots.iter_mut().zip(found.iter_mut()) {
+                if entries.is_empty() {
+                    continue;
+                }
+                entries.sort_by_key(|e| e.key);
+                *slot = Some(Rc::new(style_for(doc, entries, &style, &init, &env, root_font_size, None, false, &mut var_cache)));
+            }
+            if slots.iter().any(Option::is_some) {
+                pseudo.insert(el, slots);
+            }
+        }
         // Descend (template contents are a separate tree and are not styled).
         let keys_start = key_stack.len();
         matcher.push_bloom_keys(el, &mut key_stack);
@@ -907,7 +971,7 @@ pub fn compute_styles(input: StyleInput<'_>) -> StyleTree {
         let first = if doc.is_template(el) { NONE } else { doc.first_child(el) };
         frames.push(Frame { style, next: first, keys_start, ctx: mix(parent_ctx, sig) });
     }
-    StyleTree { styles, timings }
+    StyleTree { styles, pseudo, timings }
 }
 
 fn push_entries(entries: &mut Vec<Entry>, r: &IndexedRule, set: &RuleSet) {
@@ -1025,7 +1089,8 @@ fn style_for(
     let border = compute_border(&parent.border, &init.border, &declared, &own);
     let text = compute_text(&parent.text, &declared, &own, lang);
     let misc = compute_misc(&parent.misc, &init.misc, &declared, &own);
-    ComputedStyle { boxs, border, font, text, misc, custom }
+    let gen_ = compute_gen(&parent.gen_, &init.gen_, &declared);
+    ComputedStyle { boxs, border, font, text, misc, gen_, custom }
 }
 
 /// The value `revert` / `revert-layer` rolls back to for property `p`, looking at `entries[..i]`.

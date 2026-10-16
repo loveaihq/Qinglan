@@ -769,7 +769,7 @@ impl Layouter<'_> {
         // An inside list marker is the first inline of the item (css-lists-3 3.1).
         if bx.ordinal().is_some()
             && bx.style.text.list_style_position == ListStylePosition::Inside
-            && let Some(text) = super::lists::marker_text(&bx.style.text.list_style_type, bx.ordinal().unwrap_or(0))
+            && let Some(text) = super::lists::marker_string(bx)
         {
             let mut it = make_item(ItemKind::Text, block, block, &bx.style, text);
             it.collapsible = false;
@@ -1289,7 +1289,8 @@ impl Layouter<'_> {
                             && let Some(&(_, d)) = fdims.iter().find(|(i, _)| *i == f)
                         {
                             placed.push(f);
-                            if before + d.w <= line_w - line_indent {
+                            // Floats do not reorder (9.5.1 rule 5): one that waits for the next line holds back the later ones.
+                            if before + d.w <= line_w - line_indent && deferred.is_empty() {
                                 self.put_float(fid, d, content_w, left, top + y);
                                 continue;
                             }

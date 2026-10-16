@@ -152,3 +152,6 @@ img[align=right i] { margin-left: 3px; }
 details, summary { display: block; }
 details > summary:first-of-type { display: list-item; list-style-type: disclosure-closed; list-style-position: inside; }
 marquee { display: inline-block; text-align: initial; overflow: hidden !important; }
+
+q::before { content: open-quote }
+q::after { content: close-quote }
