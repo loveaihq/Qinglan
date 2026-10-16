@@ -562,3 +562,80 @@ fn an_image_bigger_than_a_page_entry_is_still_kept() {
     cache.insert("huge".into(), &std::sync::Arc::new(huge));
     assert!(cache.get("huge").is_none(), "over half the budget: not kept");
 }
+
+// ---- review fixes: what a page can make the browser open ---------------------------------------------------------
+
+#[test]
+fn file_urls_are_local_files_only() {
+    use qinglan_engine::net::file::url_to_path;
+    let path = |s: &str| url_to_path(&u(s)).map(|p| p.to_string_lossy().replace('\\', "/"));
+    assert_eq!(path("file:///C:/dir/a.html").as_deref(), Some("C:/dir/a.html"));
+    assert_eq!(path("file://localhost/C:/dir/a%20b.html").as_deref(), Some("C:/dir/a b.html"));
+    assert_eq!(path("file:///home/x/a.html").as_deref(), Some("/home/x/a.html"));
+    // A host that is not this computer: a network share.
+    assert_eq!(path("file://server/share/a.html"), None);
+    assert_eq!(path("file://192.168.0.1/c$/a.html"), None);
+    // UNC and device paths, however they are written.
+    assert_eq!(path("file:////host/share/a.html"), None);
+    assert_eq!(path("file:///%5C%5Chost%5Cshare%5Ca.html"), None);
+    assert_eq!(path("file:///%5C%5C%3F%5CC:%5Ca.html"), None);
+    assert_eq!(path("file:///%5C%5C.%5Cpipe%5Cx"), None);
+    assert_eq!(path("file://///host/share/a.html"), None);
+    // DOS device names are not files (opening one can block forever).
+    for dev in ["con", "NUL", "aux.txt", "C:/x/COM1", "C:/x/lpt9.html", "C:/prn"] {
+        assert_eq!(path(&format!("file:///{}", dev.trim_start_matches('/'))), None, "{dev}");
+    }
+    assert!(path("file:///C:/x/console.html").is_some());
+    assert!(path("file:///C:/x/com10.html").is_some());
+    // The policy says so too, for the user as well as for pages.
+    let nav = ResourceKind::Document;
+    assert_eq!(policy::plan(&u("file:////host/share/a.html"), nav, None), Err(Refusal::NotLocalFile));
+    assert_eq!(policy::plan(&u("file://server/share/a.html"), nav, None), Err(Refusal::NotLocalFile));
+    assert_eq!(policy::plan(&u("file:///C:/x/a.html"), nav, None), Ok(Plan::File), "a typed local path still works");
+}
+
+#[test]
+fn a_page_cannot_make_the_browser_open_a_file() {
+    // The same decision the window makes for a click, a middle click, Ctrl-click and target=_blank (all of them
+    // navigate or start a window with the clicked page's address as the origin).
+    let page = u("https://evil.example/index.html");
+    let nav = ResourceKind::Document;
+    for target in ["file:///C:/Users/x/secret.html", "file:////host/share/a.html", "file://server/share/a.html", "FILE:///C:/a.html", "file:///C:/a.html#x"] {
+        assert!(policy::plan(&u(target), nav, Some(&page)).is_err(), "{target}");
+    }
+    // <base href="file:///C:/"> turns relative links into file: links; the page address is still the origin.
+    let doc = parse_document("<base href='file:///C:/Users/x/'><a href='secret.html'>a</a><a target=_blank href='../y.html'>b</a>".to_string());
+    let res = PageResources::new(&page, &doc, Encoding::UTF_8);
+    assert_eq!(res.base().scheme, "file");
+    for href in ["secret.html", "../y.html", "//host/share/z.html", "/abs.html"] {
+        let link = res.base().join(href).unwrap();
+        assert_eq!(policy::plan(&link, nav, Some(&page)), Err(Refusal::LocalFile), "{href}");
+    }
+    // The same document, as a local page, still cannot navigate to files by a link.
+    let local = u("file:///C:/saved/page.html");
+    assert_eq!(policy::plan(&u("file:///C:/other.html"), nav, Some(&local)), Err(Refusal::LocalFile));
+    // http(s) links from the page are fine.
+    assert_eq!(policy::plan(&u("https://other.example/"), nav, Some(&page)), Ok(Plan::Network));
+}
+
+#[test]
+fn mailto_is_rebuilt_from_rfc_6068_characters() {
+    let m = |s: &str| policy::sanitize_mailto(&u(s));
+    assert_eq!(m("mailto:a@b.example"), "mailto:a@b.example");
+    assert_eq!(m("mailto:a@b.example?subject=Hello%20there&body=Hi%0D%0Abye"), "mailto:a@b.example?subject=Hello%20there&body=Hi%0D%0Abye");
+    assert_eq!(m("mailto:a@b.example,c@d.example?cc=e@f.example#frag"), "mailto:a@b.example,c@d.example?cc=e@f.example");
+    // The reviewer's input: a quote and a space would end the quoted argument of the mail program's command line.
+    let evil = m("mailto:a@b.c\" /a \"\\\\evil\\x.exe");
+    assert_eq!(evil, "mailto:a@b.c%22%20%2Fa%20%22%5C%5Cevil%5Cx.exe");
+    for bad in ['"', ' ', '\\', '<', '>', '|', '^', '`', '{', '}', '\n', '\t'] {
+        assert!(!evil.contains(bad), "{bad:?}");
+    }
+    // A stray %, control characters and non-ASCII text.
+    assert_eq!(m("mailto:a@b.c?subject=100%&x=%zz"), "mailto:a@b.c?subject=100%25&x=%25zz");
+    assert_eq!(m("mailto:a@b.c?subject=\u{4f60}\u{1}\u{597d}"), "mailto:a@b.c?subject=%E4%BD%A0%01%E5%A5%BD");
+    // Cut at 2 KB, never in the middle of an escape.
+    let long = m(&format!("mailto:a@b.c?body={}", "\u{4f60}".repeat(5000)));
+    assert!(long.len() <= policy::MAX_MAILTO && long.len() > policy::MAX_MAILTO - 9, "{}", long.len());
+    assert!(long.ends_with("%A0") || long.ends_with("%BD") || long.ends_with("%E4"), "{long}");
+    assert_eq!(long.matches('%').count() * 3, long.len() - "mailto:a@b.c?body=".len(), "only whole %XX units");
+}

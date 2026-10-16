@@ -77,6 +77,27 @@ enum NavKind {
     History,
 }
 
+/// Who started a navigation. It decides which schemes may be opened: only the user may open `file:`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Origin {
+    /// Typed address, command line, history, reload: the user asked for exactly this address.
+    User,
+    /// A link (or `target=_blank`, or a new window for a link) on the page on screen: page-controlled.
+    Page,
+}
+
+/// May `url` be opened as a page, given who asked? A navigation the page started carries the page's
+/// address, so the scheme policy refuses `file:` (a link, `<base href="file:///...">`, ...).
+fn plan_navigation(url: &Url, origin: Origin, page: Option<&Url>) -> Result<policy::Plan, Refusal> {
+    match origin {
+        Origin::User => policy::plan(url, ResourceKind::Document, None),
+        Origin::Page => {
+            let blank = blank_url();
+            policy::plan(url, ResourceKind::Document, Some(page.unwrap_or(&blank)))
+        }
+    }
+}
+
 struct Nav {
     ticket: Ticket,
     url: Url,
@@ -330,7 +351,7 @@ impl Browser {
     fn open_typed(&mut self, text: &str) {
         let Some(addr) = address::classify(text) else { return };
         match Url::parse(&addr, None) {
-            Ok(url) => self.navigate(url, NavKind::New, 0.0),
+            Ok(url) => self.navigate(url, NavKind::New, 0.0, Origin::User),
             Err(_) => self.show_failure(Failure::BadAddress, addr, NavKind::New),
         }
     }
@@ -340,13 +361,13 @@ impl Browser {
         kind != NavKind::Reload && !page.is_error && page.layout.is_some() && (kind == NavKind::History || url.fragment.is_some()) && page.url.serialize(true) == url.serialize(true)
     }
 
-    fn navigate(&mut self, url: Url, kind: NavKind, scroll: f32) {
+    fn navigate(&mut self, url: Url, kind: NavKind, scroll: f32, origin: Origin) {
         if self.is_same_document(&url, kind) {
             self.same_document(url, kind, scroll);
             return;
         }
         // Refusals (mailto:, javascript:, ...) leave the page and its loading alone.
-        if let Err(refusal) = policy::plan(&url, ResourceKind::Document, None) {
+        if let Err(refusal) = plan_navigation(&url, origin, self.page.as_ref().map(|p| &p.url)) {
             self.on_refusal(refusal, url, kind);
             return;
         }
@@ -382,7 +403,8 @@ impl Browser {
     fn on_refusal(&mut self, refusal: Refusal, url: Url, kind: NavKind) {
         match refusal {
             Refusal::Mailto => {
-                let addr = url.href();
+                // What is shown is exactly what is handed over, rebuilt so that it cannot carry arguments.
+                let addr = policy::sanitize_mailto(&url);
                 if self.ui.confirm(self.s.mailto_caption, &fill(self.s.mailto_text, &addr)) {
                     self.ui.open_external(&addr);
                 }
@@ -509,7 +531,7 @@ impl Browser {
         let Some(display) = self.page.as_ref().map(|p| p.display.clone()) else { return };
         let scroll = self.scroll;
         match Url::parse(&display, None) {
-            Ok(url) => self.navigate(url, NavKind::Reload, scroll),
+            Ok(url) => self.navigate(url, NavKind::Reload, scroll, Origin::User),
             Err(_) => self.show_failure(Failure::BadAddress, display, NavKind::Reload),
         }
     }
@@ -519,7 +541,7 @@ impl Browser {
         let Some(entry) = (if back { self.history.back() } else { self.history.forward() }) else { return };
         self.update_nav_buttons();
         match Url::parse(&entry.url, None) {
-            Ok(url) => self.navigate(url, NavKind::History, entry.scroll),
+            Ok(url) => self.navigate(url, NavKind::History, entry.scroll, Origin::User),
             Err(_) => self.show_failure(Failure::BadAddress, entry.url, NavKind::History),
         }
     }
@@ -544,7 +566,8 @@ impl Browser {
     }
 
     fn open_in_new_window(&mut self, url: &Url) {
-        if let Err(refusal) = policy::plan(url, ResourceKind::Document, None) {
+        // A new window starts with its address as if typed, so the page-started rules are applied here.
+        if let Err(refusal) = plan_navigation(url, Origin::Page, self.page.as_ref().map(|p| &p.url)) {
             self.on_refusal(refusal, url.clone(), NavKind::New);
             return;
         }
@@ -823,7 +846,7 @@ impl Browser {
             MouseButton::Left if ctrl || shift || blank => self.open_in_new_window(&url),
             MouseButton::Left => {
                 self.hover = None;
-                self.navigate(url, NavKind::New, 0.0);
+                self.navigate(url, NavKind::New, 0.0, Origin::Page);
             }
         }
     }
@@ -1125,5 +1148,30 @@ mod tests {
     #[test]
     fn the_blank_address_is_about_blank() {
         assert_eq!(blank_url().href(), "about:blank");
+    }
+
+    fn url(s: &str) -> Url {
+        Url::parse(s, None).unwrap_or_else(|_| blank_url())
+    }
+
+    #[test]
+    fn only_the_user_can_open_a_file_address() {
+        let page = url("https://evil.example/");
+        let local = url("file:///C:/Users/x/page.html");
+        // Typed, from the command line, history, reload: the user's own request.
+        assert_eq!(plan_navigation(&local, Origin::User, Some(&page)), Ok(policy::Plan::File));
+        assert_eq!(plan_navigation(&local, Origin::User, None), Ok(policy::Plan::File));
+        // A link, Ctrl/Shift/middle click, target=_blank (all carry Origin::Page), a new window for a link.
+        for target in ["file:///C:/Users/x/page.html", "file:////host/share/a.html", "file://server/share/a", "FILE:///C:/a.html"] {
+            assert_eq!(plan_navigation(&url(target), Origin::Page, Some(&page)), Err(Refusal::LocalFile), "{target}");
+        }
+        // Also when the page is itself a local file, and when there is no page at all.
+        assert_eq!(plan_navigation(&local, Origin::Page, Some(&local)), Err(Refusal::LocalFile));
+        assert_eq!(plan_navigation(&local, Origin::Page, None), Err(Refusal::LocalFile));
+        // Even typed, a network share or a device path is not opened.
+        assert_eq!(plan_navigation(&url("file:////host/share/a.html"), Origin::User, None), Err(Refusal::NotLocalFile));
+        // Web addresses are fine whoever asks; mailto: and javascript: are still refusals for both.
+        assert_eq!(plan_navigation(&url("https://ok.example/"), Origin::Page, Some(&page)), Ok(policy::Plan::Network));
+        assert_eq!(plan_navigation(&url("mailto:a@b.c"), Origin::Page, Some(&page)), Err(Refusal::Mailto));
     }
 }

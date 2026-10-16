@@ -8,6 +8,7 @@
 
 use core::ffi::c_void;
 use core::ptr::{NonNull, null, null_mut};
+use std::sync::{Arc, Mutex, PoisonError};
 
 type P = *mut c_void;
 
@@ -31,6 +32,8 @@ unsafe extern "system" {
     fn GetLastError() -> u32;
 }
 
+/// `ERROR_WINHTTP_OPERATION_CANCELLED`: what a call reports when its handle was closed under it.
+const ERROR_WINHTTP_OPERATION_CANCELLED: u32 = 12017;
 const WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY: u32 = 4;
 const WINHTTP_ACCESS_TYPE_DEFAULT_PROXY: u32 = 0;
 const WINHTTP_FLAG_SECURE: u32 = 0x0080_0000;
@@ -85,17 +88,57 @@ impl Handle {
         self.0.as_ptr()
     }
     fn set_u32(&self, option: u32, value: u32) -> bool {
-        // SAFETY: the handle is open; `value` is a live u32 and its size is passed.
-        unsafe { WinHttpSetOption(self.raw(), option, (&raw const value).cast(), 4) != 0 }
+        set_option_u32(self.raw(), option, value)
     }
+}
+
+fn set_option_u32(h: P, option: u32, value: u32) -> bool {
+    // SAFETY: `h` is an open handle (the callers got it from a live `Handle`); `value` is a live u32 and its size is passed.
+    unsafe { WinHttpSetOption(h, option, (&raw const value).cast(), 4) != 0 }
 }
 
 impl Drop for Handle {
     fn drop(&mut self) {
-        // SAFETY: we own the handle and close it exactly once.
+        // SAFETY: we own the handle and close it exactly once. Closing is allowed from any thread, also while
+        // another thread is blocked in a call on the handle (see `Aborter`): WinHTTP keeps the object alive until
+        // that call has returned, and the call fails.
         unsafe {
             WinHttpCloseHandle(self.raw());
         }
+    }
+}
+
+/// The handle of one request, shared by the thread that uses it and a watchdog that may abort it from
+/// another thread. Whoever takes the handle out of the slot closes it, so it is closed exactly once, and
+/// the using thread never starts a call with a handle that was closed before: [`Shared::raw`] fails then.
+/// (A call that is already running when the handle is closed is the case WinHTTP supports: it fails.)
+struct Shared(Mutex<Option<Handle>>);
+
+impl Shared {
+    fn raw(&self) -> Result<P, u32> {
+        let slot = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        slot.as_ref().map(Handle::raw).ok_or(ERROR_WINHTTP_OPERATION_CANCELLED)
+    }
+    fn take(&self) -> Option<Handle> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).take()
+    }
+}
+
+/// A way to abort one request from another thread (the watchdog of the transport): closes its handle, so
+/// that a call blocked on it (waiting for the server, for data, for a connection) returns an error at once.
+#[derive(Clone)]
+pub struct Aborter(Arc<Shared>);
+
+impl Aborter {
+    /// Close the request. Harmless when it is already over or aborted.
+    pub fn abort(&self) {
+        // The lock is released before the close: closing may wait for the blocked call to unwind.
+        drop(self.0.take());
+    }
+
+    /// The request is over: finished, dropped or aborted. Nothing is left to abort.
+    pub fn is_done(&self) -> bool {
+        self.0.0.lock().unwrap_or_else(PoisonError::into_inner).is_none()
     }
 }
 
@@ -106,6 +149,17 @@ pub struct Timeouts {
     pub connect_ms: u32,
     pub send_ms: u32,
     pub receive_ms: u32,
+}
+
+/// What to send: `GET path_and_query` to `host:port`. `host` has no brackets (IPv6 literals are passed bare).
+#[derive(Clone, Copy)]
+pub struct GetRequest<'a> {
+    pub host: &'a str,
+    pub port: u16,
+    pub secure: bool,
+    pub path_and_query: &'a str,
+    pub headers: &'a [(String, String)],
+    pub timeouts: Timeouts,
 }
 
 /// A WinHTTP session: connection pool, proxy settings, HTTP/2 negotiation.
@@ -131,7 +185,11 @@ impl Session {
 
     /// Send `GET path_and_query` to `host:port` with `headers` and wait for the response headers.
     /// `host` has no brackets (IPv6 literals are passed bare).
-    pub fn get(&self, host: &str, port: u16, secure: bool, path_and_query: &str, headers: &[(String, String)], timeouts: Timeouts) -> Result<HttpRequest, u32> {
+    ///
+    /// `register` gets the [`Aborter`] of the request before anything that can block (sending, waiting for
+    /// the response) starts.
+    pub fn get(&self, request: GetRequest<'_>, register: impl FnOnce(Aborter)) -> Result<HttpRequest, u32> {
+        let GetRequest { host, port, secure, path_and_query, headers, timeouts } = request;
         let server = wide_nul(host);
         // SAFETY: the session handle is open and `server` is a NUL-terminated UTF-16 string.
         let connect = Handle::new(unsafe { WinHttpConnect(self.0.raw(), server.as_ptr(), port, 0) })?;
@@ -169,33 +227,54 @@ impl Session {
         }
         let wide_headers = wide_nul(&header_text);
         let (hp, hl) = if header_text.is_empty() { (null(), 0) } else { (wide_headers.as_ptr(), u32::MAX) };
-        // SAFETY: `hp` is null or NUL-terminated UTF-16 (length -1 means "up to the NUL"); no body is sent.
-        if unsafe { WinHttpSendRequest(req.raw(), hp, hl, null(), 0, 0, 0) } == 0 {
-            return Err(last_error());
+        // From here the request can be aborted by the watchdog; any early return closes it (`HttpRequest::drop`).
+        let shared = Arc::new(Shared(Mutex::new(Some(req))));
+        register(Aborter(shared.clone()));
+        let http = HttpRequest { req: shared, _connect: connect };
+        // SAFETY: `hp` is null or NUL-terminated UTF-16 (length -1 means "up to the NUL"); no body is sent; the
+        // handle was open when `raw` returned it.
+        if unsafe { WinHttpSendRequest(http.raw()?, hp, hl, null(), 0, 0, 0) } == 0 {
+            return Err(http.error());
         }
         // SAFETY: the request was sent; the reserved argument must be null.
-        if unsafe { WinHttpReceiveResponse(req.raw(), null_mut()) } == 0 {
-            return Err(last_error());
+        if unsafe { WinHttpReceiveResponse(http.raw()?, null_mut()) } == 0 {
+            return Err(http.error());
         }
-        Ok(HttpRequest { req, _connect: connect })
+        Ok(http)
     }
 }
 
 /// A request whose response headers have arrived; the body is read with [`HttpRequest::read`].
 pub struct HttpRequest {
-    // Field order is drop order: the request closes before its connection.
-    req: Handle,
+    req: Arc<Shared>,
+    // Closed after the request (`drop` below takes the request out first).
     _connect: Handle,
 }
 
+impl Drop for HttpRequest {
+    fn drop(&mut self) {
+        drop(self.req.take());
+    }
+}
+
 impl HttpRequest {
+    fn raw(&self) -> Result<P, u32> {
+        self.req.raw()
+    }
+
+    /// The error code of the call that just failed (`GetLastError`), unless the watchdog closed the request.
+    fn error(&self) -> u32 {
+        let code = last_error();
+        if self.raw().is_err() { ERROR_WINHTTP_OPERATION_CANCELLED } else { code }
+    }
+
     /// The HTTP status code.
     pub fn status(&self) -> Result<u32, u32> {
         let mut status = 0u32;
         let mut len = 4u32;
         // SAFETY: the buffer is a live u32 and `len` says 4 bytes (a NUMBER query writes a u32).
-        let ok = unsafe { WinHttpQueryHeaders(self.req.raw(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, null(), (&raw mut status).cast(), &raw mut len, null_mut()) };
-        if ok == 0 { Err(last_error()) } else { Ok(status) }
+        let ok = unsafe { WinHttpQueryHeaders(self.raw()?, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, null(), (&raw mut status).cast(), &raw mut len, null_mut()) };
+        if ok == 0 { Err(self.error()) } else { Ok(status) }
     }
 
     /// The status line and all header lines, CRLF separated.
@@ -204,17 +283,17 @@ impl HttpRequest {
         // SAFETY: a null buffer with length 0 asks WinHTTP for the needed size (the call then fails with
         // ERROR_INSUFFICIENT_BUFFER and sets `len`, in bytes).
         unsafe {
-            WinHttpQueryHeaders(self.req.raw(), WINHTTP_QUERY_RAW_HEADERS_CRLF, null(), null_mut(), &raw mut len, null_mut());
+            WinHttpQueryHeaders(self.raw()?, WINHTTP_QUERY_RAW_HEADERS_CRLF, null(), null_mut(), &raw mut len, null_mut());
         }
         if len == 0 || len > 4 * 1024 * 1024 {
-            return Err(last_error());
+            return Err(self.error());
         }
         let mut buf = vec![0u16; len as usize / 2 + 1];
         let mut bytes = (buf.len() * 2) as u32;
         // SAFETY: `buf` has `bytes` bytes of room.
-        let ok = unsafe { WinHttpQueryHeaders(self.req.raw(), WINHTTP_QUERY_RAW_HEADERS_CRLF, null(), buf.as_mut_ptr().cast(), &raw mut bytes, null_mut()) };
+        let ok = unsafe { WinHttpQueryHeaders(self.raw()?, WINHTTP_QUERY_RAW_HEADERS_CRLF, null(), buf.as_mut_ptr().cast(), &raw mut bytes, null_mut()) };
         if ok == 0 {
-            return Err(last_error());
+            return Err(self.error());
         }
         let units = (bytes as usize / 2).min(buf.len());
         Ok(String::from_utf16_lossy(buf.get(..units).unwrap_or(&[])))
@@ -222,7 +301,9 @@ impl HttpRequest {
 
     /// Limit the next `read` (and the wait for it) to `ms` milliseconds.
     pub fn set_receive_timeout(&self, ms: u32) {
-        self.req.set_u32(WINHTTP_OPTION_RECEIVE_TIMEOUT, ms.max(1));
+        if let Ok(raw) = self.raw() {
+            set_option_u32(raw, WINHTTP_OPTION_RECEIVE_TIMEOUT, ms.max(1));
+        }
     }
 
     /// Read what has arrived, up to `buf.len()` bytes of the (decompressed) body; 0 means the end.
@@ -234,8 +315,8 @@ impl HttpRequest {
     pub fn read(&self, buf: &mut [u8]) -> Result<usize, u32> {
         let mut avail = 0u32;
         // SAFETY: `avail` is a live u32.
-        if unsafe { WinHttpQueryDataAvailable(self.req.raw(), &raw mut avail) } == 0 {
-            return Err(last_error());
+        if unsafe { WinHttpQueryDataAvailable(self.raw()?, &raw mut avail) } == 0 {
+            return Err(self.error());
         }
         if avail == 0 {
             return Ok(0);
@@ -243,7 +324,7 @@ impl HttpRequest {
         let want = avail.min(u32::try_from(buf.len()).unwrap_or(u32::MAX));
         let mut got = 0u32;
         // SAFETY: `buf` is valid for `want` <= buf.len() bytes; `got` is a live u32.
-        let ok = unsafe { WinHttpReadData(self.req.raw(), buf.as_mut_ptr().cast(), want, &raw mut got) };
-        if ok == 0 { Err(last_error()) } else { Ok((got as usize).min(buf.len())) }
+        let ok = unsafe { WinHttpReadData(self.raw()?, buf.as_mut_ptr().cast(), want, &raw mut got) };
+        if ok == 0 { Err(self.error()) } else { Ok((got as usize).min(buf.len())) }
     }
 }

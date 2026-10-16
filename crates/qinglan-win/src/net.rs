@@ -4,14 +4,20 @@
 //! http and https, never from https to http. The size cap is enforced on the decompressed bytes while
 //! streaming, the connect and total time limits are enforced per request, and a certificate problem
 //! is a typed error with no way around it.
+//!
+//! WinHTTP's own timeouts are per step and overshoot (a silent server was given up on about four seconds
+//! late), and a worker blocked in a call cannot see a cancel flag. So every request is also registered with a
+//! [`Watchdog`] that closes the request handle when the total time has run out or the caller has cancelled:
+//! the blocked call then returns at once.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use qinglan_engine::net::{NetError, Request, Response, Transport, USER_AGENT};
 use qinglan_engine::url::{Host, Url};
 
-use crate::sys::winhttp::{HttpRequest, Session, Timeouts};
+use crate::sys::winhttp::{Aborter, GetRequest, HttpRequest, Session, Timeouts};
 
 /// Limits of the transport. The defaults are the ones in the task sheet.
 #[derive(Clone, Debug)]
@@ -39,6 +45,89 @@ pub struct WinHttpTransport {
     session: Session,
     cfg: WinHttpConfig,
     accept_language: String,
+    watchdog: Watchdog,
+}
+
+/// How often the watchdog looks at the cancel flags while requests are on the wire.
+const CANCEL_POLL: Duration = Duration::from_millis(25);
+
+struct Entry {
+    aborter: Aborter,
+    cancel: Arc<AtomicBool>,
+    deadline: Instant,
+}
+
+#[derive(Default)]
+struct WatchState {
+    entries: Vec<Entry>,
+    started: bool,
+    stop: bool,
+}
+
+struct WatchShared {
+    state: Mutex<WatchState>,
+    wake: Condvar,
+}
+
+impl WatchShared {
+    fn lock(&self) -> std::sync::MutexGuard<'_, WatchState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// One thread, started with the first request and asleep while nothing is on the wire. It aborts a request
+/// as soon as its total deadline has passed, and within [`CANCEL_POLL`] after its cancel flag was set.
+struct Watchdog(Arc<WatchShared>);
+
+impl Watchdog {
+    fn new() -> Watchdog {
+        Watchdog(Arc::new(WatchShared { state: Mutex::new(WatchState::default()), wake: Condvar::new() }))
+    }
+
+    fn watch(&self, aborter: Aborter, cancel: Arc<AtomicBool>, deadline: Instant) {
+        let mut st = self.0.lock();
+        st.entries.push(Entry { aborter, cancel, deadline });
+        if !st.started {
+            let shared = self.0.clone();
+            st.started = std::thread::Builder::new().name("qinglan-watchdog".into()).stack_size(64 * 1024).spawn(move || watchdog_loop(&shared)).is_ok();
+        }
+        drop(st);
+        self.0.wake.notify_one();
+    }
+
+    fn active(&self) -> usize {
+        self.0.lock().entries.iter().filter(|e| !e.aborter.is_done()).count()
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        self.0.lock().stop = true;
+        self.0.wake.notify_all();
+    }
+}
+
+fn watchdog_loop(shared: &WatchShared) {
+    let mut st = shared.lock();
+    while !st.stop {
+        let now = Instant::now();
+        st.entries.retain(|e| !e.aborter.is_done());
+        // Abort with the lock released: closing a handle can wait for the blocked call to unwind.
+        let (due, rest): (Vec<Entry>, Vec<Entry>) = std::mem::take(&mut st.entries).into_iter().partition(|e| e.cancel.load(Ordering::Relaxed) || now >= e.deadline);
+        st.entries = rest;
+        if !due.is_empty() {
+            drop(st);
+            for e in &due {
+                e.aborter.abort();
+            }
+            st = shared.lock();
+            continue;
+        }
+        st = match st.entries.iter().map(|e| e.deadline).min() {
+            None => shared.wake.wait(st).unwrap_or_else(PoisonError::into_inner),
+            Some(first) => shared.wake.wait_timeout(st, first.saturating_duration_since(now).min(CANCEL_POLL)).unwrap_or_else(PoisonError::into_inner).0,
+        };
+    }
 }
 
 /// `Accept-Language` for a list of display languages (L1 task 13): the first language with its base language
@@ -68,7 +157,24 @@ impl WinHttpTransport {
     pub fn with_config(cfg: WinHttpConfig) -> Result<WinHttpTransport, NetError> {
         let session = Session::open(&cfg.user_agent).map_err(|c| map_error(c, ""))?;
         let accept_language = cfg.accept_language.clone().unwrap_or_else(|| accept_language(&crate::sys::user_ui_languages()));
-        Ok(WinHttpTransport { session, cfg, accept_language })
+        Ok(WinHttpTransport { session, cfg, accept_language, watchdog: Watchdog::new() })
+    }
+
+    /// Requests on the wire (registered with the watchdog and not over yet). For tests.
+    pub fn active_requests(&self) -> usize {
+        self.watchdog.active()
+    }
+
+    /// The error for WinHTTP error `code` of a call that belonged to `req`: cancelled by the caller, out of
+    /// time (also when the watchdog closed the request at the deadline), or what the code says.
+    fn error_for(code: u32, host: &str, req: &Request, deadline: Instant) -> NetError {
+        if req.cancel.load(Ordering::Relaxed) {
+            NetError::Cancelled
+        } else if Instant::now() >= deadline && code != 12007 {
+            NetError::Timeout
+        } else {
+            map_error(code, host)
+        }
     }
 }
 
@@ -143,11 +249,12 @@ impl WinHttpTransport {
         if !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("accept-language")) {
             headers.push(("Accept-Language".to_string(), self.accept_language.clone()));
         }
-        let http = self.session.get(&host, port, secure, &request_target(url), &headers, to).map_err(|c| {
-            if Instant::now() >= deadline && c != 12007 { NetError::Timeout } else { map_error(c, &host) }
-        })?;
-        let status = http.status().map_err(|c| map_error(c, &host))?;
-        let raw = http.raw_headers().map_err(|c| map_error(c, &host))?;
+        let http = self
+            .session
+            .get(GetRequest { host: &host, port, secure, path_and_query: &request_target(url), headers: &headers, timeouts: to }, |a| self.watchdog.watch(a, req.cancel.clone(), deadline))
+            .map_err(|c| Self::error_for(c, &host, req, deadline))?;
+        let status = http.status().map_err(|c| Self::error_for(c, &host, req, deadline))?;
+        let raw = http.raw_headers().map_err(|c| Self::error_for(c, &host, req, deadline))?;
         let status = u16::try_from(status).map_err(|_| NetError::Protocol(format!("status {status}")))?;
         Ok((status, parse_headers(&raw), http))
     }
@@ -171,7 +278,7 @@ impl WinHttpTransport {
                 return Err(NetError::Timeout);
             }
             http.set_receive_timeout(ms(left));
-            let n = http.read(&mut buf).map_err(|c| if Instant::now() >= deadline { NetError::Timeout } else { map_error(c, host) })?;
+            let n = http.read(&mut buf).map_err(|c| Self::error_for(c, host, req, deadline))?;
             if n == 0 {
                 return Ok(body);
             }

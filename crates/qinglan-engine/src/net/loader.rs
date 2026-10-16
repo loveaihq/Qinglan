@@ -170,7 +170,8 @@ impl Loader {
     }
 
     /// Stop everything: waiting requests are dropped, running ones are told to give up, and the
-    /// results of both are never delivered.
+    /// results of both are never delivered. The slots of the running ones are free at once (they are
+    /// no longer counted, whatever their workers are still blocked in): a new request starts right away.
     pub fn cancel_all(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
         self.cancel = Arc::new(AtomicBool::new(false));
@@ -179,6 +180,8 @@ impl Loader {
             q.clear();
         }
         self.ready.clear();
+        self.in_flight = 0;
+        self.per_host.clear();
     }
 
     /// Collect finished requests without waiting.
@@ -210,6 +213,10 @@ impl Loader {
     }
 
     fn finish(&mut self, d: Done) -> Option<LoadEvent> {
+        // A worker of a cancelled generation was not counted any more: it only ends.
+        if d.generation != self.generation {
+            return None;
+        }
         self.in_flight = self.in_flight.saturating_sub(1);
         if let Some(h) = &d.host
             && let Some(c) = self.per_host.get_mut(h)
@@ -218,9 +225,6 @@ impl Loader {
             if *c == 0 {
                 self.per_host.remove(h);
             }
-        }
-        if d.generation != self.generation {
-            return None;
         }
         let result = d.result.map(Arc::new);
         // `data:` answers are not kept: the key would be the whole (possibly megabytes long) URL.

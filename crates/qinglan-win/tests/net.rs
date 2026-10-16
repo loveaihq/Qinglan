@@ -266,7 +266,7 @@ fn slow_server_times_out_overall() {
     let t = quick();
     let t0 = Instant::now();
     assert_eq!(t.fetch(&req(srv.url("/dribble"), MAX)).unwrap_err(), NetError::Timeout, "one byte every 100 ms is still too slow overall");
-    assert!(t0.elapsed() < Duration::from_secs(5), "took {:?}", t0.elapsed());
+    assert!(t0.elapsed() < Duration::from_millis(2500), "the 1.5 s total limit is enforced by the watchdog: {:?}", t0.elapsed());
 }
 
 #[test]
@@ -276,7 +276,9 @@ fn silent_server_times_out() {
     let t0 = Instant::now();
     assert_eq!(t.fetch(&req(srv.url("/silent"), MAX)).unwrap_err(), NetError::Timeout);
     eprintln!("silent server: gave up after {:?} (total limit 1.5 s)", t0.elapsed());
-    assert!(t0.elapsed() < Duration::from_secs(5), "took {:?}", t0.elapsed());
+    // WinHTTP alone overshot this by up to ~4 s; the watchdog closes the request at the deadline.
+    assert!(t0.elapsed() >= Duration::from_millis(1400) && t0.elapsed() < Duration::from_millis(2500), "took {:?}", t0.elapsed());
+    assert_eq!(t.active_requests(), 0);
 }
 
 #[test]
@@ -351,4 +353,57 @@ fn record_over_winhttp_then_replay_without_the_server() {
     assert_eq!(redirected.url.pathname(), "/hello", "the final address of a redirect is recorded");
     assert_eq!(replay.fetch(&req(Url::parse("http://127.0.0.1:9/never", None).unwrap(), MAX)).unwrap().status, 404);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cancelling_aborts_a_blocked_request_quickly() {
+    let srv = Server::start();
+    let t = transport(); // the default total limit is 60 s: only the abort can end this in time
+    let r = req(srv.url("/silent"), MAX);
+    let cancel = r.cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        cancel.store(true, Ordering::SeqCst);
+    });
+    let t0 = Instant::now();
+    assert_eq!(t.fetch(&r).unwrap_err(), NetError::Cancelled);
+    assert!(t0.elapsed() < Duration::from_millis(1500), "took {:?}", t0.elapsed());
+    assert_eq!(t.active_requests(), 0);
+}
+
+#[test]
+fn cancel_all_frees_the_slots_and_aborts_the_blocked_workers() {
+    // Three servers (the per-host limit is 6), 18 requests: 16 run, all blocked on a server that says nothing.
+    let silent: Vec<Server> = (0..3).map(|_| Server::start()).collect();
+    let live = Server::start();
+    let t = Arc::new(transport());
+    let mut loader = Loader::without_wake(t.clone());
+    for i in 0..18 {
+        loader.submit(LoadRequest { url: silent[i % 3].url("/silent"), kind: ResourceKind::Image, page: None, use_cache: false }).unwrap();
+    }
+    assert_eq!(loader.in_flight(), 16);
+    let t0 = Instant::now();
+    while t.active_requests() < 16 && t0.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(t.active_requests(), 16, "all sixteen are on the wire");
+
+    loader.cancel_all();
+    assert_eq!((loader.in_flight(), loader.pending()), (0, 0), "the slots are free at once");
+    let t1 = Instant::now();
+    loader.submit(LoadRequest { url: live.url("/hello"), kind: ResourceKind::Document, page: None, use_cache: false }).unwrap();
+    assert_eq!(loader.in_flight(), 1, "the new document starts at once");
+    let mut got = Vec::new();
+    while got.is_empty() && t1.elapsed() < Duration::from_secs(3) {
+        got = loader.wait(Duration::from_millis(100));
+    }
+    assert_eq!(got.len(), 1, "only the new request is answered");
+    assert_eq!(got[0].result.as_ref().unwrap().status, 200);
+    assert!(t1.elapsed() < Duration::from_secs(1), "{:?}", t1.elapsed());
+    // The cancelled workers do not stay blocked for the server's 6 s (or the 60 s limit): the requests are closed.
+    while t.active_requests() > 0 && t1.elapsed() < Duration::from_secs(3) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(t.active_requests(), 0, "aborted after {:?}", t1.elapsed());
+    assert!(loader.poll().is_empty(), "nothing from the cancelled generation is delivered");
 }

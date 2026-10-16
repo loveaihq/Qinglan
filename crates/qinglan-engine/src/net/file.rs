@@ -5,20 +5,52 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use super::{NetError, Response};
-use crate::url::{Url, percent_decode};
+use crate::url::{Host, Url, percent_decode};
 
-/// The path a `file:` URL names (`file:///C:/dir/a.html` gives `C:/dir/a.html`).
+/// The path a `file:` URL names (`file:///C:/dir/a.html` gives `C:/dir/a.html`), or `None` when it is not
+/// a plain local file: layer 1 reads local files only. Refused, whatever asked for it:
+///
+/// * a host other than empty or `localhost` (`file://server/share/x` is a network share);
+/// * a path that is UNC or a device path once decoded and with `\` read as `/` (`file:////host/share/x`,
+///   `file:///%5C%5C%3F%5CC:/x`, `\\?\`, `\\.\`): Windows treats `\` and `/` alike, so these would reach
+///   the network or a device namespace;
+/// * a legacy DOS device name as any path segment (`CON`, `NUL`, `COM1`, `LPT1`, ..., with or without an
+///   extension): opening one can block a worker forever.
 pub fn url_to_path(url: &Url) -> Option<PathBuf> {
     if url.scheme != "file" {
         return None;
     }
+    match &url.host {
+        None | Some(Host::Empty) => {}
+        Some(Host::Domain(d)) if d.eq_ignore_ascii_case("localhost") => {}
+        Some(_) => return None,
+    }
     let raw = percent_decode(url.pathname().as_bytes());
-    let mut p = String::from_utf8_lossy(&raw).into_owned();
-    let b = p.as_bytes();
-    if b.len() >= 3 && b.first() == Some(&b'/') && b.get(2) == Some(&b':') {
-        p.remove(0);
+    let decoded = String::from_utf8_lossy(&raw).replace('\\', "/");
+    // The path of `file:///C:/x` is `/C:/x`: drop the slash in front of a drive letter.
+    let b = decoded.as_bytes();
+    let p = match decoded.strip_prefix('/') {
+        Some(rest) if b.len() >= 3 && b.get(2) == Some(&b':') => rest,
+        _ => decoded.as_str(),
+    };
+    if p.starts_with("//") || p.split('/').any(is_device_name) {
+        return None;
     }
     Some(PathBuf::from(p))
+}
+
+/// A legacy DOS device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`), also with an
+/// extension or an alternate stream (`nul.txt`, `con:x`) and trailing spaces or dots.
+fn is_device_name(segment: &str) -> bool {
+    let stem = segment.split(['.', ':']).next().unwrap_or("").trim_end_matches(' ');
+    let upper = stem.to_ascii_uppercase();
+    match upper.as_str() {
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" => true,
+        _ => {
+            let b = upper.as_bytes();
+            b.len() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT")) && matches!(b.get(3), Some(b'1'..=b'9'))
+        }
+    }
 }
 
 /// The `file:` URL of an existing path (made absolute).

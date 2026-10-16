@@ -26,6 +26,8 @@ pub enum Refusal {
     MixedContent,
     /// A `file:` link, or a `file:` sub-resource of a page that is not itself a local file.
     LocalFile,
+    /// A `file:` address that is not a plain local file: a network share, a device path.
+    NotLocalFile,
     /// `data:` cannot be opened as a page (only as a sub-resource).
     DataDocument,
     /// `mailto:`: the window asks the user before handing it to the mail program.
@@ -43,6 +45,7 @@ impl fmt::Display for Refusal {
         match self {
             Refusal::MixedContent => write!(f, "blocked: an insecure (http) resource on a secure (https) page"),
             Refusal::LocalFile => write!(f, "blocked: pages cannot load local files"),
+            Refusal::NotLocalFile => write!(f, "blocked: only files on this computer can be opened (no network shares or devices)"),
             Refusal::DataDocument => write!(f, "data: addresses cannot be opened as a page"),
             Refusal::Mailto => write!(f, "mailto: links are handed to the mail program"),
             Refusal::Javascript => write!(f, "javascript: links are not supported"),
@@ -57,7 +60,8 @@ impl fmt::Display for Refusal {
 /// ([`ResourceKind::Document`]) or a sub-resource of `page`.
 ///
 /// * `http`/`https`: always, except an `http` sub-resource of an `https` page (mixed content).
-/// * `file`: only as a page the user asked for. A local page may load `file:` sub-resources (style
+/// * `file`: only as a page the user asked for (`page` is `None`: typed, command line, history, reload;
+///   a link, a new window started from a link or a sub-resource carries the page it came from). A local page may load `file:` sub-resources (style
 ///   sheets, images) so that saved pages work; no other page may, and no link to `file:` is followed.
 /// * `data`: sub-resources only (the bytes are in the URL; no transport involved).
 /// * `mailto`, `javascript` and everything else: not fetched.
@@ -73,17 +77,56 @@ pub fn plan(url: &Url, kind: ResourceKind, page: Option<&Url>) -> Result<Plan, R
             }
             Ok(Plan::Network)
         }
-        "file" => match page {
-            None => Ok(Plan::File),
-            Some(p) if !navigation && p.scheme == "file" => Ok(Plan::File),
-            Some(_) => Err(Refusal::LocalFile),
-        },
+        "file" => {
+            match page {
+                None => {}
+                Some(p) if !navigation && p.scheme == "file" => {}
+                Some(_) => return Err(Refusal::LocalFile),
+            }
+            // Whoever asks: local files only (no network share, no device path).
+            if super::file::url_to_path(url).is_none() {
+                return Err(Refusal::NotLocalFile);
+            }
+            Ok(Plan::File)
+        }
         "data" if navigation => Err(Refusal::DataDocument),
         "data" => Ok(Plan::Data),
         "mailto" => Err(Refusal::Mailto),
         "javascript" => Err(Refusal::Javascript),
         other => Err(Refusal::UnsupportedScheme(other.to_string())),
     }
+}
+
+/// Longest `mailto:` address handed to the mail program (what the page asks for is cut here).
+pub const MAX_MAILTO: usize = 2048;
+
+/// The `mailto:` address to show the user and hand to the mail program, rebuilt from `url` so that only
+/// the characters of RFC 6068 get through: letters, digits, `- . _ ~` and the delimiters `! $ ' ( ) * + , ; : @`
+/// and `? = &` (they structure the address); a valid `%XX` escape stays, and every other byte (space, `"`,
+/// `\`, `/`, `%` not followed by two hex digits, control characters, non-ASCII) becomes `%XX`, so the
+/// address cannot break out of the quoted argument in the mail program's command line. The fragment is
+/// dropped and the result is cut at [`MAX_MAILTO`] bytes (between two units, never inside an escape).
+pub fn sanitize_mailto(url: &Url) -> String {
+    let full = url.serialize(true);
+    let rest = full.strip_prefix("mailto:").unwrap_or("");
+    let bytes = rest.as_bytes();
+    let mut out = String::from("mailto:");
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        let valid_escape = b == b'%' && bytes.get(i + 1).is_some_and(u8::is_ascii_hexdigit) && bytes.get(i + 2).is_some_and(u8::is_ascii_hexdigit);
+        let unit = if valid_escape {
+            i += 3;
+            rest.get(i - 3..i).unwrap_or("%25").to_string()
+        } else {
+            i += 1;
+            if b.is_ascii_alphanumeric() || b"-._~!$'()*+,;:@?=&".contains(&b) { char::from(b).to_string() } else { format!("%{b:02X}") }
+        };
+        if out.len() + unit.len() > MAX_MAILTO {
+            break;
+        }
+        out.push_str(&unit);
+    }
+    out
 }
 
 /// Longest `Referer` sent whole; a longer one is cut to the origin (as browsers do).

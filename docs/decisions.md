@@ -655,3 +655,27 @@
 - 真实网页 49 页：全部能打开，文字完整顺序对，方块 0、乱码 0；一个 bug 已修（图片缓存）；其余差别是第 2 层特性，加疑似 bug 清单（RESULTS 第 1 节）。
 - 恶意网页：18 项在 release 下都 ≤ 5 秒（最慢 2.1 秒）、峰值 ≤ 200 MB（最大 css 10 万行 171 MB、坏 UTF-8 179 MB），网络四项同；见 RESULTS 第 2 节。
 - 验收数字（release，插电）：exe 1 927 168 字节；启动 58 ms；冷首屏中位数 102.9 ms（整页排完 212.8 ms）；滚动 100%：4.9 / 7.0 ms，150%：5.6 / 7.4 ms；滚完私有内存 48.9 MB 中位数（47.5–51.8，第一次超了）。
+
+## 第 1 层 · 1c 审查修复（2026-10-16，提交 1：安全）
+
+### S1 页面不能让浏览器打开 `file:`
+
+- 问题：`navigate` 和 `open_in_new_window` 用 `policy::plan(url, Document, None)`，`None` 的意思是“用户自己打字的”；点击链接（含 Ctrl/Shift/中键、`target=_blank`）和 `<base href="file:///C:/">` 解析出来的页面链接也走这条，于是网页能链到本机文件。
+- 修法：应用层加 `Origin { User, Page }`（`app.rs`）。打字、命令行、前进后退、刷新是 `User`（`None`）；点击链接、新窗口都是 `Page`，把当前页面的地址作为 `page` 传给 `plan`，`file:` 一律 `Refusal::LocalFile`（状态栏/错误页提示）。新窗口是新进程，参数当作打字的，所以**在父进程里先过一遍 `Page` 的规则**才启动。判断集中在 `plan_navigation`（纯函数，有单元测试）。`<base href=file:>` 不改变这一点：来源是页面地址，不是 base。
+- 保持原样：本地 `file:` 页面里的链接也不跟随 `file:`（已有测试 `links to file: are not followed`），本地页面可以载入本地子资源。
+- 纵深：`net/file.rs::url_to_path` 不管谁要求，一律只认本机普通文件：主机不是空/`localhost` 的 `file:`（网络共享）、解码后（`\` 当 `/`）以 `//` 开头的路径（UNC、`\?\`、`\.\`）、任何一段是 DOS 设备名（`CON`、`NUL`、`COM1`…，带不带扩展名；打开它们会让工作线程永远卡住）都拒绝。`policy::plan` 里这种情况是新的 `Refusal::NotLocalFile`。
+- 没有 `<meta http-equiv=refresh>` 或表单提交，所以“无表单的重定向”只有 HTTP 重定向：传输层本来就只跟 http/https（`BadRedirect`）。iframe 只画占位框，没有链接。
+
+### S2 `mailto:`
+
+页面给的 `mailto:` 地址原样交给 `ShellExecuteW`，邮件程序注册表里的命令行是 `"…" "%1"` 一类，地址里的 `"`、空格、`\` 可以带出额外参数。现在 `policy::sanitize_mailto` 重建地址：只放行字母数字和 `- . _ ~ ! $ ' ( ) * + , ; : @ ? = &`（RFC 6068 的结构字符），合法的 `%XX` 保留，其他字节（空格、`"`、`\`、`/`、不合法的 `%`、控制字符、非 ASCII）一律 `%XX`；去掉 `#片段`；最长 2048 字节，在两个单元之间截断（不会截在 `%XX` 中间）。确认对话框显示的就是交给系统的这个字符串。
+
+### S3 `Loader::cancel_all` 立刻放出名额
+
+之前被取消的请求要等工作线程返回才释放 `in_flight`/`per_host`，沉默的服务器能让 16 个名额占 60 秒，新页面的请求排不上。现在 `cancel_all` 把两个计数清零，旧一代（`generation`）的结果到达时不再减计数（`finish` 先比代数）。工作线程本身靠 S4 的看门狗关闭请求句柄来结束。
+
+### S4 看门狗：总时限和取消都靠关句柄
+
+WinHTTP 的超时是分步的（解析、连接、发送、接收各一个），沉默服务器的总耗时能超出 4 秒以上，被阻塞的线程也看不到取消标志。`qinglan-win/src/net.rs` 里有一个 `Watchdog` 线程（第一个请求时才起，没有请求就睡在条件变量上）：每个请求在 `Session::get` 创建请求句柄之后、发送之前登记（总截止时间 + 取消标志）；到点或取消标志被设置（每 25 ms 看一次，只在有请求时）就关掉请求句柄，阻塞的调用立刻返回（`12017`），再按“取消 / 超时”归类（`error_for`）。
+
+句柄的安全：请求句柄放在 `Shared(Mutex<Option<Handle>>)` 里，使用线程每次调用前通过 `raw()` 从槽里取，关掉的槽返回错误，所以不会拿已经关闭的句柄开始新调用；谁把句柄从槽里取出来谁关，只关一次（`HttpRequest::drop` 也走这条）；已经在阻塞的调用正是 WinHTTP 支持的情形（句柄关闭时调用失败，对象等调用返回才释放）。unsafe 仍只在 `sys/winhttp.rs`。测试：`silent_server_times_out`（1.5 s 总时限，断言 1.4–2.5 s）、`cancelling_aborts_a_blocked_request_quickly`、`cancel_all_frees_the_slots_and_aborts_the_blocked_workers`（3 个沉默服务器 18 个请求，16 个在跑；取消后名额为 0，新文档请求马上开始，句柄在 25 ms 级被关掉）。
