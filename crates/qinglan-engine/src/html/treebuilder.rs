@@ -8,7 +8,7 @@
 
 use super::atoms::{Atom, Interner, a};
 use super::dom::{
-    Attribute, Document, ElementData, MAX_DEPTH, MAX_NODES, NONE, NodeData, NodeId, Namespace, QuirksMode, DOCUMENT,
+    Attribute, Document, ElementData, StoredAttr, MAX_DEPTH, MAX_NODES, NONE, NodeData, NodeId, Namespace, QuirksMode, DOCUMENT,
 };
 use super::foreign_data::{SVG_ATTRS, SVG_TAGS};
 use super::quirks_data as q;
@@ -319,7 +319,7 @@ impl TreeBuilder {
             Namespace::MathMl if e.name == a::ANNOTATION_XML => e.attrs.iter().any(|at| {
                 at.ns == Namespace::None
                     && at.name == a::ENCODING
-                    && (at.value.eq_ignore_ascii_case("text/html") || at.value.eq_ignore_ascii_case("application/xhtml+xml"))
+                    && (self.doc.value(at).eq_ignore_ascii_case("text/html") || self.doc.value(at).eq_ignore_ascii_case("application/xhtml+xml"))
             }),
             Namespace::Svg => matches!(e.name, a::FOREIGNOBJECT | a::DESC | a::TITLE),
             _ => false,
@@ -576,6 +576,7 @@ impl TreeBuilder {
     fn create_element(&mut self, name: Atom, ns: Namespace, attrs: Vec<Attribute>) -> NodeId {
         let is_template = ns == Namespace::Html && name == a::TEMPLATE;
         let contents = if is_template { self.doc.alloc(NodeData::Fragment) } else { NONE };
+        let attrs = self.doc.store_attrs(attrs);
         self.doc.alloc(NodeData::Element(ElementData { name, ns, attrs, template_contents: contents }))
     }
 
@@ -697,20 +698,21 @@ impl TreeBuilder {
 
     /// The start tag the element `node` (an entry of the list of active formatting elements) was created for.
     fn afe_token(&self, node: NodeId, name: Atom) -> TagToken {
-        TagToken { name, attrs: self.doc.element(node).map(|e| e.attrs.clone()).unwrap_or_default(), self_closing: false }
+        let attrs = self.doc.element(node).map(|e| e.attrs.iter().map(|a| self.doc.token_attr(a)).collect()).unwrap_or_default();
+        TagToken { name, attrs, self_closing: false }
     }
 
     fn push_afe(&mut self, node: NodeId, name: Atom) {
         // Noah's Ark clause: at most three identical entries after the last marker.
         let mut same = 0usize;
         let mut earliest = None;
-        let new_attrs: &[Attribute] = self.doc.element(node).map_or(&[], |e| e.attrs.as_slice());
+        let new_attrs: &[StoredAttr] = self.doc.element(node).map_or(&[], |e| e.attrs.as_slice());
         for (i, e) in self.afe.iter().enumerate().rev() {
             match e {
                 Afe::Marker => break,
                 Afe::Bookmark => {}
                 Afe::Entry { node: n, name: nm } => {
-                    if *nm == name && Self::same_attrs(self.doc.element(*n).map_or(&[], |e| e.attrs.as_slice()), new_attrs) {
+                    if *nm == name && Self::same_attrs(&self.doc, self.doc.element(*n).map_or(&[], |e| e.attrs.as_slice()), new_attrs) {
                         same += 1;
                         earliest = Some(i);
                     }
@@ -725,8 +727,8 @@ impl TreeBuilder {
         self.afe.push(Afe::Entry { node, name });
     }
 
-    fn same_attrs(x: &[Attribute], y: &[Attribute]) -> bool {
-        x.len() == y.len() && x.iter().all(|p| y.iter().any(|q| q.name == p.name && q.value == p.value))
+    fn same_attrs(doc: &Document, x: &[StoredAttr], y: &[StoredAttr]) -> bool {
+        x.len() == y.len() && x.iter().all(|p| y.iter().any(|q| q.name == p.name && doc.value(q) == doc.value(p)))
     }
 
     fn reconstruct_afe(&mut self) {
@@ -1524,12 +1526,16 @@ impl TreeBuilder {
     }
 
     fn merge_attrs(&mut self, target: NodeId, attrs: Vec<Attribute>) {
-        if let Some(e) = self.doc.element_mut(target) {
-            for at in attrs {
-                if !e.attrs.iter().any(|x| x.ns == Namespace::None && x.name == at.name) {
-                    e.attrs.push(at);
-                }
+        let Some(e) = self.doc.element(target) else { return };
+        let mut new: Vec<Attribute> = Vec::new();
+        for at in attrs {
+            if !e.attrs.iter().any(|x| x.ns == Namespace::None && x.name == at.name) {
+                new.push(at);
             }
+        }
+        let stored = self.doc.store_attrs(new);
+        if let Some(e) = self.doc.element_mut(target) {
+            e.attrs.extend(stored);
         }
     }
 

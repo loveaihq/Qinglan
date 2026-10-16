@@ -399,7 +399,7 @@ def winbench_one(name):
     u, st = first_url(name)
     if not u:
         return name, None
-    rc, out, err, to = run([str(EXE), "--bench", u, "--replay", str(CORPUS / name), "--width", "1920", "--height", "1080", "--dpr", "1"], 150)
+    rc, out, err, to = run([str(EXE), "--bench", u, "--replay", str(CORPUS / name), "--width", "1920", "--height", "1080", "--dpr", "1"], 300)
     kv = dict(re.findall(r"^([a-z0-9-]+): (.*)$", out, re.M))
     f = lambda k: float(kv[k]) if k in kv and kv[k] != "n/a" else None
     return name, {"rc": rc, "timeout": to, "first_screen_ms": f("first-screen-ms"), "full_layout_ms": f("full-layout-ms"), "private_bytes": f("private-bytes-after-scroll"),

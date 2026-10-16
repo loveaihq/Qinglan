@@ -29,6 +29,22 @@ use qinglan_engine::net::replay::ReplayTransport;
 use qinglan_win::WinHttpTransport;
 use qinglan_win::window::{self, Waker};
 
+/// `--replay-delay`: a replay that answers after a while, like a network does (the delay depends on the address, so the
+/// responses of one page do not all arrive together).
+struct Delayed {
+    inner: ReplayTransport,
+    delay_ms: u32,
+}
+
+impl Transport for Delayed {
+    fn fetch(&self, req: &qinglan_engine::net::Request) -> Result<qinglan_engine::net::Response, qinglan_engine::net::NetError> {
+        let hash = req.url.serialize(true).bytes().fold(0x811c_9dc5_u32, |h, b| (h ^ u32::from(b)).wrapping_mul(0x0100_0193));
+        let extra = hash % (self.delay_ms / 2 + 1);
+        std::thread::sleep(std::time::Duration::from_millis(u64::from(self.delay_ms + extra)));
+        self.inner.fetch(req)
+    }
+}
+
 /// The program: parse the command line, open the window (or run the bench) and return the exit code.
 pub fn run() -> ExitCode {
     // `--bench ... --mem` (dev builds only) also prints what each structure holds; counting every allocation costs a
@@ -57,6 +73,7 @@ pub fn run() -> ExitCode {
 
     let transport: Arc<dyn Transport> = if let Some(dir) = &opts.replay {
         match ReplayTransport::open(dir) {
+            Ok(t) if opts.replay_delay_ms > 0 => Arc::new(Delayed { inner: t, delay_ms: opts.replay_delay_ms }),
             Ok(t) => Arc::new(t),
             Err(e) => {
                 window::attach_console();

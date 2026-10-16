@@ -35,11 +35,23 @@ pub struct Attribute {
     pub value: String,
 }
 
+/// An attribute as the document keeps it: the value is a range of [`Document::attr_pool`] (one string for all the
+/// values of the page instead of a heap block each; read it with [`Document::value`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StoredAttr {
+    pub ns: Namespace,
+    /// Prefix for adjusted foreign attributes (`xlink` in `xlink:href`), `a::EMPTY` otherwise.
+    pub prefix: Atom,
+    pub name: Atom,
+    off: u32,
+    len: u32,
+}
+
 #[derive(Clone, Debug)]
 pub struct ElementData {
     pub name: Atom,
     pub ns: Namespace,
-    pub attrs: Vec<Attribute>,
+    pub attrs: Vec<StoredAttr>,
     /// For `<template>` (HTML): the template contents document fragment.
     pub template_contents: NodeId,
 }
@@ -86,11 +98,13 @@ pub struct Document {
     pub quirks: QuirksMode,
     /// True when the node limit was hit and the rest of the page was dropped ("页面太大，只显示了前面部分").
     pub too_large: bool,
+    /// The values of all the attributes, one after the other (see [`StoredAttr`]).
+    pub attr_pool: String,
 }
 
 impl Document {
     pub fn new(atoms: Interner) -> Document {
-        let mut d = Document { nodes: Vec::new(), atoms, quirks: QuirksMode::NoQuirks, too_large: false };
+        let mut d = Document { nodes: Vec::new(), atoms, quirks: QuirksMode::NoQuirks, too_large: false, attr_pool: String::new() };
         d.nodes.push(Self::blank(NodeData::Document));
         d
     }
@@ -230,7 +244,34 @@ impl Document {
     }
 
     pub fn attr(&self, id: NodeId, name: Atom) -> Option<&str> {
-        self.element(id)?.attrs.iter().find(|a| a.ns == Namespace::None && a.name == name).map(|a| a.value.as_str())
+        self.element(id)?.attrs.iter().find(|a| a.ns == Namespace::None && a.name == name).map(|a| self.value(a))
+    }
+
+    /// The value of a stored attribute.
+    pub fn value(&self, a: &StoredAttr) -> &str {
+        let (off, len) = (a.off as usize, a.len as usize);
+        self.attr_pool.get(off..off + len).unwrap_or("")
+    }
+
+    /// Put the attributes' values in the pool. (A page whose values would not fit in the pool's 32-bit offsets keeps
+    /// the attributes with empty values.)
+    pub fn store_attrs(&mut self, attrs: Vec<Attribute>) -> Vec<StoredAttr> {
+        let mut out = Vec::with_capacity(attrs.len());
+        for at in attrs {
+            let off = self.attr_pool.len();
+            let fits = u32::try_from(off + at.value.len()).is_ok();
+            if fits {
+                self.attr_pool.push_str(&at.value);
+            }
+            let len = if fits { at.value.len() as u32 } else { 0 };
+            out.push(StoredAttr { ns: at.ns, prefix: at.prefix, name: at.name, off: off.min(u32::MAX as usize) as u32, len });
+        }
+        out
+    }
+
+    /// The stored attribute as a token's attribute (a copy of the value).
+    pub fn token_attr(&self, a: &StoredAttr) -> Attribute {
+        Attribute { ns: a.ns, prefix: a.prefix, name: a.name, value: self.value(a).to_string() }
     }
 
     /// The `<html>` element, if any.

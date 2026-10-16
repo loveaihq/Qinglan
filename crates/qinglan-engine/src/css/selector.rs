@@ -910,13 +910,14 @@ impl<'a> Matcher<'a> {
                 if a.ns != Namespace::None {
                     continue;
                 }
-                if a.name == crate::html::atoms::a::ID && !a.value.is_empty() {
-                    let found = if self.quirks { doc.atoms.lookup(&a.value.to_ascii_lowercase()) } else { doc.atoms.lookup(&a.value) };
+                let value = doc.value(a);
+                if a.name == crate::html::atoms::a::ID && !value.is_empty() {
+                    let found = if self.quirks { doc.atoms.lookup(&value.to_ascii_lowercase()) } else { doc.atoms.lookup(value) };
                     if let Some(slot) = self.arena.get_mut(start) {
                         *slot = found.unwrap_or(NO_ATOM);
                     }
                 } else if a.name == crate::html::atoms::a::CLASS {
-                    for tok in a.value.split([' ', '\t', '\n', '\x0c', '\r']).filter(|t| !t.is_empty()) {
+                    for tok in value.split([' ', '\t', '\n', '\x0c', '\r']).filter(|t| !t.is_empty()) {
                         let found = if self.quirks { doc.atoms.lookup(&tok.to_ascii_lowercase()) } else { doc.atoms.lookup(tok) };
                         if let Some(c) = found
                             && !self.arena.get(start + 2..).unwrap_or(&[]).contains(&c)
@@ -1195,7 +1196,7 @@ impl<'a> Matcher<'a> {
             CaseSens::Sensitive => false,
             CaseSens::Default => is_html && a.ci_html,
         };
-        let (hay, needle) = (attr.value.as_str(), a.value.as_str());
+        let (hay, needle) = (doc.value(attr), a.value.as_str());
         let eq = |x: &str, y: &str| if ci { x.eq_ignore_ascii_case(y) } else { x == y };
         let starts = |h: &str, n: &str| h.len() >= n.len() && h.get(..n.len()).is_some_and(|p| eq(p, n));
         let ends = |h: &str, n: &str| h.len() >= n.len() && h.get(h.len() - n.len()..).is_some_and(|p| eq(p, n));
@@ -1376,7 +1377,8 @@ pub fn language_of(doc: &Document, el: NodeId) -> Option<String> {
         if let Some(e) = doc.element(cur)
             && let Some(a) = e.attrs.iter().find(|a| a.ns == Namespace::None && doc.atoms.get(a.name) == "lang")
         {
-            return if a.value.is_empty() { None } else { Some(a.value.clone()) };
+            let v = doc.value(a);
+            return if v.is_empty() { None } else { Some(v.to_string()) };
         }
         cur = doc.parent(cur);
     }
@@ -1400,10 +1402,10 @@ fn direction_of(doc: &Document, el: NodeId) -> bool {
         if let Some(e) = doc.element(cur)
             && let Some(a) = e.attrs.iter().find(|a| a.ns == Namespace::None && doc.atoms.get(a.name) == "dir")
         {
-            if a.value.eq_ignore_ascii_case("rtl") {
+            if doc.value(a).eq_ignore_ascii_case("rtl") {
                 return true;
             }
-            if a.value.eq_ignore_ascii_case("ltr") {
+            if doc.value(a).eq_ignore_ascii_case("ltr") {
                 return false;
             }
         }

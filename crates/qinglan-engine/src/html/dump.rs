@@ -1,6 +1,6 @@
 //! DOM dump in the html5lib tree-construction test format (used by `qinglan-cli dom` and the tests).
 
-use super::dom::{Attribute, Document, NodeData, NodeId, Namespace, NONE};
+use super::dom::{Document, NodeData, NodeId, Namespace, StoredAttr, NONE};
 
 /// Dump the children of `root` (the document node, or a fragment root) in html5lib format.
 pub fn dump_children(doc: &Document, root: NodeId) -> String {
@@ -35,10 +35,10 @@ pub fn dump_children(doc: &Document, root: NodeId) -> String {
                     _ => "",
                 };
                 out.push_str(&format!("| {indent}<{prefix}{name}>\n"));
-                let mut attrs: Vec<(String, &Attribute)> = e.attrs.iter().map(|a| (attr_display_name(doc, a), a)).collect();
+                let mut attrs: Vec<(String, &StoredAttr)> = e.attrs.iter().map(|a| (attr_display_name(doc, a), a)).collect();
                 attrs.sort_by(|x, y| x.0.cmp(&y.0));
                 for (n, a) in attrs {
-                    out.push_str(&format!("| {indent}  {n}=\"{}\"\n", a.value));
+                    out.push_str(&format!("| {indent}  {n}=\"{}\"\n", doc.value(a)));
                 }
                 // Children (pushed in reverse so they pop in order). A template's contents are shown under "content".
                 if e.template_contents != NONE {
@@ -64,7 +64,7 @@ pub fn dump_children(doc: &Document, root: NodeId) -> String {
     out
 }
 
-fn attr_display_name(doc: &Document, a: &Attribute) -> String {
+fn attr_display_name(doc: &Document, a: &StoredAttr) -> String {
     let local = doc.atoms.get(a.name);
     match a.ns {
         Namespace::XLink | Namespace::Xml | Namespace::Xmlns => {

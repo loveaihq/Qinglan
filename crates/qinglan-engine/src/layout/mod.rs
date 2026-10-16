@@ -32,7 +32,7 @@ use crate::css::cascade::StyleTree;
 use crate::css::color::Color;
 use crate::css::types::{Position, TextDecorationStyle};
 use crate::html::atoms::{FxHashMap, a};
-use crate::html::dom::Document;
+use crate::html::dom::{Document, NodeId};
 use crate::platform::{Glyph, Platform};
 
 /// A shaped glyph as layout and the display list keep it: the platform's [`Glyph`] without the cluster range (only
@@ -211,6 +211,8 @@ pub struct LayoutResult {
     pub canvas: Option<Canvas>,
     /// The images the page wants (see [`image`]).
     pub images: Vec<ImageRequest>,
+    /// How each image box got its size (see [`replaced::ImageFit`]), by DOM node.
+    pub fits: FxHashMap<NodeId, replaced::ImageFit>,
     pub viewport: (LayoutUnit, LayoutUnit),
     /// The work budget ran out: the rest of the page was not laid out (1c shows
     /// "页面太复杂，只显示了一部分").
@@ -312,6 +314,8 @@ pub(crate) struct Layouter<'a> {
     pub oof_list: Vec<(BoxId, BoxId)>,
     pub scratch: Vec<BoxId>,
     pub images: &'a ImageSizes,
+    /// How image boxes got their sizes (replaced.rs).
+    pub fits: FxHashMap<NodeId, replaced::ImageFit>,
     /// Nesting of inline formatting contexts being laid out or measured (see `MAX_PARAGRAPH_DEPTH`).
     pub depth: u32,
     /// Characters that may still be shaped on this page.
@@ -394,6 +398,7 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
         oof_list: Vec::new(),
         scratch: Vec::new(),
         images,
+        fits: FxHashMap::default(),
         depth: 0,
         text_left: (opts.work_budget / 2).min(MAX_SHAPED_CHARS),
         truncated: false,
@@ -407,6 +412,8 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
     l.layout_root();
     let (boxes, mut lines, mut fragments, glyphs, texts, mut decorations, mut markers, oof, work, incomplete, partial) =
         (l.out, l.lines, l.fragments, l.glyphs, l.texts, l.decorations, l.markers, l.oof_list, l.work, l.exhausted || l.truncated, l.stopped);
+    let mut fits = l.fits;
+    fits.shrink_to_fit();
     // The arrays grew by doubling; what is kept for the life of the page should not carry the slack.
     tree.boxes.shrink_to_fit();
     lines.shrink_to_fit();
@@ -416,7 +423,7 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
     let canvas = canvas_background(doc, &tree);
     let (below, above) = paint_order(&tree);
     let images = tree.images.clone();
-    LayoutResult { tree, boxes, lines, fragments, glyphs, texts, decorations, markers, oof, below, above, canvas, images, viewport, incomplete, work, partial }
+    LayoutResult { tree, boxes, lines, fragments, glyphs, texts, decorations, markers, oof, below, above, canvas, images, fits, viewport, incomplete, work, partial }
 }
 
 /// CSS2 14.2: the root element's background covers the canvas; when it has none (transparent), the

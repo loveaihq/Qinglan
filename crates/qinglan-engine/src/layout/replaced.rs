@@ -112,6 +112,16 @@ impl Layouter<'_> {
     /// The content-box size of replaced element `id` in a containing block `cb_w` wide (`cb_h` high
     /// when definite).
     pub(crate) fn replaced_size(&mut self, id: BoxId, cb_w: LU, cb_h: Option<LU>) -> (LU, LU) {
+        self.replaced_size_of(id, cb_w, cb_h, false)
+    }
+
+    /// The size the box is laid out with: like [`Self::replaced_size`], and the way it was reached is kept for
+    /// [`ImageFit`].
+    pub(crate) fn replaced_size_final(&mut self, id: BoxId, cb_w: LU, cb_h: Option<LU>) -> (LU, LU) {
+        self.replaced_size_of(id, cb_w, cb_h, true)
+    }
+
+    fn replaced_size_of(&mut self, id: BoxId, cb_w: LU, cb_h: Option<LU>, record: bool) -> (LU, LU) {
         let bx = self.tree.get(id);
         let bs = &bx.style.boxs;
         let bd = &bx.style.border;
@@ -128,45 +138,98 @@ impl Layouter<'_> {
         let max_w = resolve_dim(&bs.max_width, Some(cb_w)).map_or(f64::INFINITY, |v| px(to_cw(v)));
         let min_h = resolve_dim(&bs.min_height, cb_h).map_or(0.0, |v| px(to_ch(v)));
         let max_h = resolve_dim(&bs.max_height, cb_h).map_or(f64::INFINITY, |v| px(to_ch(v)));
-        let cw = |v: f64| v.clamp(min_w, max_w.max(min_w));
-        let ch = |v: f64| v.clamp(min_h, max_h.max(min_h));
         let nat = self.natural(id);
-        let (w, h) = match (spec_w, spec_h) {
-            (Some(w), Some(h)) => (cw(w), ch(h)),
+        let (w, h) = solve(spec_w, spec_h, (min_w, max_w, min_h, max_h), &nat);
+        let used = (LU::from_f32(w as f32).max0(), LU::from_f32(h as f32).max0());
+        if record && let Some(src) = bx.image() {
+            let fit = ImageFit { spec_w: spec_w.map(|v| v as f32), spec_h: spec_h.map(|v| v as f32), limits: [min_w as f32, max_w as f32, min_h as f32, max_h as f32], density: src.density, used };
+            self.fits.insert(bx.node, fit);
+        }
+        used
+    }
+}
+
+/// CSS2 10.3.2 / 10.6.2 for a replaced element: the content size from the specified sizes (already resolved, `None`
+/// for `auto`), the `(min-width, max-width, min-height, max-height)` and what is known of the element itself.
+fn solve(spec_w: Option<f64>, spec_h: Option<f64>, limits: (f64, f64, f64, f64), nat: &Natural) -> (f64, f64) {
+    let (min_w, max_w, min_h, max_h) = limits;
+    let cw = |v: f64| v.clamp(min_w, max_w.max(min_w));
+    let ch = |v: f64| v.clamp(min_h, max_h.max(min_h));
+    match (spec_w, spec_h) {
+        (Some(w), Some(h)) => (cw(w), ch(h)),
+        (Some(w), None) => {
+            let w = cw(w);
+            (w, ch(nat.ratio.map_or_else(|| nat.h.unwrap_or(nat.default_h), |r| w / r)))
+        }
+        (None, Some(h)) => {
+            let h = ch(h);
+            (cw(nat.ratio.map_or_else(|| nat.w.unwrap_or(nat.default_w), |r| h * r)), h)
+        }
+        (None, None) => match (nat.w, nat.h) {
+            (Some(w), Some(h)) => constrain(w, h, min_w, max_w, min_h, max_h),
             (Some(w), None) => {
                 let w = cw(w);
-                (w, ch(nat.ratio.map_or_else(|| nat.h.unwrap_or(nat.default_h), |r| w / r)))
+                (w, ch(nat.ratio.map_or(nat.default_h, |r| w / r)))
             }
             (None, Some(h)) => {
                 let h = ch(h);
-                (cw(nat.ratio.map_or_else(|| nat.w.unwrap_or(nat.default_w), |r| h * r)), h)
+                (cw(nat.ratio.map_or(nat.default_w, |r| h * r)), h)
             }
-            (None, None) => match (nat.w, nat.h) {
-                (Some(w), Some(h)) => constrain(w, h, min_w, max_w, min_h, max_h),
-                (Some(w), None) => {
-                    let w = cw(w);
-                    (w, ch(nat.ratio.map_or(nat.default_h, |r| w / r)))
+            (None, None) => match nat.ratio {
+                Some(r) => {
+                    let w = cw(nat.default_w.max(300.0));
+                    (w, ch(w / r))
                 }
-                (None, Some(h)) => {
-                    let h = ch(h);
-                    (cw(nat.ratio.map_or(nat.default_w, |r| h * r)), h)
-                }
-                (None, None) => match nat.ratio {
-                    Some(r) => {
-                        let w = cw(nat.default_w.max(300.0));
-                        (w, ch(w / r))
-                    }
-                    None => (cw(nat.default_w), ch(nat.default_h)),
-                },
+                None => (cw(nat.default_w), ch(nat.default_h)),
             },
-        };
-        (LU::from_f32(w as f32).max0(), LU::from_f32(h as f32).max0())
+        },
+    }
+}
+
+/// How the size of an image box was reached in the last layout: the inputs that do not depend on what the image turns
+/// out to be, and the result. The window asks [`ImageFit::keeps_size`] when an image's header arrives: a box whose
+/// width is given and whose size comes out the same (the height within [`HEIGHT_SLACK`]) needs no new layout, only a
+/// repaint.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageFit {
+    spec_w: Option<f32>,
+    spec_h: Option<f32>,
+    /// `min-width`, `max-width`, `min-height`, `max-height` (content box, px).
+    limits: [f32; 4],
+    /// Image pixels per CSS px of the chosen source.
+    density: f32,
+    /// The content size the layout gave the box.
+    used: (LU, LU),
+}
+
+/// A height that follows from the width and the picture's ratio may differ this much (layout units, 1 px) from what the
+/// `width` and `height` attributes reserved: the attributes are whole numbers (a thumbnail 250 x 180 shown 180 wide has
+/// `height="130"`, the ratio gives 129.6), so a picture almost always leaves a fraction of a pixel. A new layout of the
+/// whole page for that would cost far more than the page can show; the box keeps the height it has until the next layout.
+pub const HEIGHT_SLACK: i32 = 64;
+
+impl ImageFit {
+    /// Would an image of `width` x `height` pixels leave the box the size it has (the width exactly, the height to
+    /// within [`HEIGHT_SLACK`])? Only when the `width` is specified (otherwise the box's width, and so the widths of
+    /// what contains it, follow the picture).
+    pub fn keeps_size(&self, width: u32, height: u32) -> bool {
+        if self.spec_w.is_none() {
+            return false;
+        }
+        let d = f64::from(self.density).max(0.0001);
+        let (w, h) = (f64::from(width) / d, f64::from(height) / d);
+        let nat = Natural { w: Some(w), h: Some(h), ratio: ratio_of(w, h), default_w: 0.0, default_h: 0.0 };
+        let [a, b, c, e] = self.limits.map(f64::from);
+        let (w, h) = solve(self.spec_w.map(f64::from), self.spec_h.map(f64::from), (a, b, c, e), &nat);
+        let (w, h) = (LU::from_f32(w as f32).max0(), LU::from_f32(h as f32).max0());
+        w == self.used.0 && (i64::from(h.raw()) - i64::from(self.used.1.raw())).abs() <= i64::from(HEIGHT_SLACK)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::constrain;
+    use super::{ImageFit, constrain};
+    use crate::layout::units::LayoutUnit as LU;
 
     #[test]
     fn constraint_violation_table() {
@@ -176,5 +239,35 @@ mod tests {
         assert_eq!(constrain(200.0, 100.0, 0.0, 100.0, 0.0, 80.0), (100.0, 50.0));
         // Too small in both: min-width/w = 2 <= min-height/h = 3, so width = min-height * w / h.
         assert_eq!(constrain(10.0, 10.0, 20.0, f64::INFINITY, 30.0, f64::INFINITY), (30.0, 30.0));
+    }
+
+    fn fit(spec_w: Option<f32>, spec_h: Option<f32>, used: (f32, f32)) -> ImageFit {
+        ImageFit { spec_w, spec_h, limits: [0.0, f32::INFINITY, 0.0, f32::INFINITY], density: 1.0, used: (LU::from_f32(used.0), LU::from_f32(used.1)) }
+    }
+
+    #[test]
+    fn a_box_with_a_given_width_keeps_its_size_when_the_picture_fits_the_ratio() {
+        // `width="180" height="130"` with `height: auto`: the box is 180 x 130 before the picture is known.
+        let f = fit(Some(180.0), None, (180.0, 130.0));
+        // A 250 x 180 thumbnail gives 180 x 129.6: within the slack, no new layout.
+        assert!(f.keeps_size(250, 180));
+        // The ratio of the attributes itself.
+        assert!(f.keeps_size(180, 130));
+        // A picture of another shape changes the height by more than a pixel.
+        assert!(!f.keeps_size(250, 100));
+        assert!(!f.keeps_size(180, 180));
+    }
+
+    #[test]
+    fn a_given_width_and_height_never_depend_on_the_picture() {
+        let f = fit(Some(100.0), Some(40.0), (100.0, 40.0));
+        assert!(f.keeps_size(1, 1));
+        assert!(f.keeps_size(4000, 3000));
+    }
+
+    #[test]
+    fn a_width_that_follows_the_picture_always_needs_a_layout() {
+        assert!(!fit(None, Some(40.0), (100.0, 40.0)).keeps_size(100, 40));
+        assert!(!fit(None, None, (0.0, 0.0)).keeps_size(0, 0));
     }
 }

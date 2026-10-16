@@ -1,9 +1,12 @@
 //! Command line: `qinglan.exe [address] [--replay dir]` and
-//! `qinglan.exe --bench <address> [--replay dir] [--width W --height H] [--dpr D]`.
+//! `qinglan.exe --bench <address> [--replay dir [--replay-delay MS]] [--width W --height H] [--dpr D]`.
 
 use std::path::PathBuf;
 
-pub const USAGE: &str = "usage: qinglan.exe [address] [--replay <dir>]\n       qinglan.exe --bench <address> [--replay <dir>] [--width W] [--height H] [--dpr D] [--mem]";
+pub const USAGE: &str = "usage: qinglan.exe [address] [--replay <dir>]\n       qinglan.exe --bench <address> [--replay <dir> [--replay-delay <ms>]] [--width W] [--height H] [--dpr D] [--mem]";
+
+/// Longest `--replay-delay`, ms.
+const MAX_REPLAY_DELAY_MS: u32 = 10_000;
 
 /// Largest bench picture, in device pixels (the same cap `qinglan-cli render` has).
 const MAX_BENCH_PIXELS: f64 = 32_000_000.0;
@@ -21,6 +24,9 @@ pub struct BenchOptions {
 pub struct Options {
     pub address: Option<String>,
     pub replay: Option<PathBuf>,
+    /// Dev option: every replayed response is held back this long (plus up to half as much, by address), so that
+    /// images arrive while the page is being used, as they do from a real network.
+    pub replay_delay_ms: u32,
     pub bench: Option<BenchOptions>,
 }
 
@@ -39,6 +45,9 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
             // Read in `main` (it switches the heap counting on before anything is allocated).
             "--mem" => {}
             "--replay" => o.replay = Some(PathBuf::from(value(&mut it, "--replay")?)),
+            "--replay-delay" => {
+                o.replay_delay_ms = value(&mut it, "--replay-delay")?.parse::<u32>().ok().filter(|v| *v <= MAX_REPLAY_DELAY_MS).ok_or("--replay-delay: milliseconds, 0 to 10000")?;
+            }
             "--width" => width = Some(number(value(&mut it, "--width")?, "--width")?),
             "--height" => height = Some(number(value(&mut it, "--height")?, "--height")?),
             "--dpr" => dpr = Some(number(value(&mut it, "--dpr")?, "--dpr")?),
@@ -50,6 +59,9 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
                 o.address = Some(s.to_string());
             }
         }
+    }
+    if o.replay_delay_ms > 0 && o.replay.is_none() {
+        return Err("--replay-delay needs --replay".into());
     }
     if bench {
         let (w, h, d) = (width.unwrap_or(1280.0), height.unwrap_or(800.0), dpr.unwrap_or(1.0));
@@ -97,6 +109,13 @@ mod tests {
     }
 
     #[test]
+    fn the_replay_delay() {
+        assert_eq!(p(&["a", "--replay", "d"]).unwrap().replay_delay_ms, 0);
+        let o = p(&["--bench", "a", "--replay", "d", "--replay-delay", "80"]).unwrap();
+        assert_eq!(o.replay_delay_ms, 80);
+    }
+
+    #[test]
     fn mistakes_are_reported() {
         assert!(p(&["--bench"]).is_err());
         assert!(p(&["--nope"]).is_err());
@@ -104,6 +123,9 @@ mod tests {
         assert!(p(&["--width", "800", "a"]).is_err());
         assert!(p(&["--bench", "a", "--dpr", "0"]).is_err());
         assert!(p(&["--bench", "a", "--width", "x"]).is_err());
+        assert!(p(&["a", "--replay-delay", "50"]).is_err(), "a delay without a recording");
+        assert!(p(&["a", "--replay", "d", "--replay-delay", "-1"]).is_err());
+        assert!(p(&["a", "--replay", "d", "--replay-delay", "20000"]).is_err());
         assert!(p(&["--bench", "a", "--width", "8000", "--height", "8000", "--dpr", "2"]).is_err());
     }
 }

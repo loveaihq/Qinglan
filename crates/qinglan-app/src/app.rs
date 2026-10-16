@@ -32,17 +32,27 @@ use crate::throttle::{Plan, Throttle};
 const TIMER_CSS: usize = 1;
 const TIMER_RELAYOUT: usize = 2;
 const TIMER_BENCH: usize = 3;
+const TIMER_BENCH_STEP: usize = 4;
 const USER_BENCH_STEP: u32 = 1;
 /// How long the page waits for the style sheets of `<head>` (L1 task 17).
 const CSS_WAIT_MS: u32 = 5000;
 /// Images change the layout at most this often.
 const RELAYOUT_GAP: Duration = Duration::from_millis(100);
+/// A relayout caused by an image waits until this long after the last scroll input (step 2-0).
+const RELAYOUT_QUIET: Duration = Duration::from_millis(150);
 /// A wheel "line" in CSS px (Chrome scrolls 100 px for the default 3 lines).
 const LINE_PX: f32 = 100.0 / 3.0;
 const ARROW_PX: f32 = 40.0;
 const PAGE_FRACTION: f32 = 0.875;
 const BENCH_SCROLL_STEP: f32 = 100.0;
-const BENCH_TIMEOUT_MS: u32 = 120_000;
+const BENCH_TIMEOUT_MS: u32 = 240_000;
+/// The bench scrolls the way a hand on a wheel does: `BENCH_BURST` notches of `BENCH_SCROLL_STEP` px, one every timer
+/// tick (`BENCH_STEP_MS`, the system rounds it up to 16 or 31 ms), then the reader looks for `BENCH_PAUSE_MS`.
+const BENCH_BURST: u32 = 10;
+const BENCH_STEP_MS: u32 = 16;
+const BENCH_PAUSE_MS: u32 = 200;
+/// At the bottom the bench waits this long at most for the layout and the images on their way.
+const BENCH_SETTLE_MS: u128 = 5000;
 /// A page of 2^22 px scrolled 100 px at a time has 42 000 frames; more than this means the walk is stuck.
 const MAX_BENCH_FRAMES: usize = 100_000;
 /// Image arrivals may start this many layouts per page; a page whose images keep changing their own layout (a `srcset`
@@ -152,7 +162,7 @@ pub struct Browser {
     relayout: Throttle,
     /// The viewport changed: styles (media queries) and layout are made again.
     restyle: bool,
-    /// Layouts started by arriving images since the page was opened or the window last changed.
+    /// Layouts made because images arrived since the page was opened or the window last changed.
     image_relayouts: u32,
     hover: Option<Url>,
     /// A message that stays in the status bar until the next navigation ("stopped").
@@ -161,6 +171,8 @@ pub struct Browser {
     last_loading: bool,
     bench: Option<Bench>,
     event_start: Instant,
+    /// Time the current event has spent in the GDI calls that put pixels on the window (the system's part of a frame).
+    present_ms: f64,
     prewarm: Option<JoinHandle<usize>>,
 }
 
@@ -181,7 +193,7 @@ impl Browser {
             dpr,
             scroll: 0.0,
             frame: Frame::new(0, 0),
-            relayout: Throttle::new(RELAYOUT_GAP),
+            relayout: Throttle::new(RELAYOUT_GAP, RELAYOUT_QUIET),
             restyle: false,
             image_relayouts: 0,
             hover: None,
@@ -190,6 +202,7 @@ impl Browser {
             last_loading: false,
             bench,
             event_start: Instant::now(),
+            present_ms: 0.0,
             prewarm: None,
         }
     }
@@ -312,6 +325,10 @@ impl Browser {
                 self.plan_relayout();
             }
             TIMER_BENCH => self.bench_fail("timed out"),
+            TIMER_BENCH_STEP => {
+                self.ui.kill_timer(TIMER_BENCH_STEP);
+                self.bench_step();
+            }
             _ => {}
         }
     }
@@ -677,7 +694,9 @@ impl Browser {
                 (Some(p), Some(page)) if page.list.is_some() => page.raster(&**p, vp, scroll, y0, &mut self.frame),
                 _ => self.frame.data.fill(255),
             }
+            let t = Instant::now();
             self.ui.blit_at(y0, w, bh, &self.frame.data);
+            self.present_ms += ms(t.elapsed());
             y0 += bh;
         }
     }
@@ -707,20 +726,20 @@ impl Browser {
     }
 
     fn request_images(&mut self) {
-        let (vp, scroll, all) = (self.vp(), self.scroll, self.bench.is_some());
+        let (vp, scroll) = (self.vp(), self.scroll);
         let Some(page) = self.page.as_mut() else { return };
-        if page.request_images(&mut self.loader, vp, scroll, all) {
+        if page.request_images(&mut self.loader, vp, scroll, false) {
             self.request_image_relayout();
         }
     }
 
-    /// An image changed what the layout needs: lay out again, at most [`MAX_IMAGE_RELAYOUTS`] times per page.
+    /// An image changed what the layout needs: lay out again (once for all that arrive meanwhile, and not while the user
+    /// scrolls), at most [`MAX_IMAGE_RELAYOUTS`] times per page.
     fn request_image_relayout(&mut self) {
         if self.image_relayouts >= MAX_IMAGE_RELAYOUTS {
             self.ui.invalidate();
             return;
         }
-        self.image_relayouts += 1;
         self.relayout.request();
         self.plan_relayout();
     }
@@ -750,9 +769,13 @@ impl Browser {
         if restyle {
             page.style(&*platform, vp);
         }
+        let started = Instant::now();
         let anchored = page.relayout(&*platform, vp, scroll);
+        if !restyle {
+            self.image_relayouts += 1;
+        }
         if let Some(b) = self.bench.as_mut() {
-            b.relayouts += 1;
+            b.relayout_done(ms(started.elapsed()));
         }
         let max = page.max_scroll(vp);
         self.scroll = self.snap(anchored.clamp(0.0, max));
@@ -792,6 +815,8 @@ impl Browser {
             return;
         }
         self.scroll = y;
+        // Layouts caused by images wait for the scrolling to stop (step 2-0).
+        self.relayout.scrolled(Instant::now());
         self.update_scrollbar();
         // Images that came near start loading (L1 task 15).
         self.request_images();
@@ -952,11 +977,19 @@ impl Browser {
         if settled && let Some(b) = self.bench.as_mut() {
             b.stage = Stage::Scrolling;
             b.next_y = 0.0;
+            b.burst_left = BENCH_BURST;
             self.ui.post_user(USER_BENCH_STEP);
         }
     }
 
-    /// One frame of the scroll: the next position, decode what came near, paint it, put it on the window.
+    /// Is something still on its way to the page (a layout waiting, images loading)?
+    fn bench_busy(&self) -> bool {
+        self.relayout.pending() || self.loader.pending() > 0 || self.page.as_ref().is_some_and(|p| p.res.images_pending() > 0)
+    }
+
+    /// One notch of the scroll, as a hand on a wheel makes it: the next position, the images that came near are
+    /// requested (and decoded), the page is painted and put on the window. Notches come in bursts with a pause between
+    /// them, so images arrive and layouts are due while the scroll goes on.
     fn bench_step(&mut self) {
         let Some(next_y) = self.bench.as_ref().filter(|b| b.stage == Stage::Scrolling).map(|b| b.next_y) else { return };
         if self.platform.is_none() {
@@ -966,9 +999,27 @@ impl Browser {
         // Positions are whole device pixels: compare against the snapped end, or a bottom that rounds down is never
         // reached (the walk would go on for ever).
         let max = self.snap(self.page.as_ref().map_or(0.0, |p| p.max_scroll(vp)));
+        let waiting = self.bench.as_ref().is_some_and(|b| b.bottom_at.is_some());
+        if waiting && self.scroll >= max {
+            // At the bottom: the layout and the images that are still on their way settle (bounded), then the run ends.
+            let waited = self.bench.as_ref().and_then(|b| b.bottom_at).map_or(0, |t| t.elapsed().as_millis());
+            if self.bench_busy() && waited < BENCH_SETTLE_MS {
+                self.ui.set_timer(TIMER_BENCH_STEP, 100);
+            } else {
+                self.bench_finish();
+            }
+            return;
+        }
+        // A layout while waiting made the page longer: the walk goes on.
+        if let Some(b) = self.bench.as_mut() {
+            b.bottom_at = None;
+        }
         let y = self.snap(next_y.min(max));
         self.scroll = y;
+        // What the window does when the user scrolls (`scroll_to`): the layouts wait, images that came near start.
+        self.relayout.scrolled(Instant::now());
         self.update_scrollbar();
+        self.request_images();
         let t_decode = Instant::now();
         let mut decoded = 0;
         if let Some(p) = self.page.as_mut() {
@@ -981,21 +1032,33 @@ impl Browser {
         let decode = ms(t_decode.elapsed());
         let t = Instant::now();
         self.draw_bands(y);
+        let t_flush = Instant::now();
         self.ui.flush();
+        self.present_ms += ms(t_flush.elapsed());
         let frame_ms = ms(t.elapsed());
+        let mut delay = BENCH_STEP_MS;
         if let Some(b) = self.bench.as_mut() {
             b.frames.push(frame_ms);
+            b.frame_y.push(y);
+            b.present_ms.push(self.present_ms);
             b.decode_ms += decode;
             b.next_y = y + BENCH_SCROLL_STEP;
+            b.burst_left = b.burst_left.saturating_sub(1);
+            if b.burst_left == 0 {
+                b.burst_left = BENCH_BURST;
+                delay = BENCH_PAUSE_MS;
+            }
         }
         let too_long = self.bench.as_ref().is_some_and(|b| b.frames.len() > MAX_BENCH_FRAMES || b.started.elapsed() > Duration::from_millis(u64::from(BENCH_TIMEOUT_MS)));
         if y >= max {
-            self.bench_finish();
+            if let Some(b) = self.bench.as_mut() {
+                b.bottom_at = Some(Instant::now());
+            }
+            self.ui.set_timer(TIMER_BENCH_STEP, 100);
         } else if too_long {
-            // Posted steps starve the (low priority) timer message, so the deadline is checked here as well.
             self.bench_fail("timed out while scrolling");
         } else {
-            self.ui.post_user(USER_BENCH_STEP);
+            self.ui.set_timer(TIMER_BENCH_STEP, delay);
         }
     }
 
@@ -1113,6 +1176,8 @@ impl App for Browser {
     fn event(&mut self, _ui: &Ui, ev: Event) -> bool {
         let start = Instant::now();
         self.event_start = start;
+        let scrolling = self.bench.as_ref().is_some_and(|b| b.stage == Stage::Scrolling);
+        self.present_ms = 0.0;
         let handled = match catch(|| self.handle(ev)) {
             Ok(h) => h,
             Err(text) => {
@@ -1127,7 +1192,13 @@ impl App for Browser {
             eprintln!("qinglan: {text}");
         }
         if let Some(b) = self.bench.as_mut() {
-            b.event_done(start, Instant::now());
+            let end = Instant::now();
+            b.event_done(start, end);
+            if scrolling {
+                let took = ms(end.saturating_duration_since(start));
+                b.scroll_event_max_ms = b.scroll_event_max_ms.max(took);
+                b.scroll_ours_max_ms = b.scroll_ours_max_ms.max(took - self.present_ms);
+            }
         }
         handled
     }

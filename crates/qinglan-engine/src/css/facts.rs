@@ -47,11 +47,12 @@ impl DocFacts {
             for at in &e.attrs {
                 let name = doc.atoms.get(at.name);
                 f.attr_names.insert(hash(name, true));
-                f.attr_pairs.insert(pair(name, &at.value));
+                let value = doc.value(at);
+                f.attr_pairs.insert(pair(name, value));
                 if at.name == a::ID {
-                    f.ids.insert(hash(&at.value, false));
+                    f.ids.insert(hash(value, false));
                 } else if at.name == a::CLASS {
-                    for tok in at.value.split([' ', '\t', '\n', '\x0c', '\r']).filter(|t| !t.is_empty()) {
+                    for tok in value.split([' ', '\t', '\n', '\x0c', '\r']).filter(|t| !t.is_empty()) {
                         f.classes.insert(hash(tok, false));
                     }
                 }

@@ -36,13 +36,29 @@ pub struct Bench {
     pub counting: bool,
     pub first_screen: Option<Span>,
     pub full_layout: Option<Span>,
-    /// Raster + blit time of every scroll frame, ms.
+    /// Raster + blit time of every scroll step, ms.
     pub frames: Vec<f64>,
+    /// The scroll position (CSS px) of each of those steps.
+    pub frame_y: Vec<f32>,
+    /// Of each step's time, the part spent in the GDI calls that put the pixels on the window (blit and flush).
+    pub present_ms: Vec<f64>,
     /// Time spent decoding and dropping images between frames, ms (not part of the frame time).
     pub decode_ms: f64,
     pub next_y: f32,
     /// Layouts after the first whole-page one (images arriving, the window changing).
     pub relayouts: u32,
+    /// Of those, the ones made while scrolling, and the longest one, ms.
+    pub scroll_relayouts: u32,
+    pub scroll_relayout_max_ms: f64,
+    /// The longest time the UI thread spent in one event while scrolling (a step, a layout, an image arriving), ms: the
+    /// longest time a scroll input could have waited.
+    pub scroll_event_max_ms: f64,
+    /// The same without the time in the GDI present calls: what this program's own code kept the UI thread busy.
+    pub scroll_ours_max_ms: f64,
+    /// Notches left in the current burst of the scroll.
+    pub burst_left: u32,
+    /// When the scroll reached the bottom and began to wait for the page to settle.
+    pub bottom_at: Option<Instant>,
     pub error: Option<String>,
     /// Private bytes at some points of the run: (name, bytes).
     pub marks: Vec<(&'static str, u64)>,
@@ -72,9 +88,17 @@ impl Bench {
             first_screen: None,
             full_layout: None,
             frames: Vec::new(),
+            frame_y: Vec::new(),
+            present_ms: Vec::new(),
             decode_ms: 0.0,
             next_y: 0.0,
             relayouts: 0,
+            scroll_relayouts: 0,
+            scroll_relayout_max_ms: 0.0,
+            scroll_event_max_ms: 0.0,
+            scroll_ours_max_ms: 0.0,
+            burst_left: 0,
+            bottom_at: None,
             error: None,
             marks: Vec::new(),
             breakdown: String::new(),
@@ -94,6 +118,15 @@ impl Bench {
     pub fn span(&self, event_start: Instant, now: Instant) -> Option<Span> {
         let html = self.html_at?;
         Some(Span { busy: self.busy + now.saturating_duration_since(event_start), wall: now.saturating_duration_since(html) })
+    }
+
+    /// A layout after the first whole-page one took `took_ms`.
+    pub fn relayout_done(&mut self, took_ms: f64) {
+        self.relayouts += 1;
+        if self.stage == Stage::Scrolling {
+            self.scroll_relayouts += 1;
+            self.scroll_relayout_max_ms = self.scroll_relayout_max_ms.max(took_ms);
+        }
     }
 
     /// An event that started at `start` ended at `end`.
@@ -151,7 +184,19 @@ impl Report<'_> {
         line("scroll-frames", b.frames.len().to_string());
         line("scroll-median-ms", num(frames.then(|| percentile(&sorted, 0.5))));
         line("scroll-p95-ms", num(frames.then(|| percentile(&sorted, 0.95))));
-        line("scroll-max-ms", num(frames.then(|| sorted.last().copied().unwrap_or(0.0))));
+        line("scroll-max-frame-ms", num(frames.then(|| sorted.last().copied().unwrap_or(0.0))));
+        line("scroll-max-ms", num(frames.then_some(b.scroll_event_max_ms.max(sorted.last().copied().unwrap_or(0.0)))));
+        // A step's own work is its time without the present; the present of a frame is the system's (the compositor).
+        let max_present = b.present_ms.iter().copied().fold(0.0, f64::max);
+        let stalls = b.present_ms.iter().filter(|p| **p > 50.0).count();
+        line("scroll-max-ours-ms", num(frames.then_some(b.scroll_ours_max_ms)));
+        line("scroll-max-present-ms", num(frames.then_some(max_present)));
+        line("scroll-present-stalls", format!("{stalls} frames over 50 ms"));
+        let mut order: Vec<usize> = (0..b.frames.len()).collect();
+        order.sort_by(|&a, &c| b.frames[c].total_cmp(&b.frames[a]));
+        let slowest: Vec<String> = order.iter().take(3).map(|&i| format!("{:.1} ms at y={:.0}", b.frames[i], b.frame_y.get(i).copied().unwrap_or(0.0))).collect();
+        line("scroll-slowest-frames", slowest.join(", "));
+        line("scroll-relayouts", format!("{} (longest {:.1} ms)", b.scroll_relayouts, b.scroll_relayout_max_ms));
         line("scroll-decode-ms", num(frames.then_some(b.decode_ms)));
         line("peak-private-bytes", self.memory.map_or_else(|| "n/a".to_string(), |m| m.1.to_string()));
         line("private-bytes-after-scroll", self.memory.map_or_else(|| "n/a".to_string(), |m| m.0.to_string()));
@@ -219,7 +264,12 @@ mod tests {
             "scroll-frames",
             "scroll-median-ms",
             "scroll-p95-ms",
+            "scroll-max-frame-ms",
             "scroll-max-ms",
+            "scroll-max-ours-ms",
+            "scroll-max-present-ms",
+            "scroll-present-stalls",
+            "scroll-relayouts",
             "scroll-decode-ms",
             "peak-private-bytes",
             "private-bytes-after-scroll",

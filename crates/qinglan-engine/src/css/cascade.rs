@@ -721,7 +721,7 @@ pub fn compute_styles(input: StyleInput<'_>) -> StyleTree {
             let Some(plan) = plan_of.get(at.name.0 as usize).filter(|&&i| i != 0).and_then(|&i| plans.get(i as usize)) else { continue };
             sig = mix(sig, 0x3_0000_0000 | at.name.0 as u64);
             if plan.value {
-                sig = mix_bytes(sig, at.value.as_bytes());
+                sig = mix_bytes(sig, doc.value(at).as_bytes());
             }
             for t in &plan.tests {
                 sig = mix(sig, 2 + matcher.attr_matches(t, el) as u64);

@@ -516,7 +516,7 @@ impl HintBuilder {
 /// The attribute `name` of an HTML element (no namespace).
 fn attr(doc: &Document, el: NodeId, name: &str) -> Option<String> {
     let e = doc.element(el)?;
-    e.attrs.iter().find(|x| x.ns == Namespace::None && doc.atoms.get(x.name) == name).map(|x| x.value.clone())
+    e.attrs.iter().find(|x| x.ns == Namespace::None && doc.atoms.get(x.name) == name).map(|x| doc.value(x).to_string())
 }
 
 fn nearest_table(doc: &Document, el: NodeId) -> Option<NodeId> {

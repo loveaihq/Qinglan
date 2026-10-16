@@ -344,7 +344,7 @@ impl Layouter<'_> {
         let to_ch = |v: LU| if border_box { (v - v_extra).max0() } else { v };
 
         // Replaced elements: the content size comes from the element (CSS2 10.3.2, 10.6.2).
-        let repl = (bx.kind == BoxKind::Replaced).then(|| self.replaced_size(id, cb_w, cb_h));
+        let repl = (bx.kind == BoxKind::Replaced).then(|| self.replaced_size_final(id, cb_w, cb_h));
 
         // Width (10.3.3) with min/max (10.4). The intrinsic-size keywords (`min-content` ...) give a
         // content-box size whatever `box-sizing` says.

@@ -4,12 +4,12 @@
 use qinglan_engine::css::{StyleOptions, StyleOutput, style_document_with};
 use qinglan_engine::html::dom::{Document, NodeId};
 use qinglan_engine::interact::{PageIndex, document_title, fragment_target, link_target};
-use qinglan_engine::layout::image::ImageSizes;
+use qinglan_engine::layout::image::{ImageSizes, ImageState};
 use qinglan_engine::layout::{LayoutOptions, LayoutResult, layout_document_with};
 use qinglan_engine::net::Response;
 use qinglan_engine::net::blocking::{self, Opened};
 use qinglan_engine::net::loader::Loader;
-use qinglan_engine::net::page::{PageResources, Update, apply_probe, probe_response};
+use qinglan_engine::net::page::{PageResources, Update, probe_response};
 use qinglan_engine::paint::images::{Band, ImageStore};
 use qinglan_engine::paint::raster::{Frame, View, render_band};
 use qinglan_engine::paint::{DisplayList, build_display_list, wanted_images};
@@ -151,27 +151,43 @@ impl Page {
         let wanted = wanted_images(layout, list, Band::new(scroll, vp.h), all);
         let mut changed = false;
         for n in self.res.request_images(loader, &wanted) {
-            changed |= self.sizes.set_broken(n);
+            changed |= self.break_image(n);
         }
         changed
     }
 
-    /// An image (or its failure) came in.
+    /// An image (or its failure) came in. A picture whose size leaves every box it fills as it is (the `width` is given
+    /// and the height follows from it the same way as before: the usual `width`/`height` attributes of a thumbnail)
+    /// only needs painting.
     pub fn apply_image(&mut self, nodes: &[NodeId], url: &Url, result: Result<std::sync::Arc<Response>, String>) -> Effect {
         let changed = match result {
-            Ok(resp) => {
-                let probe = probe_response(&WicDecoder, &resp);
-                let changed = apply_probe(&mut self.sizes, nodes, &probe);
-                if probe.is_ok() {
+            Ok(resp) => match probe_response(&WicDecoder, &resp) {
+                Ok(info) => {
+                    let keeps_boxes = nodes.iter().all(|&n| self.keeps_box(n, info.width, info.height));
+                    let changed = nodes.iter().fold(false, |c, &n| c | self.sizes.set_loaded(n, info.width, info.height));
                     for n in nodes {
                         self.store.set_url(*n, &url.serialize(true));
                     }
+                    changed && !keeps_boxes
                 }
-                changed
-            }
-            Err(_) => nodes.iter().fold(false, |c, n| c | self.sizes.set_broken(*n)),
+                Err(_) => nodes.iter().fold(false, |c, &n| c | self.break_image(n)),
+            },
+            Err(_) => nodes.iter().fold(false, |c, &n| c | self.break_image(n)),
         };
         if changed { Effect::Relayout } else { Effect::Repaint }
+    }
+
+    /// The image of `node` cannot be shown. True when that needs a new layout: a box that was made for the image (it has a
+    /// size from the page) stays as it is, only an image shown as its alt text turns into something else.
+    fn break_image(&mut self, node: NodeId) -> bool {
+        let has_box = self.layout.as_ref().is_some_and(|l| l.fits.contains_key(&node));
+        self.sizes.set_broken(node) && !has_box
+    }
+
+    /// Would the last layout's box for the image of `node` come out the same with an image of this pixel size? A node
+    /// that was broken, or that the layout did not make a box for, always needs a new layout.
+    fn keeps_box(&self, node: NodeId, width: u32, height: u32) -> bool {
+        !matches!(self.sizes.get(node), Some(ImageState::Broken)) && self.layout.as_ref().and_then(|l| l.fits.get(&node)).is_some_and(|f| f.keeps_size(width, height))
     }
 
     /// Hand a loader event of this page's sub-resources to the resource tracker.

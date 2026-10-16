@@ -2,7 +2,7 @@
 //! seeing how much the counting allocator's live bytes shrink (see `sys/alloc.rs`), plus a split of the DOM's own
 //! parts. Only meaningful after [`crate::count_heap`].
 
-use qinglan_engine::html::dom::{Attribute, Document, Node, NodeData};
+use qinglan_engine::html::dom::{Document, Node, NodeData, StoredAttr};
 
 use crate::heap_live;
 
@@ -43,11 +43,11 @@ pub fn dom_parts(doc: &Document) -> (usize, usize, usize) {
     for n in &doc.nodes {
         match &n.data {
             NodeData::Text(t) | NodeData::Comment(t) => text += t.capacity(),
-            NodeData::Element(e) => attrs += e.attrs.capacity() * std::mem::size_of::<Attribute>() + e.attrs.iter().map(|a| a.value.capacity()).sum::<usize>(),
+            NodeData::Element(e) => attrs += e.attrs.capacity() * std::mem::size_of::<StoredAttr>(),
             _ => {}
         }
     }
-    (nodes, text, attrs)
+    (nodes, text, attrs + doc.attr_pool.capacity())
 }
 
 /// `bytes` as megabytes with one decimal.
