@@ -163,7 +163,7 @@ impl Report<'_> {
         let b = self.bench;
         let num = |v: Option<f64>| v.map_or_else(|| "n/a".to_string(), |v| format!("{v:.1}"));
         let mut sorted = b.frames.clone();
-        sorted.sort_by(f64::total_cmp);
+        qinglan_engine::sorting::sort_by_u64_key(&mut sorted, |&x| qinglan_engine::sorting::f64_key(x));
         let frames = !sorted.is_empty();
         let o = &b.opts;
         let mut s = String::new();
@@ -193,7 +193,7 @@ impl Report<'_> {
         line("scroll-max-present-ms", num(frames.then_some(max_present)));
         line("scroll-present-stalls", format!("{stalls} frames over 50 ms"));
         let mut order: Vec<usize> = (0..b.frames.len()).collect();
-        order.sort_by(|&a, &c| b.frames[c].total_cmp(&b.frames[a]));
+        qinglan_engine::sorting::sort_by_u64_key(&mut order, |&i| !qinglan_engine::sorting::f64_key(b.frames.get(i).copied().unwrap_or(0.0)));
         let slowest: Vec<String> = order.iter().take(3).map(|&i| format!("{:.1} ms at y={:.0}", b.frames[i], b.frame_y.get(i).copied().unwrap_or(0.0))).collect();
         line("scroll-slowest-frames", slowest.join(", "));
         line("scroll-relayouts", format!("{} (longest {:.1} ms)", b.scroll_relayouts, b.scroll_relayout_max_ms));

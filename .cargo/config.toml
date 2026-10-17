@@ -1,4 +1,7 @@
 # Link the C runtime statically so qingpdf.exe runs on a clean Windows
 # without the Visual C++ redistributable (hard rule 5: nothing to install).
+#
+# `-inline-threshold=100` (LLVM's default is 225 at opt-level 3): the final LTO pass inlines less. It makes the whole
+# program about 8% smaller; see docs/decisions.md, 2a-3, for the speed it costs.
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "llvm-args=-inline-threshold=100"]

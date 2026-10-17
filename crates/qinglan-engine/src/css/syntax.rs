@@ -142,7 +142,7 @@ pub fn parse_cvs_many(texts: &[&str]) -> Vec<Vec<Cv>> {
         return texts.iter().map(|t| parse_cvs(t)).collect();
     }
     let mut order: Vec<usize> = (0..texts.len()).collect();
-    order.sort_by_key(|&i| std::cmp::Reverse(texts.get(i).map_or(0, |t| t.len())));
+    crate::sorting::sort_by_u64_key(&mut order, |&i| !(texts.get(i).map_or(0, |t| t.len()) as u64));
     let next = std::sync::atomic::AtomicUsize::new(0);
     let slots: Vec<std::sync::Mutex<Option<Vec<Cv>>>> = texts.iter().map(|_| std::sync::Mutex::new(None)).collect();
     let work = || {

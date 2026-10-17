@@ -10,5 +10,6 @@ pub mod lru;
 pub mod net;
 pub mod paint;
 pub mod platform;
+pub mod sorting;
 pub mod textclass;
 pub mod url;

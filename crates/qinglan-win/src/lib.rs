@@ -24,6 +24,9 @@ pub use images::WicDecoder;
 pub use net::{WinHttpConfig, WinHttpTransport, accept_language, map_error};
 pub use platform::{CacheStats, WinPlatform};
 pub use spawn::spawn_process;
+pub use sys::heap::PoolAlloc;
+#[cfg(feature = "mem-stats")]
+pub use sys::heap::pool_report;
 #[cfg(feature = "mem-stats")]
 pub use sys::alloc::{CountingAlloc, count_heap, heap_counting, heap_summary, heap_allocs, heap_blocks, heap_live, heap_peak};
 

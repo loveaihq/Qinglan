@@ -201,10 +201,14 @@ fn page_url(input: &str) -> Option<Url> {
 }
 
 // Dev builds (`--features mem-stats`) count live heap bytes once `bench --mem` switches it on (the memory
-// breakdown); release builds use the system allocator as is.
+// breakdown); release builds use the pool allocator without counting.
 #[cfg(feature = "mem-stats")]
 #[global_allocator]
 static ALLOC: qinglan_win::CountingAlloc = qinglan_win::CountingAlloc;
+
+#[cfg(not(feature = "mem-stats"))]
+#[global_allocator]
+static ALLOC: qinglan_win::PoolAlloc = qinglan_win::PoolAlloc;
 
 fn main() -> ExitCode {
     // `bench ... --mem` (dev builds only) also prints what each structure holds; counting every allocation costs a

@@ -199,7 +199,7 @@ pub fn select_source(doc: &Document, n: NodeId, env: &SelectEnv) -> Option<(Stri
     {
         cands.push((s.to_string(), 1.0));
     }
-    cands.sort_by(|a, b| a.1.total_cmp(&b.1));
+    crate::sorting::sort_by_u64_key(&mut cands, |c| crate::sorting::f32_key(c.1));
     let dpr = if env.dpr.is_finite() && env.dpr > 0.0 { env.dpr } else { 1.0 };
     let pick = cands.iter().find(|(_, d)| *d >= dpr).or_else(|| cands.last())?;
     Some((pick.0.clone(), pick.1))

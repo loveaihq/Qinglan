@@ -533,9 +533,10 @@ fn paint_order(tree: &BoxTree) -> (Vec<Positioned>, Vec<Positioned>, Vec<Positio
         let p = Positioned { box_id: i as BoxId, position: pos, z_index: z, auto: !makes_context(&b.style), ctx: stacking_context(tree, i as BoxId) };
         all.push((z, b.order, p));
     }
-    all.sort_by_key(|&(z, order, p)| (z, order, p.box_id));
+    // Boxes were pushed in box order, so equal (z, order) already keep the box-id order.
+    crate::sorting::sort_by_u64_key(&mut all, |&(z, order, _)| (u64::from((z as u32) ^ 0x8000_0000) << 32) | u64::from(order));
     let mut stacked: Vec<Positioned> = all.iter().map(|t| t.2).collect();
-    stacked.sort_by_key(|p| p.ctx);
+    crate::sorting::sort_by_u64_key(&mut stacked, |p| u64::from(p.ctx));
     let (neg, rest): (Vec<_>, Vec<_>) = all.into_iter().partition(|(z, ..)| *z < 0);
     (neg.into_iter().map(|t| t.2).collect(), rest.into_iter().map(|t| t.2).collect(), stacked)
 }

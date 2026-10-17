@@ -1167,7 +1167,7 @@ impl Browser {
         }
         let memory = qinglan_win::window::process_memory();
         #[cfg(feature = "mem-stats")]
-        let (heap_stats, breakdown) = (qinglan_win::heap_summary(), self.memory_breakdown());
+        let (heap_stats, pool_stats, breakdown) = (qinglan_win::heap_summary(), qinglan_win::pool_report(), self.memory_breakdown());
         #[cfg(feature = "mem-stats")]
         let torn_down = qinglan_win::window::process_memory();
         let Some(b) = self.bench.as_mut() else { return };
@@ -1175,6 +1175,11 @@ impl Browser {
         #[cfg(feature = "mem-stats")]
         {
             b.breakdown = breakdown;
+            let (chunks, on_free_lists, by_class) = pool_stats;
+            b.breakdown.push_str(&format!("mem-pool-chunks: {chunks}
+mem-pool-free-lists: {on_free_lists}
+mem-pool-free-by-class:{by_class}
+"));
             if let Some((allocated, committed)) = heap_stats {
                 b.breakdown.push_str(&format!("mem-win-heap-allocated: {allocated}
 mem-win-heap-committed: {committed}

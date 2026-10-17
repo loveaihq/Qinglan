@@ -10,6 +10,10 @@
 #[global_allocator]
 static ALLOC: qinglan_win::CountingAlloc = qinglan_win::CountingAlloc;
 
+#[cfg(not(feature = "mem-stats"))]
+#[global_allocator]
+static ALLOC: qinglan_win::PoolAlloc = qinglan_win::PoolAlloc;
+
 fn main() -> std::process::ExitCode {
     qinglan_app::run()
 }

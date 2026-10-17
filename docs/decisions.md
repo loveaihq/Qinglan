@@ -973,3 +973,42 @@ bug 类共 51 条，**没有修完**：每条在 `notes.txt` 里有原因（家�
 
 - `visibility: collapse` 的列、整行 `empty-cells: hide` 的行、`rules`/`frame`、列和列组的边框、单元格百分比高度、`th` 的 `-internal-center`、标题的最小宽度算进 `content_widths`（嵌套里）、表格的 `clip` 用样式边框不是合并后的（`overflow: hidden` 的合并表格差 1px 左右）。
 - 表格里 `position: relative` 的单元格/行/行组的偏移没有做（只有标题做了）。
+
+## 第 2 层 · 2a-3 内存和体积（2026-10-17）
+
+起点 `9bc25cd`（代码同 `e956d85`）：zhwiki-rec 滚到底私有字节 47.9–50.3 MB（5 次新进程，最大 50.3），`qinglan.exe` 2 134 016 字节（2a 预算 ≤ 2 051 584）。目标：内存最大值 ≤ 48 MB（十进制），体积尽量回到预算内，速度不差过 5%，不删任何功能。
+
+### 1. 内存：自己的分配器（`qinglan-win/src/sys/heap.rs`，`PoolAlloc`）
+
+- **量出来的问题**（`mem-stats` 版，窗口里的 `--bench --mem`）：活堆 33.4 MB（请求字节），Windows 堆已提交 46.3 MB，另有约 3 MB 非堆；差的 12 MB 是 16 字节块头（16.4 万个活块 ≈ 2.6 MB）加上堆里留着不还的空闲块（解析、样式阶段的临时对象，滚动时释放的解码图片，数组倍增留下的洞）。数据结构本身一项最大的才 3–4 MB，逐项压缩治不了这 12 MB，所以改分配器。
+- **三层**：① 小块（1–1024 字节，对齐 ≤ 8）：40 个大小等级（128 以内 8 字节一级，之后 16、32、64 字节一级），每级从 16 KiB 的 slab 里分，slab 头 64 字节（空闲链、未用的尾巴、活块数），块本身没有头——Rust 的 `dealloc` 带着布局，大小等级不用存；块属于哪个 slab 看地址（`addr & !(16 KiB-1)`）。slab 满了离开本级的链，释放一个块又回来，没有活块的 slab 解除提交（每级留最后一个，另有最多 32 个空 slab 放在一个公共的备用栈里，一次提交 4 个 slab 以省系统调用）。② 大块（≥ 128 KiB）：自己的 `VirtualAlloc` 页，释放就还给系统（Windows 堆把这个范围的块留在自己的段里，倍增的 `Vec` 会留下一串洞）。③ 其余和分配不到时（slab 的 512 MiB 地址范围用完、系统不给提交）：`System`。块还回哪里只看布局和地址，`realloc` 跨档时搬家（写这个时犯过一个错：大块缩小到小块档时仍留在 `System` 里，`dealloc` 就把它交给 slab，测试里的多线程随机分配抓到了）。
+- **锁**：每级一把自旋锁，slab 地址范围一把（先拿级锁再拿范围锁，反过来不拿）；先用的是 `Mutex`，gh-ripgrep 的样式表是多线程并行解析的，`Mutex` 争用时线程睡眠再唤醒，样式阶段中位数慢 5–6%，换成"自旋 200 次再让出时间片"的自旋锁后反而快 15%。分配器里不分配、不 panic（`pool_report` 一度在持锁时 `format!`，自己等自己，死锁，改成先计数后格式化）。
+- **`unsafe`** 只在 `sys/heap.rs`，每处注明为什么安全；`qinglan`、`qinglan-cli` 两个二进制包里 `#[global_allocator]` 指向 `PoolAlloc`（开了 `mem-stats` 时是包着它的 `CountingAlloc`）。测试：大小等级覆盖全部 1–1024 字节；4 个线程随机分配、填充、`realloc` 涨缩（含 16 对齐和 ≥ 128 KiB 的块）、释放，查字节有没有被别人改；30 000 个块分配又释放后 slab 是否解除提交、之后能否复用（`sys::heap::tests`）。引擎的集成测试（`hostile`、`perf`）用的是系统分配器，不经过 `PoolAlloc`：hostile 页（`bad_utf8` 4 MB 坏字节，峰值 ≤ 120 MB 的断言）没有在 `PoolAlloc` 下重测。
+- **试过没采用**：在 `qinglan.exe` 里嵌清单 `<heapType>SegmentHeap</heapType>`（Windows 的分段堆，不用改代码）：滚到底 43.2–43.5 MB，但整页布局 283 → 397 ms（+40%），峰值 49.9 → 55–56 MB，不采用；只有小块池（块不还系统）：均值 49.3 → 47.0 MB，gh-ripgrep 滚到底反而 30 → 54 MB（样式阶段的小块永远占着），所以才有 slab 解除提交；第一版"块不还"加大块 `VirtualAlloc`：均值 46.4。
+- **结果**（`qinglan.exe --bench <网址> --replay tests\corpus\local\zhwiki-rec --width 1920 --height 1080`，新进程各 5 次，十进制 MB）：
+
+| | 滚到底私有字节 | 峰值 |
+|---|---|---|
+| 起点 | 47.90、49.51、49.27、49.57、50.32（最大 **50.32**） | 49.5–50.4 |
+| 小块池（块不还） | 47.02、46.53、48.62、45.67、47.08 | 48.2–49.0 |
+| + 大块 `VirtualAlloc` | 45.87、46.34、46.62、46.43、46.71 | 48.3–48.7 |
+| 最终（slab 解除提交 + 备用栈 + 自旋锁） | 44.26、43.99、44.59、44.13、44.37（最大 **44.59**，目标 ≤ 48） | 45.5–46.1 |
+
+  前三项节省：小块去掉块头和块内取整、不再留空闲块洞（约 2.3 MB）；slab 解除提交把阶段性的小块还给系统（约 2.1 MB）；大块自己的页（约 0.6 MB，并且让 5 次的离散从 2.4 MB 降到 0.7 MB）。其他页：gh-ripgrep 滚到底 30.4–33.2 → 25.2–27.3 MB，峰值 67.8–68.3 → 62.0–63.4；gh-rust 28.7–29.7 → 25.9–26.4。量时另一个会话的编译器偶尔在跑（内存不受 CPU 影响，但图片到达次序会）。
+
+### 2. 体积：链接映射、排序去重、内联阈值
+
+- **怎么量**：`cargo rustc --release -p qinglan --target-dir <另一个目录> -- -C link-arg=/MAP:<文件>`，要 v0 符号名就用 `RUSTFLAGS="-C target-feature=+crt-static -C symbol-mangling-version=v0"`。**注意**：环境变量 `RUSTFLAGS` 会盖掉 `.cargo/config.toml` 里的 `rustflags`，只写 v0 会丢掉 `+crt-static`，exe 立刻小 120 KB——因为改成动态链接 `VCRUNTIME140.dll`，那不是省，是多了一个依赖。
+- **映射结果**（2a 末）：`.text` 1 533 KB，引擎 913 KB（`css::parse_prop` 90、`cascade` 82、`layout::inline` 62、`html::treebuilder` 61、`layout::table` 56、`layout::boxtree` 51）、`core` 240（`drop_glue` 87、**`slice::sort` 66**）、窗口 app 124、hashbrown 57；`.rdata` 159，`.xdata`+`.pdata` 204（unwind 表，崩溃保护的代价）。Debug/fmt 总共只有 8 KB。
+- **排序去重**（`qinglan-engine/src/sorting.rs`）：`sort_by_key`/`sort_by` 对每个闭包类型各生成一整份排序代码（6–15 KB），十处共约 66 KB。新函数 `sort_by_u64_key` 把键放进 `(键, 下标)` 对，交给唯一一份非泛型的 `sort_unstable`（下标唯一所以结果等于稳定排序），再按置换的环把元素挪到位；`f32_key`/`f64_key` 给出和 `total_cmp` 同序的整数键。改了 7 处：`parse_cvs_many`、`finish_table_parts`、`select_source`、`paint_order` 的两处、`size_columns`、窗口 bench 的两处。样式层叠里每元素一次的排序（`cascade.rs`）没动，保持原样。省 48 128 字节。
+- **内联阈值**：`.cargo/config.toml` 的 `rustflags` 加 `-C llvm-args=-inline-threshold=100`（LLVM 默认 225）。整体 LTO 时最后一遍内联少做一些：省 165 888 字节（7.8%），速度不退（见下），因为分配器已经让解析、样式、排版快了 10–20%。阈值 150 的体积 2 044 928，速度和 100 没有可见差别，所以用 100。没动 `opt-level` 和 LTO 设置。
+- **结果**：`qinglan.exe` 2 134 016 → **1 927 168**（−206 848；2a 预算 2 051 584，余 124 416）。分配器本身 +512 字节。这一步多出来的余量留给后面的步骤。
+
+### 3. 速度（`qinglan-cli bench`，1920×1080，旧 `e956d85`（暂存工作树，自己的 `--target-dir`）和新交替跑，只算插电（`BatteryStatus = 2`）、前后都没有 cargo/rustc/link/cl/qpdf 的轮次）
+
+最后一版（自旋锁）3 个干净轮次（另一个会话经常在编译，15 次尝试里只有 3 次干净），最小值 / 中位数，旧 → 新：zhwiki-rec 解析 −21% / −17%、样式 −11% / −15%、首屏 −8% / −1.6%、整页布局 −10.7% / −6.9%、滚动中位数 −1.9% / 0.0%、p95 0.0% / 0.0%；gh-ripgrep 解析 −15% / −19%、样式 −15% / −14%、首屏 −15% / −15%、整页布局 −16% / −16%、滚动中位数 −2.8% / 0.0%、p95 −13% / −4.4%。前一版（`Mutex`）5 个干净轮次：gh-ripgrep 中位数样式 +6.1%、首屏 +5.2%、整页 +5.9%（最小值 −0.3%…−2.8%），所以换了自旋锁。滚动（光栅）这一步没动，三版都在 ±4% 内。
+
+### 4. 没做的 / 留给后面
+
+- 数据结构的压缩没做（盒子 64 字节、盒位置 32 字节、DOM 节点 72 字节、显示列表 3.6 MB）：分配器已经把余量做到 3.4 MB，再压要动很多用法。
+- `PoolAlloc` 下没重跑 hostile 页（见上）；`qinglan-cli` 的 `wpt.rs` 里 4 处排序没动（不在 `qinglan.exe` 里）。

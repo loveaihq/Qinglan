@@ -7,6 +7,7 @@
 #[cfg(feature = "mem-stats")]
 pub mod alloc;
 pub mod dwrite;
+pub mod heap;
 pub mod process;
 pub mod wic;
 pub mod winhttp;

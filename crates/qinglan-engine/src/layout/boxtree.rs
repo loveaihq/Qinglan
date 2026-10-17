@@ -1100,7 +1100,7 @@ impl Builder<'_> {
                 };
                 keyed.push((key, k));
             }
-            keyed.sort_by_key(|k| k.0);
+            crate::sorting::sort_by_u64_key(&mut keyed, |k| u64::from(k.0));
             kids = keyed.into_iter().map(|k| k.1).collect();
         }
         self.adopt(id, kids);

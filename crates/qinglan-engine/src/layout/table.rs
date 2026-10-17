@@ -524,7 +524,7 @@ impl Layouter<'_> {
         }
         // Cells over several columns: the room they need above what their columns have goes to those columns.
         let mut spans: Vec<usize> = (0..g.cells.len()).filter(|&i| g.cells.get(i).is_some_and(|c| c.cs > 1)).collect();
-        spans.sort_by_key(|&i| g.cells.get(i).map_or(0, |c| c.cs));
+        crate::sorting::sort_by_u64_key(&mut spans, |&i| g.cells.get(i).map_or(0, |c| c.cs as u64));
         for i in spans {
             let Some(cell) = g.cells.get(i) else { continue };
             let gaps = mul(g.sp[0], cell.cs - 1);

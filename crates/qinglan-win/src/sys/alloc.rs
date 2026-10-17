@@ -1,11 +1,12 @@
-//! A counting wrapper around the system allocator, for `--bench` / `qinglan-cli bench`'s memory breakdown.
+//! A counting wrapper around the process allocator ([`PoolAlloc`]), for `--bench` / `qinglan-cli bench`'s memory breakdown.
 //!
 //! Off by default: until [`count_heap`] is called each allocation costs one relaxed load and a branch. Once on, it
 //! keeps the bytes requested and not yet freed (`live`), the highest value that reached (`peak`) and the number of
 //! allocations. Requested sizes are counted, not the block sizes the Windows heap hands out, so the heap's own
 //! overhead shows up as the gap to `PrivateUsage`.
 
-use std::alloc::{GlobalAlloc, Layout, System};
+use super::heap::PoolAlloc;
+use std::alloc::{GlobalAlloc, Layout};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering::Relaxed};
 
 static ON: AtomicBool = AtomicBool::new(false);
@@ -24,12 +25,12 @@ fn added(n: usize) {
     PEAK.fetch_max(live, Relaxed);
 }
 
-// SAFETY: every method forwards to `System` with the arguments it was given, so `System`'s guarantees (and the
+// SAFETY: every method forwards to `PoolAlloc` with the arguments it was given, so `PoolAlloc`'s guarantees (and the
 // caller's obligations under `GlobalAlloc`) carry over unchanged; the counters are plain atomics.
 unsafe impl GlobalAlloc for CountingAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // SAFETY: same layout, same caller contract.
-        let p = unsafe { System.alloc(layout) };
+        let p = unsafe { PoolAlloc.alloc(layout) };
         if !p.is_null() && ON.load(Relaxed) {
             added(layout.size());
         }
@@ -38,7 +39,7 @@ unsafe impl GlobalAlloc for CountingAlloc {
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         // SAFETY: same layout, same caller contract.
-        let p = unsafe { System.alloc_zeroed(layout) };
+        let p = unsafe { PoolAlloc.alloc_zeroed(layout) };
         if !p.is_null() && ON.load(Relaxed) {
             added(layout.size());
         }
@@ -50,13 +51,13 @@ unsafe impl GlobalAlloc for CountingAlloc {
             LIVE.fetch_sub(layout.size() as isize, Relaxed);
             BLOCKS.fetch_sub(1, Relaxed);
         }
-        // SAFETY: `ptr` and `layout` are the pair the caller got from this allocator, which got them from `System`.
-        unsafe { System.dealloc(ptr, layout) }
+        // SAFETY: `ptr` and `layout` are the pair the caller got from this allocator, which got them from `PoolAlloc`.
+        unsafe { PoolAlloc.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // SAFETY: `ptr` and `layout` come from this allocator (so from `System`); `new_size` is the caller's.
-        let p = unsafe { System.realloc(ptr, layout, new_size) };
+        // SAFETY: `ptr` and `layout` come from this allocator (so from `PoolAlloc`); `new_size` is the caller's.
+        let p = unsafe { PoolAlloc.realloc(ptr, layout, new_size) };
         if !p.is_null() && ON.load(Relaxed) {
             COUNT.fetch_add(1, Relaxed);
             let live = LIVE.fetch_add(new_size as isize - layout.size() as isize, Relaxed) + new_size as isize - layout.size() as isize;
