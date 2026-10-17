@@ -5,9 +5,9 @@
 //! * Block-level boxes that sit among inline-level siblings put the inline ones into anonymous block
 //!   boxes (CSS2 9.2.1.1); an inline box that contains a block-level box is split around it.
 //! * Whitespace-only text between blocks makes no box (CSS2 9.2.2.1; css-text-3 4.1.1 note).
-//! * Fallbacks for what layer 1 does not lay out: `flex`, `grid`, `table*` become `block`; their
-//!   `inline-` forms become atomic inlines (`inline-block`); `float` is ignored (the element stays in
-//!   the normal flow).
+//! * Fallbacks for what layer 2 does not lay out yet: `flex`, `grid` become `block`; their `inline-` forms become
+//!   atomic inlines (`inline-block`). Table parts are blocks that remember their `display` in `fallback`; the missing
+//!   parents of table parts are made here (CSS2 17.2.1), and a cell keeps its content in one anonymous block.
 //! * `inline-block` and its fallbacks are atomic inline-level boxes ([`BoxKind::InlineBlock`]); `img`,
 //!   `iframe`, `video`, `audio`, `canvas`, `object`, `embed` and some form controls are
 //!   [`BoxKind::Replaced`] leaves; text fields, text areas, selects and buttons are `InlineBlock`
@@ -264,6 +264,36 @@ fn classify(d: Display) -> Gen {
         | Display::TableCaption => Gen::Block(Some(d)),
         Display::Ruby | Display::RubyText => Gen::Inline(Some(d)),
     }
+}
+
+/// What a box is in a table (CSS2 17.2), from the `display` it fell back from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Role {
+    Other,
+    Table,
+    Group,
+    Row,
+    Cell,
+    Col,
+    ColGroup,
+    Caption,
+}
+
+pub(crate) fn role_of(b: &LayoutBox) -> Role {
+    match b.fallback {
+        Some(Display::Table | Display::InlineTable) => Role::Table,
+        Some(Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup) => Role::Group,
+        Some(Display::TableRow) => Role::Row,
+        Some(Display::TableCell) => Role::Cell,
+        Some(Display::TableColumn) => Role::Col,
+        Some(Display::TableColumnGroup) => Role::ColGroup,
+        Some(Display::TableCaption) => Role::Caption,
+        _ => Role::Other,
+    }
+}
+
+fn internal(r: Role) -> bool {
+    !matches!(r, Role::Other | Role::Table)
 }
 
 /// What an element becomes beyond the plain box of its `display`.
@@ -844,6 +874,12 @@ impl Builder<'_> {
 
     /// An inline element: one box, or several when block-level boxes inside split it.
     fn finish_inline(&mut self, n: NodeId, style: Rc<ComputedStyle>, fallback: Option<Display>, child_outs: Vec<Out>, outs: &mut Vec<Out>) {
+        // Table parts inside an inline box get an anonymous inline-table, which does not split the box.
+        let child_outs = if child_outs.iter().any(|o| matches!(o, Out::Block(b) if internal(self.role(*b)))) {
+            self.fix_table(Role::Other, child_outs, &style, true)
+        } else {
+            child_outs
+        };
         // Out-of-flow boxes are inline-level placeholders: only in-flow blocks split an inline box.
         let has_block = child_outs.iter().any(|o| matches!(o, Out::Block(_)));
         if !has_block {
@@ -914,8 +950,164 @@ impl Builder<'_> {
         }
     }
 
-    /// Set the children of a block from the boxes its content made.
+    fn role(&self, id: BoxId) -> Role {
+        self.boxes.get(id as usize).map_or(Role::Other, role_of)
+    }
+
+    /// Set the children of a block from the boxes its content made; table parts get the anonymous boxes they need.
     fn finish_block(&mut self, id: BoxId, outs: Vec<Out>) {
+        let role = self.role(id);
+        let style = self.boxes.get(id as usize).map(|b| b.style.clone()).unwrap_or_else(|| self.init.clone());
+        let any_internal = outs.iter().any(|o| matches!(o, Out::Block(b) if internal(self.role(*b))));
+        match role {
+            Role::Table | Role::Group | Role::Row | Role::ColGroup => {
+                let kids = self.fix_table(role, outs, &style, false);
+                self.finish_table_part(id, role, kids);
+            }
+            Role::Col => self.adopt(id, Vec::new()),
+            Role::Cell => {
+                let outs = if any_internal { self.fix_table(Role::Other, outs, &style, false) } else { outs };
+                if outs.is_empty() {
+                    return self.adopt(id, Vec::new());
+                }
+                // The content sits in one anonymous block, so that layout can move it down for `vertical-align`.
+                let w = self.new_box(BoxKind::Block, NONE, self.anon_style(&style), true);
+                self.finish_plain(w, outs);
+                self.adopt(id, vec![w]);
+            }
+            _ => {
+                let outs = if any_internal { self.fix_table(Role::Other, outs, &style, false) } else { outs };
+                self.finish_plain(id, outs);
+            }
+        }
+    }
+
+    /// CSS2 17.2.1: give the children of `parent` the anonymous boxes they need. In a table, a row group or a row, the
+    /// children that are not proper (rows / cells...) are wrapped, each run in one anonymous row / cell, and the
+    /// rows of a table in anonymous row groups; elsewhere, runs of table parts are wrapped in an anonymous table.
+    /// White space between table parts makes nothing.
+    fn fix_table(&mut self, parent: Role, outs: Vec<Out>, style: &Rc<ComputedStyle>, inline: bool) -> Vec<Out> {
+        let items: Vec<(Role, bool, Out)> = outs
+            .into_iter()
+            .map(|o| match &o {
+                Out::Block(b) => (self.role(*b), false, o),
+                Out::Inline(b) => (Role::Other, self.ignorable(*b), o),
+            })
+            .collect();
+        let (proper, wrap): (fn(Role) -> bool, Display) = match parent {
+            Role::Table => (|r| matches!(r, Role::Group | Role::Col | Role::ColGroup | Role::Caption | Role::Row), Display::TableRow),
+            Role::Group => (|r| r == Role::Row, Display::TableRow),
+            Role::Row => (|r| r == Role::Cell, Display::TableCell),
+            Role::ColGroup => return items.into_iter().filter(|i| i.0 == Role::Col).map(|i| i.2).collect(),
+            _ => (|r| !internal(r), if inline { Display::InlineTable } else { Display::Table }),
+        };
+        let outside = parent == Role::Other;
+        let mut res: Vec<Out> = Vec::new();
+        let mut run: Vec<Out> = Vec::new();
+        // Is the first thing from here on that is not white space a table part?
+        let mut next_part = vec![false; items.len() + 1];
+        for (i, it) in items.iter().enumerate().rev() {
+            let after = next_part.get(i + 1).copied().unwrap_or(false);
+            if let Some(slot) = next_part.get_mut(i) {
+                *slot = if it.1 { after } else { internal(it.0) };
+            }
+        }
+        for (i, (r, ws, o)) in items.into_iter().enumerate() {
+            if outside && ws && !run.is_empty() && next_part.get(i).copied().unwrap_or(false) {
+                // White space between table parts.
+            } else if proper(r) {
+                self.flush_part(&mut run, &mut res, wrap, style);
+                res.push(o);
+            } else {
+                run.push(o);
+            }
+        }
+        self.flush_part(&mut run, &mut res, wrap, style);
+        if parent != Role::Table {
+            return res;
+        }
+        // The rows of a table go into anonymous row groups.
+        let mut out: Vec<Out> = Vec::new();
+        let mut rows: Vec<Out> = Vec::new();
+        for o in res {
+            if matches!(o, Out::Block(b) if self.role(b) == Role::Row) {
+                rows.push(o);
+            } else {
+                if !rows.is_empty() {
+                    let g = self.anon_part(style, Display::TableRowGroup, std::mem::take(&mut rows));
+                    out.push(g);
+                }
+                out.push(o);
+            }
+        }
+        if !rows.is_empty() {
+            let g = self.anon_part(style, Display::TableRowGroup, rows);
+            out.push(g);
+        }
+        out
+    }
+
+    /// Wrap a run of improper children in an anonymous box of display `d`, unless it is nothing but white space.
+    fn flush_part(&mut self, run: &mut Vec<Out>, res: &mut Vec<Out>, d: Display, style: &Rc<ComputedStyle>) {
+        if run.is_empty() {
+            return;
+        }
+        let kids = std::mem::take(run);
+        let nothing = kids.iter().all(|o| matches!(o, Out::Inline(b) if self.ignorable(*b)));
+        if !nothing {
+            let o = self.anon_part(style, d, kids);
+            res.push(o);
+        }
+    }
+
+    /// An anonymous table part with `kids` in it.
+    fn anon_part(&mut self, container: &Rc<ComputedStyle>, d: Display, kids: Vec<Out>) -> Out {
+        let mut st = (*self.anon_style(container)).clone();
+        let mut bs = BoxStyle::initial();
+        bs.display = d;
+        st.boxs = Rc::new(bs);
+        // Inside an inline box the anonymous table is an inline-table (CSS2 17.2.1).
+        let atomic = d == Display::InlineTable;
+        let id = self.new_box(if atomic { BoxKind::InlineBlock } else { BoxKind::Block }, NONE, Rc::new(st), true);
+        if let Some(b) = self.box_mut(id) {
+            b.fallback = Some(d);
+        }
+        self.finish_block(id, kids);
+        if atomic { Out::Inline(id) } else { Out::Block(id) }
+    }
+
+    /// The children of a table part. A table lists its columns first, then the captions, the first header group, the
+    /// other row groups, the first footer group (CSS2 17.2: the header is always above and the footer below).
+    fn finish_table_part(&mut self, id: BoxId, role: Role, outs: Vec<Out>) {
+        let mut kids: Vec<BoxId> = outs.into_iter().filter_map(|o| if let Out::Block(b) = o { Some(b) } else { None }).collect();
+        if role == Role::Table {
+            let (mut head, mut foot) = (false, false);
+            let mut keyed: Vec<(u8, BoxId)> = Vec::with_capacity(kids.len());
+            for &k in &kids {
+                let bx = self.boxes.get(k as usize);
+                let key = match (bx.map(role_of), bx.and_then(|b| b.fallback)) {
+                    (Some(Role::Col | Role::ColGroup), _) => 0,
+                    (Some(Role::Caption), _) => 1,
+                    (_, Some(Display::TableHeaderGroup)) if !head => {
+                        head = true;
+                        2
+                    }
+                    (_, Some(Display::TableFooterGroup)) if !foot => {
+                        foot = true;
+                        4
+                    }
+                    _ => 3,
+                };
+                keyed.push((key, k));
+            }
+            keyed.sort_by_key(|k| k.0);
+            kids = keyed.into_iter().map(|k| k.1).collect();
+        }
+        self.adopt(id, kids);
+    }
+
+    /// Set the children of a block from the boxes its content made.
+    fn finish_plain(&mut self, id: BoxId, outs: Vec<Out>) {
         let has_block = outs.iter().any(|o| matches!(o, Out::Block(_)));
         if !has_block {
             let kids: Vec<BoxId> = outs

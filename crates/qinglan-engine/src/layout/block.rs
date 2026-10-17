@@ -62,6 +62,8 @@ pub(crate) struct Flow {
     pub forced_w: Option<LU>,
     /// Content height fixed by the caller (out-of-flow boxes with `top` and `bottom`).
     pub forced_h: Option<LU>,
+    /// A table cell (table.rs): these are its used border widths. A cell has no margins and its height is its content's.
+    pub cell_bor: Option<[LU; 4]>,
 }
 
 pub(crate) fn lp_has_percent(l: &Lp) -> bool {
@@ -162,7 +164,7 @@ pub(crate) fn solve_width(cb: LU, w: Option<LU>, ml: Option<LU>, mr: Option<LU>,
 
 /// The `position: relative` offset (CSS2 9.3.2): `left` wins over `right`, `top` over `bottom`;
 /// percentages refer to the containing block (vertical ones only when its height is definite).
-fn relative_offset(bs: &BoxStyle, cb_w: LU, cb_h: Option<LU>) -> (LU, LU) {
+pub(super) fn relative_offset(bs: &BoxStyle, cb_w: LU, cb_h: Option<LU>) -> (LU, LU) {
     if bs.position != Position::Relative {
         return (LU::ZERO, LU::ZERO);
     }
@@ -195,6 +197,9 @@ impl Layouter<'_> {
         let tree = self.tree;
         let bx = tree.get(id);
         let is_root = flow.root;
+        if matches!(bx.fallback, Some(Display::Table | Display::InlineTable)) {
+            return self.layout_table(id, cb_w, cb_h, flow);
+        }
 
         if !self.charge(4 + bx.children.len() as u64) {
             return BlockResult { h: LU::ZERO, ml: LU::ZERO, mt: Margin::default(), mb: Margin::default(), top_only: Margin::default(), bot_only: Margin::default(), through: false, rel: (LU::ZERO, LU::ZERO) };
@@ -412,13 +417,13 @@ impl Layouter<'_> {
         // Edges. Percentages of padding and margins, vertical ones too, refer to the containing
         // block's width (CSS2 8.3, 8.4).
         let pad = [pad_px(&bs.padding[0], cb_w), pad_px(&bs.padding[1], cb_w), pad_px(&bs.padding[2], cb_w), pad_px(&bs.padding[3], cb_w)];
-        let bor = [border_px(bd.width[0]), border_px(bd.width[1]), border_px(bd.width[2]), border_px(bd.width[3])];
-        let marg = [
-            resolve_margin(&bs.margin[0], cb_w),
-            resolve_margin(&bs.margin[1], cb_w),
-            resolve_margin(&bs.margin[2], cb_w),
-            resolve_margin(&bs.margin[3], cb_w),
-        ];
+        let cell = flow.cell_bor.is_some();
+        let bor = flow.cell_bor.unwrap_or([border_px(bd.width[0]), border_px(bd.width[1]), border_px(bd.width[2]), border_px(bd.width[3])]);
+        let marg = if cell {
+            [Some(LU::ZERO); 4]
+        } else {
+            [resolve_margin(&bs.margin[0], cb_w), resolve_margin(&bs.margin[1], cb_w), resolve_margin(&bs.margin[2], cb_w), resolve_margin(&bs.margin[3], cb_w)]
+        };
         let h_extra = pad[1] + pad[3] + bor[1] + bor[3];
         let v_extra = pad[0] + pad[2] + bor[0] + bor[2];
         let border_box = bs.box_sizing == BoxSizing::BorderBox;
@@ -453,10 +458,10 @@ impl Layouter<'_> {
 
         // Height: a percentage needs a definite containing block height, otherwise it is `auto`
         // (10.5). Min/max (10.7) apply to the result.
-        let spec_h = resolve_dim(&bs.height, cb_h).map(to_ch);
+        let spec_h = if cell { None } else { resolve_dim(&bs.height, cb_h).map(to_ch) };
         let h_zero_or_auto = flow.forced_h.is_none() && repl.is_none() && spec_h.is_none_or(|h| h == LU::ZERO);
-        let min_h = resolve_dim(&bs.min_height, cb_h).map_or(LU::ZERO, to_ch);
-        let max_h = resolve_dim(&bs.max_height, cb_h).map(to_ch);
+        let min_h = if cell { LU::ZERO } else { resolve_dim(&bs.min_height, cb_h).map_or(LU::ZERO, to_ch) };
+        let max_h = if cell { None } else { resolve_dim(&bs.max_height, cb_h).map(to_ch) };
         let clamp_h = |h: LU| max_h.map_or(h, |m| h.min(m)).max(min_h);
         let spec_h = match (flow.forced_h, repl) {
             (Some(h), _) => Some(clamp_h(h)),
@@ -493,7 +498,7 @@ impl Layouter<'_> {
             || matches!(bs.overflow_y, Overflow::Hidden | Overflow::Clip);
         if let Some(o) = self.out.get_mut(id as usize) {
             let (lines, marker) = (o.lines, o.marker);
-            *o = BoxOut { x: o.x, y: o.y, w, h, clip, lines, marker };
+            *o = BoxOut { x: o.x, y: o.y, w, h, clip, hide: o.hide, lines, marker };
         }
         if bx.ordinal().is_some() {
             self.layout_marker(id, content_top);

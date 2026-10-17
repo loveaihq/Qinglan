@@ -1,0 +1,14 @@
+viewport 800x600
+block html (0,0 800x18)
+  block body (0,0 800x18)
+    block table#c (0,0 30x18) [display:table]
+      block tbody (1,2 27x14) [display:table-row-group]
+        block tr (1,2 27x14) [display:table-row]
+          block td#ca (1,2 13x14) [display:table-cell]
+            block (anonymous) (2,3 10x10)
+              line (2,3 10x10) baseline=11
+                text "a" (2,3 10x10)
+          block td#cb (14,2 14x14) [display:table-cell]
+            block (anonymous) (16,4 10x10)
+              line (16,4 10x10) baseline=12
+                text "b" (16,4 10x10)

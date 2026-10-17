@@ -101,9 +101,9 @@ tfoot { display: table-footer-group; }
 tr { display: table-row; }
 td, th { display: table-cell; }
 colgroup[hidden], col[hidden], thead[hidden], tbody[hidden], tfoot[hidden], tr[hidden] { visibility: collapse; }
-table { box-sizing: border-box; text-indent: initial; }
+table { box-sizing: border-box; border-spacing: 2px; text-indent: initial; }
 td, th { padding: 1px; }
-th { font-weight: bold; }
+th { font-weight: bold; text-align: center; }
 caption { text-align: center; }
 thead, tbody, tfoot, table > tr { vertical-align: middle; }
 tr, td, th { vertical-align: inherit; }

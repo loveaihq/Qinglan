@@ -1121,7 +1121,15 @@ impl Layouter<'_> {
         // clipped or has none; replaced elements sit on the bottom margin edge.
         // (A text field keeps its text's baseline even though its content is clipped; a text area does not.)
         let clipped = o.clip && !bx.force_clip;
-        let baseline = if bx.kind == BoxKind::Replaced || clipped || matches!(bx.control(), Control::TextArea(..)) { None } else { self.last_baseline(id) };
+        let table = matches!(bx.fallback, Some(crate::css::types::Display::InlineTable));
+        let baseline = if bx.kind == BoxKind::Replaced || clipped || matches!(bx.control(), Control::TextArea(..)) {
+            None
+        } else if table {
+            // The baseline of an inline-table is that of its first row (CSS2 17.5.1).
+            self.first_baseline(id)
+        } else {
+            self.last_baseline(id)
+        };
         let outer_h = mt + o.h + mb;
         let a = baseline.map_or(outer_h, |b| mt + b);
         (ml + o.w + mr, a, outer_h - a, ml, mt, r.rel)

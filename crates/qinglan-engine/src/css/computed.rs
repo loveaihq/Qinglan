@@ -22,6 +22,7 @@ pub struct BoxStyle {
     pub position: Position,
     pub float: Float,
     pub clear: Clear,
+    pub table_layout: TableLayout,
     pub box_sizing: BoxSizing,
     pub z_index: Option<i32>,
     pub overflow_x: Overflow,
@@ -85,6 +86,11 @@ pub struct TextStyle {
     pub tab_size: TabSize,
     /// `quotes` (inherited, CSS2 12.3.1).
     pub quotes: Quotes,
+    /// Table properties (CSS2 17.6, 17.6.1.1, 17.4.1), all inherited: `border-spacing` is horizontal, vertical.
+    pub border_collapse: BorderCollapse,
+    pub border_spacing: [Lp; 2],
+    pub empty_cells: EmptyCells,
+    pub caption_side: CaptionSide,
     /// The element's language (nearest `lang` attribute), inherited.
     pub lang: Option<Rc<str>>,
 }
@@ -134,6 +140,7 @@ impl BoxStyle {
             position: Position::Static,
             float: Float::None,
             clear: Clear::None,
+            table_layout: TableLayout::Auto,
             box_sizing: BoxSizing::ContentBox,
             z_index: None,
             overflow_x: Overflow::Visible,
@@ -190,6 +197,10 @@ impl TextStyle {
             list_style_position: ListStylePosition::Outside,
             tab_size: TabSize::Spaces(8.0),
             quotes: Quotes::Auto,
+            border_collapse: BorderCollapse::Separate,
+            border_spacing: [Lp::ZERO, Lp::ZERO],
+            empty_cells: EmptyCells::Show,
+            caption_side: CaptionSide::Top,
             lang: None,
         }
     }
@@ -546,6 +557,15 @@ pub fn compute_text(parent: &Rc<TextStyle>, d: &Declared<'_>, ctx: &LenCtx, lang
     simple!(PropId::ListStyleType, ListStyleType, list_style_type);
     simple!(PropId::ListStylePosition, ListStylePosition, list_style_position);
     simple!(PropId::Quotes, Quotes, quotes);
+    simple!(PropId::BorderCollapse, BorderCollapse, border_collapse);
+    simple!(PropId::EmptyCells, EmptyCells, empty_cells);
+    simple!(PropId::CaptionSide, CaptionSide, caption_side);
+    match pick(d, PropId::BorderSpacing) {
+        Pick::Inherit => {}
+        Pick::Initial => t.border_spacing = [Lp::ZERO, Lp::ZERO],
+        Pick::Value(Value::TableSpacing(a, b)) => t.border_spacing = [a.compute(ctx), b.compute(ctx)],
+        Pick::Value(_) => {}
+    }
     match pick(d, PropId::TabSize) {
         Pick::Inherit => {}
         Pick::Initial => t.tab_size = TabSize::Spaces(8.0),
@@ -597,6 +617,7 @@ pub fn compute_box(parent: &Rc<BoxStyle>, init_rc: &Rc<BoxStyle>, d: &Declared<'
     simple!(PropId::Position, Position, position);
     simple!(PropId::Float, Float, float);
     simple!(PropId::Clear, Clear, clear);
+    simple!(PropId::TableLayout, TableLayout, table_layout);
     simple!(PropId::BoxSizing, BoxSizing, box_sizing);
     simple!(PropId::ZIndex, ZIndex, z_index);
     simple!(PropId::OverflowX, Overflow, overflow_x);
@@ -898,6 +919,11 @@ impl ComputedStyle {
         add(PropId::CounterReset, counters_to_css(&g.counter_reset));
         add(PropId::CounterIncrement, counters_to_css(&g.counter_increment));
         add(PropId::CounterSet, counters_to_css(&g.counter_set));
+        add(PropId::BorderCollapse, t.border_collapse.keyword().into());
+        add(PropId::BorderSpacing, format!("{} {}", t.border_spacing[0].to_css(), t.border_spacing[1].to_css()));
+        add(PropId::EmptyCells, t.empty_cells.keyword().into());
+        add(PropId::CaptionSide, t.caption_side.keyword().into());
+        add(PropId::TableLayout, b.table_layout.keyword().into());
         v.push(("lang", t.lang.as_deref().unwrap_or("").to_string()));
         v
     }

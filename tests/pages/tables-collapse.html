@@ -1,0 +1,22 @@
+<!--
+Collapsing borders (CSS2 17.6.2, 17.6.2.1). Font 10px/10px, body margin 0, padding 0 in the cells. Cell a has a 2px red border, cell b a
+4px blue one. Every edge is one border; the wider one wins, and the two boxes next to an edge get its halves, the earlier box the
+smaller (floor) one, the later the larger: the edge between a and b is 4px (blue): a gets 2, b gets 2. The left edge is 2px (a): the table
+gets 1, a gets 1. The right edge is 4px (b): b gets 2, the table 2. Top: a's is 2 (a gets 1), b's is 4 (b gets 2), the table gets the
+floor half of the widest: 2. Bottom: a gets 1, b gets 2, the table the ceiling half of the widest: 2.
+Widths: a = 1 + 10 + 2 = 13, b = 2 + 10 + 2 = 14; the table: 1 + 13 + 14 + 2 = 30. Heights: a = 1 + 10 + 1 = 12, b = 2 + 10 + 2 = 14: the row
+is 14 high; the table 2 + 14 + 2 = 18. The cells fill the row: a (1,2 13x14), b (14,2 14x14); the row group (1,2 27x14).
+Both cells are vertical-align: top: "a" at (1 + 1, 2 + 1) = (2,3), "b" at (14 + 2, 2 + 2) = (16,4).
+check: block table#c :: (0,0 30x18) [display:table]
+check: block tbody :: (1,2 27x14)
+check: block td#ca :: (1,2 13x14)
+check: block td#cb :: (14,2 14x14)
+check: text "a" :: (2,3 10x10)
+check: text "b" :: (16,4 10x10)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+td { padding: 0 }
+</style>
+<table id="c" style="border-collapse:collapse"><tr><td id="ca" style="border:2px solid red;vertical-align:top">a</td><td id="cb" style="border:4px solid blue;vertical-align:top">b</td></tr></table>

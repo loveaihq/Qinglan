@@ -1,0 +1,92 @@
+viewport 800x600
+block html (0,0 800x146)
+  block body (0,0 800x146)
+    block table#t1 (0,0 70x20) [display:table]
+      block tbody (0,0 70x20) [display:table-row-group]
+        block tr (0,0 70x10) [display:table-row]
+          block td#a (0,0 30x10) [display:table-cell]
+            block (anonymous) (0,0 30x10)
+              line (0,0 30x10) baseline=8
+                text "aaa" (0,0 30x10)
+          block td#b (30,0 40x10) [display:table-cell]
+            block (anonymous) (30,0 40x10)
+              line (30,0 40x10) baseline=8
+                text "bb" (30,0 20x10)
+        block tr (0,10 70x10) [display:table-row]
+          block td#c (0,10 30x10) [display:table-cell]
+            block (anonymous) (0,10 30x10)
+              line (0,10 30x10) baseline=18
+                text "c" (0,10 10x10)
+          block td#d (30,10 40x10) [display:table-cell]
+            block (anonymous) (30,10 40x10)
+              line (30,10 40x10) baseline=18
+                text "dddd" (30,10 40x10)
+    block table#t2 (0,30 100x10) [display:table]
+      block colgroup (0,30 30x10) [display:table-column-group]
+        block col (0,30 30x10) [display:table-column]
+      block tbody (0,30 100x10) [display:table-row-group]
+        block tr (0,30 100x10) [display:table-row]
+          block td#e (0,30 30x10) [display:table-cell]
+            block (anonymous) (0,30 30x10)
+              line (0,30 30x10) baseline=38
+                text "eeeeee" (0,30 60x10)
+          block td#f (30,30 35x10) [display:table-cell]
+            block (anonymous) (30,30 35x10)
+              line (30,30 35x10) baseline=38
+                text "f" (30,30 10x10)
+          block td#g (65,30 35x10) [display:table-cell]
+            block (anonymous) (65,30 35x10)
+              line (65,30 35x10) baseline=38
+                text "g" (65,30 10x10)
+    block table#t3 (0,50 52x46) [display:table]
+      block caption#cap (0,50 52x10) [display:table-caption]
+        line (0,50 52x10) baseline=58
+          text "cap" (11,50 30x10)
+      block tbody#tb3 (3,63 46x30) [display:table-row-group]
+        block tr (3,63 46x14) [display:table-row]
+          block td#x (3,63 14x30) [display:table-cell]
+            block (anonymous) (5,73 10x10)
+              line (5,73 10x10) baseline=81
+                text "x" (5,73 10x10)
+          block td#yy (19,63 30x14) [display:table-cell]
+            block (anonymous) (21,65 26x10)
+              line (21,65 26x10) baseline=73
+                text "yy" (21,65 20x10)
+        block tr (3,79 46x14) [display:table-row]
+          block td#z (19,79 14x14) [display:table-cell]
+            block (anonymous) (21,81 10x10)
+              line (21,81 10x10) baseline=89
+                text "z" (21,81 10x10)
+          block td#w (35,79 14x14) [display:table-cell]
+            block (anonymous) (37,81 10x10)
+              line (37,81 10x10) baseline=89
+                text "w" (37,81 10x10)
+    block table#t4 (0,96 40x30) [display:table]
+      block tbody (0,96 40x30) [display:table-row-group]
+        block tr (0,96 40x30) [display:table-row]
+          block td (0,96 10x30) [display:table-cell]
+            block (anonymous) (0,96 10x30)
+              block div (0,96 10x30)
+          block td (10,96 10x30) [display:table-cell]
+            block (anonymous) (10,96 10x10)
+              line (10,96 10x10) baseline=104
+                text "T" (10,96 10x10)
+          block td (20,96 10x30) [display:table-cell]
+            block (anonymous) (20,106 10x10)
+              line (20,106 10x10) baseline=114
+                text "M" (20,106 10x10)
+          block td (30,96 10x30) [display:table-cell]
+            block (anonymous) (30,116 10x10)
+              line (30,116 10x10) baseline=124
+                text "B" (30,116 10x10)
+    block table#t5 (0,126 30x20) [display:table]
+      block tbody (0,126 30x20) [display:table-row-group]
+        block tr (0,126 30x20) [display:table-row]
+          block td (0,126 20x20) [display:table-cell]
+            block (anonymous) (0,126 20x20)
+              line (0,126 20x20) baseline=142
+                text "A" (0,126 20x20)
+          block td (20,126 10x20) [display:table-cell]
+            block (anonymous) (20,134 10x10)
+              line (20,134 10x10) baseline=142
+                text "b" (20,134 10x10)

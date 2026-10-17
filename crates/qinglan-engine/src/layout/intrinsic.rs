@@ -50,6 +50,7 @@ impl Layouter<'_> {
                 let (w, _) = self.replaced_size(id, LU::ZERO, None);
                 (w, w)
             }
+            _ if matches!(bx.fallback, Some(crate::css::types::Display::Table | crate::css::types::Display::InlineTable)) => self.table_widths(id),
             _ if bx.inline_children => self.measure_inline(id),
             _ => {
                 let (mut min, mut max) = (LU::ZERO, LU::ZERO);

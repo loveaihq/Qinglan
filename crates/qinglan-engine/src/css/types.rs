@@ -64,6 +64,10 @@ keyword_enum!(OverflowWrap { Normal = "normal", Anywhere = "anywhere", BreakWord
 keyword_enum!(Direction { Ltr = "ltr", Rtl = "rtl" } default Ltr);
 keyword_enum!(FontStyleKind { Normal = "normal", Italic = "italic", Oblique = "oblique" } default Normal);
 keyword_enum!(ListStylePosition { Outside = "outside", Inside = "inside" } default Outside);
+keyword_enum!(BorderCollapse { Separate = "separate", Collapse = "collapse" } default Separate);
+keyword_enum!(EmptyCells { Show = "show", Hide = "hide" } default Show);
+keyword_enum!(CaptionSide { Top = "top", Bottom = "bottom" } default Top);
+keyword_enum!(TableLayout { Auto = "auto", Fixed = "fixed" } default Auto);
 
 /// `tab-size` (css-text-3 7.3): a number of space advances, or a length.
 #[derive(Clone, Debug, PartialEq)]
@@ -439,6 +443,12 @@ pub enum Value {
     TextDecorationThickness(Option<Lp>),
     ListStyleType(ListStyleType),
     ListStylePosition(ListStylePosition),
+    BorderCollapse(BorderCollapse),
+    EmptyCells(EmptyCells),
+    CaptionSide(CaptionSide),
+    TableLayout(TableLayout),
+    /// `border-spacing`: horizontal and vertical.
+    TableSpacing(Lp, Lp),
     TabSize(TabSize),
     Cursor(CursorKind),
     Content(Content),
@@ -547,9 +557,14 @@ pub enum PropId {
     CounterReset,
     CounterIncrement,
     CounterSet,
+    BorderCollapse,
+    BorderSpacing,
+    EmptyCells,
+    CaptionSide,
+    TableLayout,
 }
 
-pub const PROP_COUNT: usize = PropId::CounterSet as usize + 1;
+pub const PROP_COUNT: usize = PropId::TableLayout as usize + 1;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Group {
@@ -577,14 +592,15 @@ impl PropId {
         match self {
             Display | Position | Float | Clear | BoxSizing | ZIndex | OverflowX | OverflowY | Top | Right | Bottom | Left | Width
             | Height | MinWidth | MinHeight | MaxWidth | MaxHeight | MarginTop | MarginRight | MarginBottom | MarginLeft
-            | PaddingTop | PaddingRight | PaddingBottom | PaddingLeft => Group::Box,
+            | PaddingTop | PaddingRight | PaddingBottom | PaddingLeft | TableLayout => Group::Box,
             BorderTopWidth | BorderRightWidth | BorderBottomWidth | BorderLeftWidth | BorderTopStyle | BorderRightStyle
             | BorderBottomStyle | BorderLeftStyle | BorderTopColor | BorderRightColor | BorderBottomColor | BorderLeftColor => {
                 Group::Border
             }
             FontFamily | FontSize | FontWeight | FontStyle | LineHeight | LetterSpacing | WordSpacing => Group::Font,
             Color | TextAlign | TextIndent | TextTransform | WhiteSpaceCollapse | TextWrapMode | WordBreak | OverflowWrap
-            | Direction | Visibility | Cursor | ListStyleType | ListStylePosition | TabSize | Quotes => Group::Text,
+            | Direction | Visibility | Cursor | ListStyleType | ListStylePosition | TabSize | Quotes | BorderCollapse | BorderSpacing
+            | EmptyCells | CaptionSide => Group::Text,
             Content | CounterReset | CounterIncrement | CounterSet => Group::Gen,
             VerticalAlign | TextDecorationLine | TextDecorationStyle | TextDecorationColor | TextDecorationThickness
             | BackgroundColor => Group::Misc,
@@ -674,6 +690,11 @@ impl PropId {
             CounterReset => "counter-reset",
             CounterIncrement => "counter-increment",
             CounterSet => "counter-set",
+            BorderCollapse => "border-collapse",
+            BorderSpacing => "border-spacing",
+            EmptyCells => "empty-cells",
+            CaptionSide => "caption-side",
+            TableLayout => "table-layout",
         }
     }
 
@@ -694,7 +715,8 @@ pub const ALL_PROPS: [PropId; PROP_COUNT] = {
         TextIndent, TextTransform, WhiteSpaceCollapse, TextWrapMode, WordBreak, OverflowWrap, Direction, Visibility, Cursor,
         ListStyleType, ListStylePosition, TabSize, VerticalAlign, TextDecorationLine, TextDecorationStyle, TextDecorationColor,
         TextDecorationThickness, BackgroundColor, BorderTopLeftRadius, BorderTopRightRadius, BorderBottomRightRadius,
-        BorderBottomLeftRadius, Content, Quotes, CounterReset, CounterIncrement, CounterSet,
+        BorderBottomLeftRadius, Content, Quotes, CounterReset, CounterIncrement, CounterSet, BorderCollapse, BorderSpacing,
+        EmptyCells, CaptionSide, TableLayout,
     ]
 };
 

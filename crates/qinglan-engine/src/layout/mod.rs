@@ -26,6 +26,7 @@ pub mod intrinsic;
 pub mod lists;
 pub mod position;
 pub mod replaced;
+pub mod table;
 pub mod units;
 
 use std::rc::Rc;
@@ -59,6 +60,7 @@ impl From<&Glyph> for PlacedGlyph {
 
 pub use boxtree::{BoxId, BoxKind, BoxTree, NO_BOX, build_box_tree};
 pub use image::{ImageRequest, ImageSizes, ImageState};
+pub use table::TableInfo;
 pub use units::LayoutUnit;
 
 /// Layout work allowed per page, in work units (about one per glyph cluster, a few per line and per
@@ -107,6 +109,8 @@ pub struct BoxOut {
     pub h: LayoutUnit,
     /// `overflow: hidden/clip`: content is clipped to the padding box.
     pub clip: bool,
+    /// A table cell that is empty with `empty-cells: hide`: no background or border.
+    pub hide: bool,
     /// The lines of the block's inline formatting context: `LayoutResult::lines[a..b]`.
     pub lines: (u32, u32),
     /// The list marker of an outside-marker list item: `LayoutResult::markers[m - 1]`, 0 for none.
@@ -180,11 +184,18 @@ pub struct Decoration {
 
 /// A positioned box in the order it is painted (L1 task 10): `below` before the normal flow
 /// (`z-index` < 0), `above` after it (`z-index` auto / 0 in document order, then positive ones).
+/// [`LayoutResult::stacked`] has them per stacking context (CSS2 appendix E).
 #[derive(Clone, Copy, Debug)]
 pub struct Positioned {
     pub box_id: BoxId,
     pub position: Position,
     pub z_index: i32,
+    /// `z-index: auto`: the box paints as if it made a stacking context, but the positioned boxes inside it take part
+    /// in its `ctx` (CSS2 appendix E.2).
+    pub auto: bool,
+    /// The stacking context the box takes part in: the nearest ancestor that makes one (the root, or a positioned box
+    /// with a `z-index` or `position: fixed`).
+    pub ctx: BoxId,
 }
 
 /// The canvas background (CSS2 14.2): the colour and the box it came from (that box does not paint it again).
@@ -210,6 +221,10 @@ pub struct LayoutResult {
     pub oof: Vec<(BoxId, BoxId)>,
     pub below: Vec<Positioned>,
     pub above: Vec<Positioned>,
+    /// The same boxes sorted by (stacking context, `z-index`, document order); see [`LayoutResult::stacked_in`].
+    pub stacked: Vec<Positioned>,
+    /// Tables that need more than their box (captions, collapsed borders), by box.
+    pub tables: FxHashMap<BoxId, TableInfo>,
     pub canvas: Option<Canvas>,
     /// The images the page wants (see [`image`]).
     pub images: Vec<ImageRequest>,
@@ -235,6 +250,13 @@ impl LayoutResult {
     pub fn release_text_data(&mut self) {
         self.glyphs = Vec::new();
         self.texts = Vec::new();
+    }
+
+    /// The positioned boxes that take part in the stacking context `ctx`, in the order CSS2 appendix E.2 paints them:
+    /// negative `z-index` first, then `auto` and 0 in document order, then the positive ones.
+    pub fn stacked_in(&self, ctx: BoxId) -> &[Positioned] {
+        let (a, b) = (self.stacked.partition_point(|p| p.ctx < ctx), self.stacked.partition_point(|p| p.ctx <= ctx));
+        self.stacked.get(a..b).unwrap_or(&[])
     }
 
     pub fn box_out(&self, id: BoxId) -> BoxOut {
@@ -345,6 +367,10 @@ pub(crate) struct Layouter<'a> {
     pub touched: bool,
     /// The page has floats (when it has none none of the float machinery runs).
     pub has_floats: bool,
+    /// The grids of the tables (table.rs), by table box.
+    pub grids: FxHashMap<BoxId, Rc<table::Grid>>,
+    /// The painter's extra data for tables.
+    pub tinfo: FxHashMap<BoxId, TableInfo>,
 }
 
 impl Layouter<'_> {
@@ -424,10 +450,13 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
         pos: (LayoutUnit::ZERO, LayoutUnit::ZERO),
         touched: false,
         has_floats: tree.boxes.iter().any(floats::is_float),
+        grids: FxHashMap::default(),
+        tinfo: FxHashMap::default(),
     };
     l.prefetch_text();
     l.layout_root();
     let has_floats = l.has_floats;
+    let tables = std::mem::take(&mut l.tinfo);
     let (boxes, mut lines, mut fragments, glyphs, texts, mut decorations, mut markers, oof, work, incomplete, partial) =
         (l.out, l.lines, l.fragments, l.glyphs, l.texts, l.decorations, l.markers, l.oof_list, l.work, l.exhausted || l.truncated, l.stopped);
     let mut fits = l.fits;
@@ -439,9 +468,9 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
     decorations.shrink_to_fit();
     markers.shrink_to_fit();
     let canvas = canvas_background(doc, &tree);
-    let (below, above) = paint_order(&tree);
+    let (below, above, stacked) = paint_order(&tree);
     let images = tree.images.clone();
-    LayoutResult { tree, boxes, lines, fragments, glyphs, texts, decorations, markers, oof, below, above, canvas, images, fits, viewport, has_floats, incomplete, work, partial }
+    LayoutResult { tree, boxes, lines, fragments, glyphs, texts, decorations, markers, oof, below, above, stacked, tables, canvas, images, fits, viewport, has_floats, incomplete, work, partial }
 }
 
 /// CSS2 14.2: the root element's background covers the canvas; when it has none (transparent), the
@@ -466,9 +495,31 @@ fn canvas_background(doc: &Document, tree: &BoxTree) -> Option<Canvas> {
     bg_of(body).map(|color| Canvas { color, from: body })
 }
 
-/// Positioned boxes in painting order (L1 task 10): `z-index` < 0 first, then auto / 0 in document order,
-/// then positive ones. The full stacking order is layer 2.
-fn paint_order(tree: &BoxTree) -> (Vec<Positioned>, Vec<Positioned>) {
+/// The stacking context a box takes part in (CSS2 appendix E.1): the nearest ancestor that makes one.
+fn stacking_context(tree: &BoxTree, id: BoxId) -> BoxId {
+    let mut p = tree.get(id).parent;
+    for _ in 0..100_000 {
+        if p == NO_BOX {
+            break;
+        }
+        let b = tree.get(p);
+        if matches!(b.kind, BoxKind::Block | BoxKind::InlineBlock | BoxKind::Replaced) && makes_context(&b.style) {
+            return p;
+        }
+        p = b.parent;
+    }
+    tree.root
+}
+
+/// A positioned box with a `z-index` other than `auto`, or `position: fixed`, starts a stacking context.
+pub fn makes_context(style: &crate::css::computed::ComputedStyle) -> bool {
+    let b = &style.boxs;
+    !matches!(b.position, Position::Static | Position::Sticky) && (b.z_index.is_some() || b.position == Position::Fixed)
+}
+
+/// Positioned boxes in painting order (L1 task 10; CSS2 appendix E.2): `below` / `above` are all of them in one list
+/// (`z-index` < 0 first, then auto / 0, then positive ones); `stacked` is the same sorted per stacking context.
+fn paint_order(tree: &BoxTree) -> (Vec<Positioned>, Vec<Positioned>, Vec<Positioned>) {
     let mut all: Vec<(i32, u32, Positioned)> = Vec::new();
     for (i, b) in tree.boxes.iter().enumerate() {
         if !matches!(b.kind, BoxKind::Block | BoxKind::InlineBlock | BoxKind::Replaced) {
@@ -479,9 +530,12 @@ fn paint_order(tree: &BoxTree) -> (Vec<Positioned>, Vec<Positioned>) {
             continue;
         }
         let z = b.style.boxs.z_index.unwrap_or(0);
-        all.push((z, b.order, Positioned { box_id: i as BoxId, position: pos, z_index: z }));
+        let p = Positioned { box_id: i as BoxId, position: pos, z_index: z, auto: !makes_context(&b.style), ctx: stacking_context(tree, i as BoxId) };
+        all.push((z, b.order, p));
     }
     all.sort_by_key(|&(z, order, p)| (z, order, p.box_id));
+    let mut stacked: Vec<Positioned> = all.iter().map(|t| t.2).collect();
+    stacked.sort_by_key(|p| p.ctx);
     let (neg, rest): (Vec<_>, Vec<_>) = all.into_iter().partition(|(z, ..)| *z < 0);
-    (neg.into_iter().map(|t| t.2).collect(), rest.into_iter().map(|t| t.2).collect())
+    (neg.into_iter().map(|t| t.2).collect(), rest.into_iter().map(|t| t.2).collect(), stacked)
 }

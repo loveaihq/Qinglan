@@ -1,0 +1,50 @@
+<!--
+Tables (CSS2 chapter 17, step 2a-2). Font 10px/10px, body margin 0, viewport 800x600. Every glyph is a 10px square.
+
+t1  automatic layout (17.5.2.2), no spacing, no padding: column 0 = max(30 "aaa", 10 "c") = 30, column 1 = max(20 "bb", 40 "dddd") = 40,
+    both rows are 10 high: table (0,0 70x20); a (0,0 30x10), b (30,0 40x10), c (0,10 30x10), d (30,10 40x10).
+t2  table-layout: fixed with width 100 (17.5.2.1), border-spacing 0: column 0 is 30 from <col style="width:30px">, the other two share
+    the 70 left: 35 each. The table is at 20 + margin-top 10: (0,30 100x10); e (0,30 30x10), f (30,30 35x10), g (65,30 35x10).
+t3  border=1, cellspacing=2, cellpadding=1, a caption on top (17.4), x over two rows, yy over two columns. Cells: x, z, w are 10 + 2 padding
+    + 2 border = 14 wide, yy needs 20 + 4 = 24 < 14 + 2 + 14. The grid: 2 + 14 + 2 + 14 + 2 + 14 + 2 = 50 wide, plus the 1px table
+    border on both sides = 52. Rows 14 + 14 high: 2 + 14 + 2 + 14 + 2 = 34 + 2 = 36, plus the 10 high caption = 46. t3 starts at 40 + margin 10 = 50:
+    table (0,50 52x46), caption (0,50 52x10) with "cap" centred: x = (52 - 30) / 2 = 11. The row group starts inside the border and the
+    spacing: (3,63) 46x30; x spans two rows: (3,63 14x30), yy: (19,63 30x14), z (19,79 14x14), w (35,79 14x14). x is vertically
+    centred (td inherits `middle` from the row group): 30 - 14 = 16 spare, 8 above: its text at 63 + 1 + 1 + 8 = 73, x = 3 + 2 = 5.
+t4  vertical-align top / middle / bottom (17.5.3) in a row 30 high (the first cell has a 30 high block): the texts at 96, 96 + 10, 96 + 20.
+t5  vertical-align: baseline: "A" is 20px (baseline 16), "b" 10px (baseline 8): the row is 16 + max(4, 2) = 20 high and "b" is 8 lower
+    than the top: t5 at 126, "A" (0,126 20x20), "b" (20,134 10x10).
+check: block table#t1 :: (0,0 70x20) [display:table]
+check: block td#a :: (0,0 30x10)
+check: block td#b :: (30,0 40x10)
+check: block td#c :: (0,10 30x10)
+check: block td#d :: (30,10 40x10)
+check: block table#t2 :: (0,30 100x10)
+check: block td#e :: (0,30 30x10)
+check: block td#f :: (30,30 35x10)
+check: block td#g :: (65,30 35x10)
+check: block table#t3 :: (0,50 52x46)
+check: block caption#cap :: (0,50 52x10)
+check: text "cap" :: (11,50 30x10)
+check: block tbody#tb3 :: (3,63 46x30)
+check: block td#x :: (3,63 14x30)
+check: block td#yy :: (19,63 30x14)
+check: block td#z :: (19,79 14x14)
+check: block td#w :: (35,79 14x14)
+check: text "x" :: (5,73 10x10)
+check: text "T" :: (10,96 10x10)
+check: text "M" :: (20,106 10x10)
+check: text "B" :: (30,116 10x10)
+check: block table#t5 :: (0,126 30x20)
+check: text "A" :: (0,126 20x20)
+check: text "b" :: (20,134 10x10)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+</style>
+<table id="t1" cellspacing="0" cellpadding="0"><tr><td id="a">aaa</td><td id="b">bb</td></tr><tr><td id="c">c</td><td id="d">dddd</td></tr></table>
+<table id="t2" cellpadding="0" style="table-layout:fixed;width:100px;border-spacing:0;margin-top:10px"><col style="width:30px"><tr><td id="e">eeeeee</td><td id="f">f</td><td id="g">g</td></tr></table>
+<table id="t3" border="1" cellspacing="2" cellpadding="1" style="margin-top:10px"><caption id="cap">cap</caption><tbody id="tb3"><tr><td id="x" rowspan="2">x</td><td id="yy" colspan="2">yy</td></tr><tr><td id="z">z</td><td id="w">w</td></tr></tbody></table>
+<table id="t4" cellspacing="0" cellpadding="0"><tr><td><div style="width:10px;height:30px"></div></td><td style="vertical-align:top">T</td><td style="vertical-align:middle">M</td><td style="vertical-align:bottom">B</td></tr></table>
+<table id="t5" cellspacing="0" cellpadding="0"><tr><td style="vertical-align:baseline;font:20px/20px Ahem">A</td><td style="vertical-align:baseline">b</td></tr></table>

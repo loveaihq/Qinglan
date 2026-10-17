@@ -1078,6 +1078,21 @@ fn parse_longhand(prop: PropId, cvs: &[Cv], items: &[&Cv], q: bool) -> Option<Va
         Content => parse_content(items),
         Quotes => parse_quotes(items),
         CounterReset | CounterSet => parse_counters(items, 0),
+        BorderCollapse => kw(one_ref?, super::types::BorderCollapse::from_keyword).map(Value::BorderCollapse),
+        EmptyCells => kw(one_ref?, super::types::EmptyCells::from_keyword).map(Value::EmptyCells),
+        CaptionSide => kw(one_ref?, super::types::CaptionSide::from_keyword).map(Value::CaptionSide),
+        TableLayout => kw(one_ref?, super::types::TableLayout::from_keyword).map(Value::TableLayout),
+        BorderSpacing => {
+            if items.len() > 2 {
+                return None;
+            }
+            let a = p_lp(items.first()?, q, true)?;
+            let b = match items.get(1) {
+                Some(c) => p_lp(c, q, true)?,
+                None => a.clone(),
+            };
+            Some(Value::TableSpacing(a, b))
+        }
         CounterIncrement => parse_counters(items, 1),
         BorderTopLeftRadius | BorderTopRightRadius | BorderBottomRightRadius | BorderBottomLeftRadius => {
             if (1..=2).contains(&items.len()) && items.iter().all(|c| radius_ok(c, q)) {

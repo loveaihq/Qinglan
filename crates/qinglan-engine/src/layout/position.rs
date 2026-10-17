@@ -188,7 +188,7 @@ impl Layouter<'_> {
             (true, Some(t), Some(b)) => Some((ch - t - b - mt0 - mb0 - v_extra).max0()),
             _ => None,
         };
-        let res = self.layout_block(p.id, cw, Some(ch), Flow { root: false, forced_w: Some(content_w), forced_h });
+        let res = self.layout_block(p.id, cw, Some(ch), Flow { root: false, forced_w: Some(content_w), forced_h, cell_bor: None });
         let h = res.h;
         let (top_f, mt) = match (top, bottom) {
             (Some(t), Some(b)) if !auto_h || forced_h.is_none() => {

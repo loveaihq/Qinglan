@@ -95,7 +95,7 @@ impl HintBuilder {
         let mut relevant_attr = vec![false; doc.atoms.len()];
         for name in [
             "bgcolor", "text", "marginwidth", "marginheight", "leftmargin", "rightmargin", "topmargin", "bottommargin", "color", "face", "size",
-            "bordercolor", "border", "width", "height", "align", "valign", "nowrap", "hspace", "vspace", "frameborder", "noshade", "type",
+            "bordercolor", "border", "cellspacing", "width", "height", "align", "valign", "nowrap", "hspace", "vspace", "frameborder", "noshade", "type",
         ]
         .into_iter()
         .chain(body_link.map(|_| "href"))
@@ -242,6 +242,12 @@ impl HintBuilder {
                     }
                     for p in [PropId::BorderTopStyle, PropId::BorderRightStyle, PropId::BorderBottomStyle, PropId::BorderLeftStyle] {
                         hints.push((p, Value::BorderStyle(style)));
+                    }
+                }
+                if let Some(v) = at("cellspacing") {
+                    used("cellspacing", &v);
+                    if let Some(px) = parse_nonneg_int(&v) {
+                        hints.push((PropId::BorderSpacing, Value::TableSpacing(Lp::px(px as f32), Lp::px(px as f32))));
                     }
                 }
                 if let Some(v) = at("width") {
