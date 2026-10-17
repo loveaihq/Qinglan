@@ -1215,7 +1215,8 @@ impl Layouter<'_> {
         let mut emitted = 0usize;
         // Floats in this paragraph: the units already placed, and those that wait for the end of their line.
         let has_floats = prep.units.iter().any(|u| u.kind == UnitKind::Float);
-        let mut placed: Vec<usize> = Vec::new();
+        let mut placed: Vec<bool> = if has_floats { vec![false; prep.units.len()] } else { Vec::new() };
+        let is_placed = |placed: &[bool], k: usize| placed.get(k).copied().unwrap_or(false);
         let mut deferred: Vec<(BoxId, super::floats::FloatDims)> = Vec::new();
         let strut_h = strut_asc + strut_desc;
         let mut groups: Vec<Group> = Vec::new();
@@ -1258,13 +1259,15 @@ impl Layouter<'_> {
                         let mut k = s;
                         while let Some(u) = prep.units.get(k) {
                             match u.kind {
-                                UnitKind::Float if !placed.contains(&k) => {
+                                UnitKind::Float if !is_placed(&placed, k) => {
                                     if let Some(fid) = prep.items.get(u.item as usize).map(|i| i.box_id)
-                                        && let Some(&(_, d)) = fdims.iter().find(|(i, _)| *i == k)
+                                        && let Some(d) = fdims.binary_search_by_key(&k, |e| e.0).ok().and_then(|i| fdims.get(i)).map(|e| e.1)
                                     {
                                         self.put_float(fid, d, content_w, left, top + y);
                                     }
-                                    placed.push(k);
+                                    if let Some(p) = placed.get_mut(k) {
+                                        *p = true;
+                                    }
                                 }
                                 UnitKind::Float | UnitKind::Edge | UnitKind::Oof => {}
                                 _ if u.collapsible_space => {}
@@ -1290,13 +1293,15 @@ impl Layouter<'_> {
                         continue;
                     }
                     if has_floats
-                        && let Some(f) = (s..end).find(|k| prep.units.get(*k).is_some_and(|u| u.kind == UnitKind::Float) && !placed.contains(k))
+                        && let Some(f) = (s..end).find(|&k| prep.units.get(k).is_some_and(|u| u.kind == UnitKind::Float) && !is_placed(&placed, k))
                     {
                         let before = (s..f).filter_map(|k| prep.units.get(k)).filter(|u| !u.collapsible_space).fold(LU::ZERO, |a, u| a + u.adv);
                         if let Some(fid) = prep.units.get(f).and_then(|u| prep.items.get(u.item as usize)).map(|i| i.box_id)
-                            && let Some(&(_, d)) = fdims.iter().find(|(i, _)| *i == f)
+                            && let Some(d) = fdims.binary_search_by_key(&f, |e| e.0).ok().and_then(|i| fdims.get(i)).map(|e| e.1)
                         {
-                            placed.push(f);
+                            if let Some(p) = placed.get_mut(f) {
+                                *p = true;
+                            }
                             // Floats do not reorder (9.5.1 rule 5): one that waits for the next line holds back the later ones.
                             if before + d.w <= line_w - line_indent && deferred.is_empty() {
                                 self.put_float(fid, d, content_w, left, top + y);

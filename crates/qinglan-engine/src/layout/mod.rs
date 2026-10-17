@@ -504,7 +504,7 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
     let has_floats = l.has_floats;
     let tables = std::mem::take(&mut l.tinfo);
     let (boxes, mut lines, mut fragments, glyphs, texts, mut decorations, mut markers, oof, work, incomplete, partial) =
-        (l.out, l.lines, l.fragments, l.glyphs, l.texts, l.decorations, l.markers, l.oof_list, l.work, l.exhausted || l.truncated, l.stopped);
+        (l.out, l.lines, l.fragments, l.glyphs, l.texts, l.decorations, l.markers, l.oof_list, l.work, l.exhausted || l.truncated || tree.cut, l.stopped);
     let mut fits = l.fits;
     fits.shrink_to_fit();
     // The arrays grew by doubling; what is kept for the life of the page should not carry the slack.

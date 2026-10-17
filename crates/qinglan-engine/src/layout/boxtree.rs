@@ -27,7 +27,7 @@ use crate::css::selector::PseudoElement;
 use crate::css::types::{Content, Dim, Display, Position, TextWrapMode, WhiteSpaceCollapse};
 use crate::css::values::Lp;
 use crate::html::atoms::{Atom, a};
-use crate::html::dom::{Document, NONE, Namespace, NodeData, NodeId};
+use crate::html::dom::{Document, MAX_NODES, NONE, Namespace, NodeData, NodeId};
 
 pub type BoxId = u32;
 pub const NO_BOX: BoxId = u32::MAX;
@@ -205,6 +205,9 @@ pub struct BoxTree {
     pub root: BoxId,
     /// The sources of the images of the page, in document order.
     pub images: Vec<ImageRequest>,
+    /// Some `::before` / `::after` boxes were left out: the page makes more generated boxes than [`MAX_NODES`] allows
+    /// together with its own nodes.
+    pub cut: bool,
     dummy: LayoutBox,
 }
 
@@ -320,6 +323,13 @@ struct Builder<'a> {
     gc: Counters,
     /// Images made by `content: url()`, counted so each gets a node number of its own (past the nodes of the document).
     gen_images: u32,
+    /// Boxes made for generated content so far, and how many may be made: a quarter of what the document's own node count
+    /// leaves under [`MAX_NODES`]. A generated box costs about 600 bytes (box, geometry, shaped text), so a page cannot
+    /// ask for several times the memory its node count already allows by putting `::before` and `::after` on every
+    /// element; the cost of the most the allowance lets through stays under that of a document of `MAX_NODES` nodes.
+    generated: usize,
+    gen_cap: usize,
+    gen_cut: bool,
     images: Vec<ImageRequest>,
     video: Option<Atom>,
     audio: Option<Atom>,
@@ -345,6 +355,9 @@ pub fn build_box_tree_with(doc: &Document, styles: &StyleTree, env: &BuildEnv<'_
         next_order: 0,
         gc: Counters::new(),
         gen_images: 0,
+        generated: 0,
+        gen_cap: MAX_NODES.saturating_sub(doc.nodes.len()) / 4,
+        gen_cut: false,
         images: Vec::new(),
         video: doc.atoms.lookup("video"),
         audio: doc.atoms.lookup("audio"),
@@ -366,7 +379,7 @@ pub fn build_box_tree_with(doc: &Document, styles: &StyleTree, env: &BuildEnv<'_
         }
     };
     let dummy = LayoutBox::new(BoxKind::Block, NONE, init, true);
-    BoxTree { boxes: b.boxes, root, images: b.images, dummy }
+    BoxTree { boxes: b.boxes, root, images: b.images, cut: b.gen_cut, dummy }
 }
 
 /// HTML 2.3.4.? "rules for parsing integers" (leading white space, sign, digits; the rest is ignored).
@@ -447,6 +460,11 @@ impl Builder<'_> {
         if matches!(kind, Gen::Nothing | Gen::Contents) || depth >= MAX_BOX_DEPTH {
             return;
         }
+        if self.generated >= self.gen_cap {
+            self.gen_cut = true;
+            return;
+        }
+        let first_box = self.boxes.len();
         let order = self.next_order;
         self.next_order = self.next_order.wrapping_add(1);
         // The counters of the pseudo-element act as those of a child of its element.
@@ -491,6 +509,7 @@ impl Builder<'_> {
             }
             Gen::Nothing | Gen::Contents => {}
         }
+        self.generated = self.generated.saturating_add(self.boxes.len().saturating_sub(first_box));
     }
 
     /// The boxes of the content `items` of a pseudo-element of element `n`: text boxes (one per run, shaped and broken

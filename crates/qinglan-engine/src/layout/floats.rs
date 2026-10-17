@@ -83,10 +83,16 @@ impl FloatSpace {
 
     /// Place a float whose margin box is `w` x `h` (9.5.1): as high as possible, not higher than `y_min` or the float
     /// before it, as far to its side as possible inside `[cl, cr]`; below the floats in the way when it does not fit
-    /// beside them. Returns the margin box's corner.
-    pub fn place(&mut self, right: bool, w: LU, h: LU, y_min: LU, cl: LU, cr: LU) -> (LU, LU) {
+    /// beside them. Returns the margin box's corner and the work done: every round looks at all the floats before this
+    /// one (`round_cost`), and when that passes `limit` the float stays where it is (the layout is out of budget anyway).
+    pub fn place(&mut self, right: bool, w: LU, h: LU, y_min: LU, (cl, cr): (LU, LU), limit: u64) -> ((LU, LU), u64) {
         let mut y = y_min.max(self.last_top);
+        let mut work = 0u64;
         for _ in 0..MAX_FLOATS + 2 {
+            work += self.round_cost();
+            if work > limit {
+                break;
+            }
             let (mut l, mut r) = self.band(y, h, cl, cr);
             let mut fits = r - l >= w;
             if !fits && w > cr - cl {
@@ -107,11 +113,16 @@ impl FloatSpace {
                     self.list.push(FloatBox { right, l: x, t: y, r: x + w, b: y + h });
                 }
                 self.last_top = y;
-                return (x, y);
+                return ((x, y), work);
             }
             y = next.unwrap_or(y);
         }
-        (cl, y)
+        ((cl, y), work)
+    }
+
+    /// The work of one look at every float (a `band` and a `next_bottom`), in the layout's units.
+    pub fn round_cost(&self) -> u64 {
+        1 + self.list.len() as u64 / 4
     }
 }
 
@@ -230,7 +241,9 @@ impl Layouter<'_> {
         {
             y_min = y_min.max(c);
         }
-        let (fx, fy) = self.fs.place(bs.float == Float::Right, d.w, d.h, y_min, cl, cr);
+        let left = self.budget.saturating_sub(self.work);
+        let ((fx, fy), work) = self.fs.place(bs.float == Float::Right, d.w, d.h, y_min, (cl, cr), left);
+        self.charge(work);
         if let Some(out) = self.out.get_mut(id as usize) {
             out.x = fx + d.ml - self.pos.0;
             out.y = fy + d.mt - self.pos.1;
@@ -244,6 +257,7 @@ impl Layouter<'_> {
             return (LU::ZERO, owner_cbw);
         }
         self.touched = true;
+        self.charge(1 + self.fs.list.len() as u64 / 8);
         let (cl, cr) = (self.pos.0 + owner_left, self.pos.0 + owner_left + owner_cbw);
         let (l, r) = self.fs.band(self.pos.1 + y_local, h, cl, cr);
         (l - cl, r - l)
@@ -277,6 +291,9 @@ impl Layouter<'_> {
         };
         let mut y = gy;
         for _ in 0..MAX_FLOATS + 2 {
+            if !self.charge(self.fs.round_cost()) {
+                break;
+            }
             let (l, r) = self.fs.band(base.1 + y, LU::from_raw(1), cl, cr);
             let fits = (l == cl && r == cr) || (r > l && want.is_none_or(|w| w <= r - l));
             if fits {

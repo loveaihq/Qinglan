@@ -278,32 +278,89 @@ fn resolve_axis(names: &[Vec<Rc<str>>], ex: i64, s: &GridLine, e: &GridLine) -> 
     }
 }
 
-/// Which cells of the implicit grid are taken: one bit set per line of the major axis.
+/// Which cells of the implicit grid are taken: one bit per cell, a row of 64-bit words per line of the major axis.
 #[derive(Default)]
 struct Occ {
     lines: Vec<Vec<u64>>,
 }
 
+/// The bits `lo..hi` of a word (`lo < hi <= 64`).
+fn word_mask(lo: usize, hi: usize) -> u64 {
+    let top = if hi >= 64 { !0 } else { (1u64 << hi) - 1 };
+    top & !((1u64 << lo) - 1)
+}
+
+/// The first and last word the cells `n0..n0 + ns` touch.
+fn words(n0: usize, ns: usize) -> (usize, usize) {
+    (n0 / 64, (n0 + ns.max(1) - 1) / 64)
+}
+
+/// The mask of those cells inside the word `w`.
+fn mask_in(w: usize, n0: usize, ns: usize) -> u64 {
+    let (w0, w1) = words(n0, ns);
+    let lo = if w == w0 { n0 % 64 } else { 0 };
+    let hi = if w == w1 { (n0 + ns.max(1) - 1) % 64 + 1 } else { 64 };
+    word_mask(lo, hi)
+}
+
 impl Occ {
-    fn free(&self, m0: usize, ms: usize, n0: usize, ns: usize) -> bool {
-        (m0..m0 + ms).all(|m| self.lines.get(m).is_none_or(|row| (n0..n0 + ns).all(|c| row.get(c / 64).is_none_or(|w| (w >> (c % 64)) & 1 == 0))))
+    /// What looking at or filling `ms` lines of `ns` cells from column `n0` costs (work units): a step, plus a unit per
+    /// eight words.
+    fn cost(ms: usize, n0: usize, ns: usize) -> u64 {
+        let (w0, w1) = words(n0, ns);
+        1 + (ms as u64).saturating_mul((w1 - w0 + 1) as u64) / 8
+    }
+
+    /// The last taken cell in lines `m0..m0 + ms`, columns `n0..n0 + ns` as (line, column), or `None` if all are free. Every
+    /// start that does not clear it overlaps it, so the caller can jump past it.
+    fn hit(&self, m0: usize, ms: usize, n0: usize, ns: usize) -> Option<(usize, usize)> {
+        let (w0, w1) = words(n0, ns);
+        let mut last: Option<(usize, usize)> = None;
+        for m in m0..m0 + ms {
+            let Some(row) = self.lines.get(m) else { break };
+            let mut col: Option<usize> = None;
+            for w in w0..=w1 {
+                let Some(&bits) = row.get(w) else { break };
+                let h = bits & mask_in(w, n0, ns);
+                if h != 0 {
+                    col = Some(w * 64 + 63 - h.leading_zeros() as usize);
+                }
+            }
+            if let Some(c) = col {
+                last = Some((m, last.map_or(c, |(_, l)| l.max(c))));
+            }
+        }
+        last
     }
 
     fn set(&mut self, m0: usize, ms: usize, n0: usize, ns: usize) {
+        let (w0, w1) = words(n0, ns);
         if self.lines.len() < m0 + ms {
             self.lines.resize(m0 + ms, Vec::new());
         }
         for m in m0..m0 + ms {
             let Some(row) = self.lines.get_mut(m) else { continue };
-            if row.len() < (n0 + ns).div_ceil(64) {
-                row.resize((n0 + ns).div_ceil(64), 0);
+            if row.len() <= w1 {
+                row.resize(w1 + 1, 0);
             }
-            for c in n0..n0 + ns {
-                if let Some(w) = row.get_mut(c / 64) {
-                    *w |= 1 << (c % 64);
+            for w in w0..=w1 {
+                if let Some(x) = row.get_mut(w) {
+                    *x |= mask_in(w, n0, ns);
                 }
             }
         }
+    }
+
+    /// Whether the cell is taken.
+    fn taken(&self, m: usize, c: usize) -> bool {
+        self.lines.get(m).and_then(|row| row.get(c / 64)).is_some_and(|w| (w >> (c % 64)) & 1 != 0)
+    }
+
+    /// Whether every one of the first `n` cells of line `m` is taken.
+    fn full(&self, m: usize, n: usize) -> bool {
+        let Some(row) = self.lines.get(m) else { return false };
+        let (_, w1) = words(0, n);
+        (0..=w1).all(|w| row.get(w).is_some_and(|&b| b & mask_in(w, 0, n) == mask_in(w, 0, n)))
     }
 }
 
@@ -311,27 +368,63 @@ fn us(v: i64) -> usize {
     v.clamp(0, MAXT as i64) as usize
 }
 
-/// 8.5: put every item at a definite position; `n` is the size of the implicit grid so far and grows. Returns the work done.
-fn place(items: &mut [GItem], n: &mut Ax<usize>, maj: usize, dense: bool) -> u64 {
+/// The work `place` has done and the most it may do (what the page budget has left).
+struct Spend {
+    work: u64,
+    limit: u64,
+}
+
+impl Spend {
+    /// Count `n` units; false once the limit is passed.
+    fn go(&mut self, n: u64) -> bool {
+        self.work = self.work.saturating_add(n);
+        self.work <= self.limit
+    }
+
+    fn out(&self) -> bool {
+        self.work > self.limit
+    }
+}
+
+/// 8.5: put every item at a definite position; `n` is the size of the implicit grid so far and grows. Every cell or word
+/// looked at is counted, and when `limit` units are used up the rest of the items are dropped (`ok = false`). Returns the
+/// work done and whether the limit was hit.
+///
+/// A scan jumps over taken cells (`Occ::hit` names the last one in the window). In a dense grid the search starts at the
+/// first line with a free cell, and, for an item with a column of its own, at the first free cell of that column, so
+/// packing a lot of items stays linear instead of starting over from line 0 every time.
+fn place(items: &mut [GItem], n: &mut Ax<usize>, maj: usize, dense: bool, limit: u64) -> (u64, bool) {
     let mn = 1 - maj;
-    let mut work = items.len() as u64;
+    let mut sp = Spend { work: items.len() as u64, limit };
     let mut occ = Occ::default();
-    let fits = |it: &GItem| it.ok;
     // Step 2: items with a definite position on both axes.
-    for it in items.iter().filter(|i| i.ok && i.def.r && i.def.c) {
-        occ.set(us(it.st.r), it.sp.r, us(it.st.c), it.sp.c);
+    for it in items.iter_mut().filter(|i| i.ok && i.def.r && i.def.c) {
+        let (m, ms, c, ns) = (us(it.st.v(maj)), it.sp.v(maj), us(it.st.v(mn)), it.sp.v(mn));
+        if !sp.go(Occ::cost(ms, c, ns)) {
+            it.ok = false;
+            continue;
+        }
+        occ.set(m, ms, c, ns);
     }
     // Step 3: items locked to a line of the major axis. Sparse packing goes on past the items already put on that line.
     let mut last_end: Vec<usize> = Vec::new();
     for it in items.iter_mut().filter(|i| i.ok && i.def.v(maj) && !i.def.v(mn)) {
         let (m, ms, ns) = (us(it.st.v(maj)), it.sp.v(maj), it.sp.v(mn));
         let mut c = if dense { 0 } else { (m..m + ms).filter_map(|l| last_end.get(l).copied()).max().unwrap_or(0) };
-        while !occ.free(m, ms, c, ns) && c < MAXT {
-            c += 1;
-            work += 1;
+        while c < MAXT && !sp.out() {
+            sp.go(Occ::cost(ms, c, ns));
+            match occ.hit(m, ms, c, ns) {
+                Some((_, col)) => c = col + 1,
+                None => break,
+            }
+        }
+        if sp.out() || c >= MAXT {
+            it.ok = false;
+            continue;
         }
         *it.st.m(mn) = c as i64;
         *it.def.m(mn) = true;
+        sp.go(Occ::cost(ms, c, ns));
         occ.set(m, ms, c, ns);
         if last_end.len() < m + ms {
             last_end.resize(m + ms, 0);
@@ -343,7 +436,7 @@ fn place(items: &mut [GItem], n: &mut Ax<usize>, maj: usize, dense: bool) -> u64
         }
     }
     // Step 4: the size of the implicit grid in the minor axis, and in the major one for what is placed.
-    for it in items.iter().filter(|i| fits(i)) {
+    for it in items.iter().filter(|i| i.ok) {
         for a in [maj, mn] {
             let end = if it.def.v(a) { us(it.st.v(a)) + it.sp.v(a) } else { it.sp.v(a) };
             *n.m(a) = n.v(a).max(end.min(MAXT));
@@ -351,37 +444,61 @@ fn place(items: &mut [GItem], n: &mut Ax<usize>, maj: usize, dense: bool) -> u64
     }
     // Step 5: the rest, with the auto-placement cursor.
     let (mut cm, mut cn) = (0usize, 0usize);
+    let (mut first_free, mut col_free): (usize, Vec<usize>) = (0, Vec::new());
     for it in items.iter_mut().filter(|i| i.ok && !i.def.v(maj)) {
-        let (ms, ns) = (it.sp.v(maj), it.sp.v(mn));
+        if sp.out() {
+            it.ok = false;
+            continue;
+        }
+        let (ms, ns, nmn) = (it.sp.v(maj), it.sp.v(mn), n.v(mn));
+        if dense {
+            while first_free < MAXT && occ.full(first_free, nmn) && sp.go(1 + nmn as u64 / 512) {
+                first_free += 1;
+            }
+        }
         if it.def.v(mn) {
             let c = us(it.st.v(mn));
             if dense {
-                cm = 0;
+                // Nothing above the first free cell of the column, or the first line with a free cell, can take the item.
+                if col_free.len() <= c {
+                    col_free.resize(c + 1, 0);
+                }
+                if let Some(f) = col_free.get_mut(c) {
+                    while *f < MAXT && occ.taken(*f, c) && sp.go(1) {
+                        *f += 1;
+                    }
+                    cm = first_free.max(*f);
+                }
             } else if c < cn {
                 cm += 1;
             }
             cn = c;
-            while !occ.free(cm, ms, c, ns) && cm < MAXT {
-                cm += 1;
-                work += 1;
+            while cm < MAXT && !sp.out() {
+                sp.go(Occ::cost(ms, c, ns));
+                match occ.hit(cm, ms, c, ns) {
+                    Some((line, _)) => cm = line + 1,
+                    None => break,
+                }
             }
         } else {
             if dense {
-                (cm, cn) = (0, 0);
+                (cm, cn) = (first_free, 0);
             }
-            while cm < MAXT {
-                work += 1;
-                if cn + ns > n.v(mn) {
+            while cm < MAXT && !sp.out() {
+                if cn + ns > nmn {
+                    sp.go(1);
                     cm += 1;
                     cn = 0;
-                } else if occ.free(cm, ms, cn, ns) {
-                    break;
-                } else {
-                    cn += 1;
+                    continue;
+                }
+                sp.go(Occ::cost(ms, cn, ns));
+                match occ.hit(cm, ms, cn, ns) {
+                    Some((_, col)) => cn = col + 1,
+                    None => break,
                 }
             }
         }
-        if cm + ms > MAXT {
+        if sp.out() || cm + ms > MAXT {
             it.ok = false;
             continue;
         }
@@ -389,10 +506,11 @@ fn place(items: &mut [GItem], n: &mut Ax<usize>, maj: usize, dense: bool) -> u64
         *it.st.m(mn) = cn as i64;
         *it.def.m(maj) = true;
         *it.def.m(mn) = true;
+        sp.go(Occ::cost(ms, cn, ns));
         occ.set(cm, ms, cn, ns);
         *n.m(maj) = n.v(maj).max(cm + ms);
     }
-    work
+    (sp.work, sp.out())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -725,8 +843,10 @@ impl Layouter<'_> {
             }
         }
         let mut n = Ax { r: (neg.r + ex.r).min(MAXT), c: (neg.c + ex.c).min(MAXT) };
-        let work = place(&mut items, &mut n, usize::from(gs.flow_col), gs.dense);
+        let left = self.budget.saturating_sub(self.work);
+        let (work, out) = place(&mut items, &mut n, usize::from(gs.flow_col), gs.dense, left);
         self.charge(work);
+        self.exhausted |= out;
         // The track sizing functions (7.6): explicit, then the auto ones, in both directions from the explicit grid.
         let mut tr: Ax<Vec<Track>> = Ax::default();
         for a in 0..2 {
@@ -1027,17 +1147,24 @@ impl Layouter<'_> {
             }
         }
         // Items spanning several tracks, smallest span first; those that cross a flexible track come last.
-        let spans: Vec<usize> = {
-            let mut v: Vec<usize> = order.iter().map(|&i| span_of(g, i)).filter(|&s| s > 1).collect();
-            v.dedup();
-            v
-        };
-        for s in spans {
-            let group: Vec<usize> = order.iter().copied().filter(|&i| span_of(g, i) == s && !has_flex(g, i)).collect();
-            if group.is_empty() {
-                continue;
+        // Looking at the tracks of every spanning item costs its span; each phase of the algorithm costs about that again, so
+        // a page of items that span a thousand tracks each runs out of budget instead of taking seconds.
+        let wide: u64 = order.iter().map(|&i| span_of(g, i) as u64).filter(|&s| s > 1).sum();
+        self.charge(wide / 8);
+        let flexy: Vec<bool> = if self.exhausted { Vec::new() } else { (0..g.items.len()).map(|i| span_of(g, i) > 1 && has_flex(g, i)).collect() };
+        let flexy = |i: usize| flexy.get(i).copied().unwrap_or(true);
+        let mut runs: Vec<(usize, Vec<usize>)> = Vec::new();
+        for &i in order.iter().filter(|&&i| span_of(g, i) > 1 && !flexy(i)) {
+            let s = span_of(g, i);
+            match runs.last_mut() {
+                Some((rs, group)) if *rs == s => group.push(i),
+                _ => runs.push((s, vec![i])),
             }
-            self.charge(group.len() as u64 * 2);
+        }
+        for (s, group) in runs {
+            if !self.charge(group.len() as u64 * (2 + 4 * s as u64)) {
+                break;
+            }
             for (n, ph) in PHASES.iter().enumerate() {
                 if ph.only.is_some_and(|m| m != mode) {
                     continue;
@@ -1055,9 +1182,9 @@ impl Layouter<'_> {
                 t.grow = false;
             }
         }
-        let flex_group: Vec<usize> = order.iter().copied().filter(|&i| has_flex(g, i)).collect();
-        if !flex_group.is_empty() {
-            self.charge(flex_group.len() as u64 * 2);
+        let flex_group: Vec<usize> = if self.exhausted { Vec::new() } else { order.iter().copied().filter(|&i| has_flex(g, i)).collect() };
+        let flex_cost: u64 = flex_group.iter().map(|&i| 2 + 4 * span_of(g, i) as u64).sum();
+        if !flex_group.is_empty() && self.charge(flex_cost) {
             for ph in PHASES.iter().take(4) {
                 if ph.only.is_none_or(|m| m == mode) {
                     self.phase(g, ax, &flex_group, ph, mode, true);

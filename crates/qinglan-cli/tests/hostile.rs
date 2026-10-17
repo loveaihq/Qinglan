@@ -319,3 +319,84 @@ fn position_offsets_1e9() {
         "position_offsets_1e9",
     );
 }
+
+/// A number in `lo..hi` that looks arbitrary but is the same on every run.
+fn pick(seed: &mut u64, lo: usize, hi: usize) -> usize {
+    let (a, b) = (usize::from(lcg(seed)), usize::from(lcg(seed)));
+    lo + ((a << 8) | b) % (hi - lo)
+}
+
+// The cases below are the 2a/2b review's: layout work that nothing used to count (grid auto-placement, spans over
+// thousands of tracks, floats that never fit beside each other) and boxes that nothing used to count (generated content).
+
+#[test]
+fn grid_dense_200k_items() {
+    let html = format!(
+        "<!DOCTYPE html><style>.g{{display:grid;grid-auto-flow:row dense;grid-template-columns:repeat(1000,1px);grid-template-rows:repeat(1000,1px)}}</style><body><div class=g>{}</div>{SOME_TEXT}",
+        "<i></i>".repeat(n(200_000))
+    );
+    run(page("200 000 items in a dense 1000 x 1000 grid", html), "grid_dense_200k_items");
+}
+
+#[test]
+fn grid_dense_wide_spans() {
+    let mut seed = 5;
+    let mut html = String::from("<!DOCTYPE html><style>.g{display:grid;grid-auto-flow:row dense;grid-template-columns:repeat(1000,1px);grid-template-rows:repeat(1000,1px)}</style><body><div class=g>");
+    for _ in 0..n(100_000) {
+        write!(html, "<i style='grid-column:span {}'></i>", [1, 2, 500, 999, 1000][pick(&mut seed, 0, 5)]).unwrap();
+    }
+    html.push_str("</div>");
+    run(page("100 000 grid items spanning up to 1000 columns, dense", html), "grid_dense_wide_spans");
+}
+
+#[test]
+fn grid_one_column_items_dense() {
+    let html = format!(
+        "<!DOCTYPE html><style>.g{{display:grid;grid-auto-flow:dense;grid-template-columns:1px}}</style><body><div class=g>{}</div>{SOME_TEXT}",
+        "<i style='grid-column:1'></i>".repeat(n(100_000))
+    );
+    run(page("100 000 dense grid items in one column", html), "grid_one_column_items_dense");
+}
+
+#[test]
+fn grid_areas_1000_by_1000_lines() {
+    let mut seed = 9;
+    let mut html = String::from("<!DOCTYPE html><style>.g{display:grid;grid-auto-rows:1px;grid-auto-columns:1px}</style><body><div class=g>");
+    for _ in 0..n(50_000) {
+        write!(html, "<i style='grid-area:{}/{}/span 1000/span 1000'></i>", pick(&mut seed, 1, 2000), pick(&mut seed, 1, 2000)).unwrap();
+    }
+    html.push_str("</div>");
+    run(page("50 000 grid areas of 1000 x 1000 cells", html), "grid_areas_1000_by_1000_lines");
+}
+
+#[test]
+fn grid_10000_items_spanning_1000_auto_tracks() {
+    let mut seed = 3;
+    let mut html = String::from("<!DOCTYPE html><style>.g{display:grid;grid-template-columns:repeat(1000,auto);grid-template-rows:repeat(1000,auto);width:3000px}</style><body><div class=g>");
+    for _ in 0..n(10_000) {
+        write!(html, "<i style='grid-column:1/span 1000;grid-row:{}/span 1000'>x y z</i>", pick(&mut seed, 1, 1000)).unwrap();
+    }
+    html.push_str("</div>");
+    run(page("10 000 grid items, each over 1000 auto tracks", html), "grid_10000_items_spanning_1000_auto_tracks");
+}
+
+#[test]
+fn before_and_after_on_100k_elements() {
+    let html = format!("<!DOCTYPE html><style>b::before{{content:'a'}}b::after{{content:'b'}}</style><body>{}", "<b>x</b>".repeat(n(100_000)));
+    run(page("::before and ::after on 100 000 elements", html), "before_and_after_on_100k_elements");
+}
+
+#[test]
+fn quotes_100k() {
+    run(page("100 000 <q> elements", format!("<!DOCTYPE html><body>{}", "<q>x</q>".repeat(n(100_000)))), "quotes_100k");
+}
+
+#[test]
+fn floats_100k() {
+    let mut seed = 13;
+    let mut html = String::from("<!DOCTYPE html><style>body{width:600px}</style><body>");
+    for i in 0..n(100_000) {
+        write!(html, "<i style='float:{};width:{}px;height:{}px'></i>", ["left", "right"][i % 2], pick(&mut seed, 100, 300), pick(&mut seed, 1, 50)).unwrap();
+    }
+    run(page("100 000 floats that never fit side by side", html), "floats_100k");
+}

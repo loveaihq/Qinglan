@@ -43,6 +43,8 @@ struct Fake {
     handler: Handler,
     calls: Mutex<Vec<Request>>,
     delay: Duration,
+    /// One path that answers sooner than the rest: (path, delay).
+    quick: Option<(&'static str, Duration)>,
     active: AtomicUsize,
     peak: AtomicUsize,
     per_host: Mutex<HashMap<String, (usize, usize)>>,
@@ -54,10 +56,19 @@ impl Fake {
             handler: Box::new(handler),
             calls: Mutex::new(Vec::new()),
             delay: Duration::from_millis(delay_ms),
+            quick: None,
             active: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
             per_host: Mutex::new(HashMap::new()),
         })
+    }
+    /// Like `new`, but the request for `quick_path` takes `quick_ms` instead of `delay_ms`.
+    fn staggered(delay_ms: u64, quick_path: &'static str, quick_ms: u64, handler: impl Fn(&Request) -> Result<Response, NetError> + Send + Sync + 'static) -> Arc<Fake> {
+        let mut f = Fake::new(delay_ms, handler);
+        if let Some(m) = Arc::get_mut(&mut f) {
+            m.quick = Some((quick_path, Duration::from_millis(quick_ms)));
+        }
+        f
     }
     fn count(&self) -> usize {
         self.calls.lock().unwrap().len()
@@ -79,7 +90,11 @@ impl Transport for Fake {
             e.0 += 1;
             e.1 = e.1.max(e.0);
         }
-        std::thread::sleep(self.delay);
+        let delay = match &self.quick {
+            Some((path, d)) if req.url.pathname() == *path => *d,
+            _ => self.delay,
+        };
+        std::thread::sleep(delay);
         let r = (self.handler)(req);
         self.per_host.lock().unwrap().get_mut(&host).unwrap().0 -= 1;
         self.active.fetch_sub(1, Ordering::SeqCst);
@@ -235,10 +250,13 @@ fn six_per_host_and_sixteen_in_all() {
 
 #[test]
 fn documents_and_styles_jump_the_image_queue() {
-    let fake = Fake::new(60, ok_html);
+    // 16 slots are taken by slow image requests to different hosts, one of which answers much sooner than the others:
+    // exactly one slot frees up while images and a style sheet wait, so the order the transport sees is the queue's
+    // priority and not a race between threads that finish together.
+    let fake = Fake::staggered(500, "/quick.png", 120, ok_html);
     let mut loader = Loader::without_wake(fake.clone());
-    // 16 slots are taken by slow image requests to different hosts; then images and a style sheet queue up.
-    for i in 0..16 {
+    loader.submit(page_req("https://h99.example/quick.png", ResourceKind::Image, None)).unwrap();
+    for i in 0..15 {
         loader.submit(page_req(&format!("https://h{i}.example/a.png"), ResourceKind::Image, None)).unwrap();
     }
     for i in 0..4 {
@@ -247,6 +265,7 @@ fn documents_and_styles_jump_the_image_queue() {
     loader.submit(page_req("https://z.example/style.css", ResourceKind::Style, None)).unwrap();
     assert_eq!(drain(&mut loader, 21).len(), 21);
     let order: Vec<String> = fake.calls.lock().unwrap().iter().map(|r| r.url.pathname()).collect();
+    // The style sheet took the slot the quick request freed; the late images had to wait for slow ones to finish.
     let css = order.iter().position(|p| p == "/style.css").unwrap();
     let first_late = order.iter().position(|p| p.starts_with("/late")).unwrap();
     assert!(css < first_late, "style sheet starts before the queued images: {order:?}");

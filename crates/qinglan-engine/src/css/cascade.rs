@@ -956,7 +956,29 @@ pub fn compute_styles(input: StyleInput<'_>) -> StyleTree {
                     continue;
                 }
                 entries.sort_by_key(|e| e.key);
-                *slot = Some(Rc::new(style_for(doc, entries, &style, &init, &env, root_font_size, None, false, &mut var_cache)));
+                // Shared like an element's style: the same declarations under the same style of the element (a page
+                // with a `::before` on every list item has one style for all of them, not one each).
+                let parent_ptr = Rc::as_ptr(&style) as usize;
+                let mut h: u64 = 0x517c_c1b7_2722_0a95;
+                for e in entries.iter() {
+                    h = (h ^ (((e.block.id as u64) << 1) | e.important as u64)).wrapping_mul(0x100_0000_01b3);
+                }
+                let share_key = (parent_ptr, h);
+                let same = |s: &ShareEntry| s.parent == parent_ptr && s.lang.is_none() && s.ids.len() == entries.len() && s.ids.iter().zip(entries.iter()).all(|(x, e)| x.0 == e.block.id && x.1 == e.important);
+                let hit = share.get(&share_key).and_then(|list| list.iter().find(|s| same(s))).map(|s| s.style.clone());
+                *slot = Some(match hit {
+                    Some(s) => s,
+                    None => {
+                        let s = Rc::new(style_for(doc, entries, &style, &init, &env, root_font_size, None, false, &mut var_cache));
+                        share.entry(share_key).or_default().push(ShareEntry {
+                            parent: parent_ptr,
+                            ids: entries.iter().map(|e| (e.block.id, e.important)).collect(),
+                            lang: None,
+                            style: s.clone(),
+                        });
+                        s
+                    }
+                });
             }
             if slots.iter().any(Option::is_some) {
                 pseudo.insert(el, slots);
