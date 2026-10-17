@@ -95,3 +95,15 @@ fn hidden_elements_have_no_position() {
     let h = fragment_target(&l.doc, "h").unwrap();
     assert!(l.index.node_y(&l.res, h).is_none());
 }
+
+#[test]
+fn a_link_under_a_box_with_a_higher_z_index_is_not_clickable_through_it() {
+    // "lo" comes later in the document but is below "hi" (z-index 1 < 2): the pointer over both is over "hi".
+    let l = lay(
+        "<body style='margin:0'><div style='position:absolute;z-index:2;left:0;top:0;background:#fff'><a href=/hi>hi</a></div>\
+         <div style='position:absolute;z-index:1;left:0;top:0'><a href=/lo>lo</a></div>",
+        &ImageSizes::new(),
+    );
+    let hit = l.index.link_at(&l.doc, &l.res, 5.0, 5.0, 5.0).expect("a link");
+    assert_eq!(link_target(&l.doc, hit), Some(("/hi".to_string(), false)));
+}

@@ -717,3 +717,19 @@ fn floats_paint_over_block_backgrounds_and_under_inline_text() {
     // is below it.
     expect(&f, &[(5, 15, BLUE), (35, 15, BLUE), (5, 25, RED), (29, 29, RED), (30, 25, GREEN), (5, 30, GREEN), (5, 5, BLUE)]);
 }
+
+#[test]
+fn a_nested_stacking_context_keeps_its_positioned_children_inside_it() {
+    // A (z-index 1) holds B (z-index 100); C (z-index 2) is outside A. A's whole context is below C, so C covers B even though 100 > 2.
+    // D (z-index -1) is inside A: it is above A's own background, not below the flow of the page.
+    let f = paint(
+        "<body style='margin:0'>\
+         <div style='position:relative;z-index:1;width:60px;height:60px;background:#ff0'>\
+         <div style='position:absolute;z-index:100;left:0;top:0;width:20px;height:20px;background:#0f0'></div>\
+         <div style='position:absolute;z-index:-1;left:40px;top:40px;width:10px;height:10px;background:#f00'></div></div>\
+         <div style='position:absolute;z-index:2;left:0;top:0;width:20px;height:20px;background:#00f'></div>",
+        100,
+        100,
+    );
+    expect(&f, &[(5, 5, BLUE), (45, 45, RED), (30, 30, YELLOW)]);
+}

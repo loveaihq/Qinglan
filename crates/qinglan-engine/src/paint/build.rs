@@ -1,18 +1,19 @@
-//! Display list builder: walks the layout in paint order (L1 task 10): positioned boxes with a negative
-//! `z-index`, then the normal flow in tree order, then the other positioned boxes in document order.
-//! Positioned boxes and everything they contain are painted at their turn in that order, not inside the flow;
-//! `position: fixed` boxes (and what they contain) go to the fixed list.
+//! Display list builder: walks the layout in paint order (CSS2 appendix E.2). Every stacking context (the root, a
+//! positioned box with a `z-index`, a `position: fixed` box) paints its own background, the contexts of negative
+//! `z-index`, the in-flow blocks, the floats, the in-flow inline content, then the positioned boxes of `z-index` auto
+//! or 0 in document order and the positive ones. A positioned box and everything in its flow is painted at its turn
+//! in the context it belongs to, not inside the flow; `position: fixed` boxes (and what they contain) go to the fixed list.
 
 use super::{DisplayList, ImagePlace, ImageSpot, Item, ItemKind, NO_CLIP, PaintGlyph, Rect, TextRun};
 use crate::css::color::Color;
 use crate::css::computed::{ComputedStyle, slant_of};
-use crate::css::types::{Position, Visibility};
+use crate::css::types::{BorderCollapse, Position, Visibility};
 use crate::html::atoms::FxHashMap;
 use crate::html::dom::{Document, NodeId};
 use crate::layout::block::{border_px, pad_px};
-use crate::layout::boxtree::{BoxId, BoxKind, NO_BOX, ReplacedKind};
+use crate::layout::boxtree::{BoxId, BoxKind, NO_BOX, ReplacedKind, Role, role_of};
 use crate::layout::units::LayoutUnit as LU;
-use crate::layout::{BoxOut, FragKind, Fragment, LayoutResult, Positioned};
+use crate::layout::{BoxOut, FragKind, Fragment, LayoutResult, Positioned, makes_context};
 use crate::platform::{FontQuery, Platform};
 
 /// Ancestor walks (clip, fixed) never go further than this.
@@ -40,17 +41,10 @@ pub fn build_display_list(doc: &Document, res: &LayoutResult, platform: &dyn Pla
     b.list.canvas = res.canvas.map(|c| c.color);
     b.list.partial = res.partial;
     let root = res.tree.root;
-    for p in &res.below {
-        b.positioned(p, root);
-    }
-    b.list.fixed_below = b.list.fixed.len();
     let (rx, ry) = res.page_pos(root);
     b.fixed = false;
     b.clip = NO_CLIP;
     b.paint_box(root, rx, ry);
-    for p in &res.above {
-        b.positioned(p, root);
-    }
     b.finish()
 }
 
@@ -172,11 +166,27 @@ impl Builder<'_> {
 
     // ---- positioned boxes ----------------------------------------------------------------------------
 
+    /// Does `id` make a stacking context (the root, or a positioned box with a `z-index`, or a fixed one)?
+    fn is_context(&self, id: BoxId) -> bool {
+        id == self.res.tree.root || makes_context(&self.res.tree.get(id).style)
+    }
+
+    /// The positioned boxes of the stacking context `ctx` that go below its flow (`neg`: negative `z-index`) or above it.
+    fn stacked(&mut self, ctx: BoxId, neg: bool) {
+        let res = self.res;
+        for p in res.stacked_in(ctx) {
+            if (p.z_index < 0) == neg {
+                self.positioned(p, res.tree.root);
+            }
+        }
+    }
+
     fn positioned(&mut self, p: &Positioned, root: BoxId) {
         let id = p.box_id;
         if id == root {
             return;
         }
+        let saved = (self.fixed, self.clip);
         let res = self.res;
         let (x, y) = res.page_pos(id);
         self.fixed = self.in_fixed(id);
@@ -185,8 +195,7 @@ impl Builder<'_> {
             self.push_clip(r);
         }
         self.paint_box(id, x, y);
-        self.fixed = false;
-        self.clip = NO_CLIP;
+        (self.fixed, self.clip) = saved;
     }
 
     // ---- boxes ----------------------------------------------------------------------------------------
@@ -211,6 +220,9 @@ impl Builder<'_> {
         }
         self.floats.truncate(first);
         self.walk(id, ax, ay, true);
+        if self.is_context(id) {
+            self.stacked(id, false);
+        }
     }
 
     /// One walk over the in-flow blocks of a stacking context: `inline` false paints the decoration of the blocks
@@ -225,9 +237,17 @@ impl Builder<'_> {
         }
         let rect = Rect::new(ax, ay, o.w, o.h);
         if !inline {
-            self.box_decor(id, rect);
+            if !o.hide {
+                self.box_decor(id, rect);
+            }
             if bx.replaced().is_some() {
                 self.replaced(id, rect);
+            }
+            if self.is_context(id) {
+                self.stacked(id, true);
+                if id == res.tree.root {
+                    self.list.fixed_below = self.list.fixed.len();
+                }
             }
         }
         let prev = o.clip.then(|| {
@@ -265,6 +285,15 @@ impl Builder<'_> {
                     self.paint_box(c, ax + co.x, ay + co.y);
                 }
             }
+            // The collapsed borders of a table go over its cells' backgrounds (css-tables-3 "collapsed borders").
+            if !inline
+                && let Some(t) = res.tables.get(&id)
+                && Self::visible_style(&bx.style)
+            {
+                for s in &t.segs {
+                    self.rect(Rect::new(ax + s.0, ay + s.1, s.2, s.3), s.4);
+                }
+            }
         }
         if let Some(p) = prev {
             self.restore(p);
@@ -277,14 +306,21 @@ impl Builder<'_> {
 
     /// Background and borders of a block-level or atomic box.
     fn box_decor(&mut self, id: BoxId, r: Rect) {
-        let style = self.res.tree.get(id).style.clone();
+        let res = self.res;
+        let bx = res.tree.get(id);
+        let style = bx.style.clone();
         if !Self::visible_style(&style) {
             return;
         }
+        // A table with captions: the background and border are those of the grid box (table.rs).
+        let r = res.tables.get(&id).map_or(r, |t| Rect::new(r.x, r.y + t.y, r.w, t.h));
         if id != self.canvas_from {
             self.rect(r, style.misc.background_color.resolve(style.text.color));
         }
-        self.borders(&style, r, [true; 4]);
+        // In the collapsing border model the parts of a table have no borders of their own; the table draws the edges.
+        if style.text.border_collapse != BorderCollapse::Collapse || matches!(role_of(bx), Role::Other | Role::Caption) {
+            self.borders(&style, r, [true; 4]);
+        }
     }
 
     /// The four border rectangles of a box; `sides` is top, right, bottom, left. Top and bottom run the

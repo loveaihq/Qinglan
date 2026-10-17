@@ -3,9 +3,9 @@
 //! layout; nothing here draws or loads.
 
 use crate::css::types::Position;
-use crate::html::atoms::a;
+use crate::html::atoms::{FxHashMap, a};
 use crate::html::dom::{DOCUMENT, Document, NONE, NodeId};
-use crate::layout::{BoxId, BoxKind, FragKind, Fragment, LayoutResult, NO_BOX};
+use crate::layout::{BoxId, BoxKind, FragKind, Fragment, LayoutResult, NO_BOX, Positioned};
 use crate::url::percent_decode;
 
 /// Longest document title kept (characters).
@@ -20,6 +20,33 @@ pub struct PageIndex {
     fixed: Vec<bool>,
     /// The blocks that own lines.
     text_blocks: Vec<BoxId>,
+    /// Where each stacking context's own flow content (and each `z-index: auto` positioned box) comes in the paint
+    /// order (CSS2 appendix E.2): a larger number is painted later, so it is on top.
+    ranks: FxHashMap<BoxId, u32>,
+}
+
+/// Number the paint order of the stacking context `ctx` and what it contains.
+fn rank_context(layout: &LayoutResult, ctx: BoxId, next: &mut u32, ranks: &mut FxHashMap<BoxId, u32>, depth: u32) {
+    if depth > 300 {
+        return;
+    }
+    let list = layout.stacked_in(ctx);
+    let visit = |p: &Positioned, next: &mut u32, ranks: &mut FxHashMap<BoxId, u32>| {
+        if p.auto {
+            *next += 1;
+            ranks.insert(p.box_id, *next);
+        } else {
+            rank_context(layout, p.box_id, next, ranks, depth + 1);
+        }
+    };
+    for p in list.iter().filter(|p| p.z_index < 0) {
+        visit(p, next, ranks);
+    }
+    *next += 1;
+    ranks.insert(ctx, *next);
+    for p in list.iter().filter(|p| p.z_index >= 0) {
+        visit(p, next, ranks);
+    }
 }
 
 /// A fragment's rectangle in page (or, when `fixed`, viewport) coordinates.
@@ -69,7 +96,24 @@ impl PageIndex {
             }
         }
         let text_blocks = (0..n as BoxId).filter(|&b| layout.box_out(b).lines.1 > layout.box_out(b).lines.0).collect();
-        PageIndex { origin, fixed, text_blocks }
+        let mut ranks = FxHashMap::default();
+        rank_context(layout, layout.tree.root, &mut 0, &mut ranks, 0);
+        PageIndex { origin, fixed, text_blocks, ranks }
+    }
+
+    /// The paint rank of the box a fragment belongs to: that of the nearest ancestor with one.
+    fn rank_of(&self, layout: &LayoutResult, b: BoxId) -> u32 {
+        let mut cur = b;
+        for _ in 0..100_000 {
+            if cur == NO_BOX {
+                break;
+            }
+            if let Some(&r) = self.ranks.get(&cur) {
+                return r;
+            }
+            cur = layout.tree.get(cur).parent;
+        }
+        0
     }
 
     fn origin_of(&self, b: BoxId) -> (f32, f32) {
@@ -101,8 +145,9 @@ impl PageIndex {
     /// viewport coordinates, for `position: fixed` content), if any: text and images inside a link. Clipping by
     /// `overflow` is not considered.
     pub fn link_at(&self, doc: &Document, layout: &LayoutResult, x: f32, page_y: f32, view_y: f32) -> Option<NodeId> {
-        // Later boxes are painted later, so they are on top: the last hit wins.
-        let mut hit: Option<NodeId> = None;
+        // Later boxes are painted later, so they are on top: the hit with the highest paint rank wins, the last one
+        // among equals (tree order is paint order inside a stacking context).
+        let mut hit: Option<(u32, NodeId)> = None;
         self.for_each_fragment(layout, |f, r| {
             if !matches!(f.kind, FragKind::Text { .. } | FragKind::Atomic) {
                 return;
@@ -111,10 +156,13 @@ impl PageIndex {
             if x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h
                 && let Some(link) = enclosing_link(doc, layout.tree.get(f.box_id).node)
             {
-                hit = Some(link);
+                let rank = self.rank_of(layout, f.box_id);
+                if hit.is_none_or(|(best, _)| rank >= best) {
+                    hit = Some((rank, link));
+                }
             }
         });
-        hit
+        hit.map(|h| h.1)
     }
 
     /// The page y (CSS px) where `node` starts: its box, or its first fragment (an inline element or text), or the
