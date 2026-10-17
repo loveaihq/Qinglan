@@ -1,39 +1,33 @@
 viewport 200x300
-block html (0,0 200x60)
-  block body (0,0 200x60)
-    block div#flex (0,0 200x20) [display:flex]
-      block div#f1 (0,0 200x10)
+block html (0,0 200x40)
+  block body (0,0 200x40)
+    block div#grid (0,0 200x20) [display:grid]
+      block (anonymous) (0,0 200x10)
         line (0,0 200x10) baseline=8
-          text "one" (0,0 30x10)
-      block div#f2 (0,10 200x10)
+          text "g1" (0,0 20x10)
+      block div#g2 (0,10 200x10)
         line (0,10 200x10) baseline=18
-          text "two" (0,10 30x10)
-    block div#grid (0,20 200x20) [display:grid]
-      block (anonymous) (0,20 200x10)
-        line (0,20 200x10) baseline=28
-          text "g1" (0,20 20x10)
-      block div#g2 (0,30 200x10)
-        line (0,30 200x10) baseline=38
-          text "g2" (0,30 20x10)
-    block (anonymous) (0,40 200x0)
-      block div#lft (0,40 50x10) [float:left]
-        line (0,40 50x10) baseline=48
-          text "f" (0,40 10x10)
-      block span#fr (190,40 10x10) [float:right]
-        line (190,40 10x10) baseline=48
-          text "x" (190,40 10x10)
-    block div#ib (0,40 200x10)
-      line (50,40 140x10) baseline=48
-        text "before" (50,40 60x10)
-        inline-block span#ibs (110,40 30x10)
-          line (110,40 30x10) baseline=48
-            text "mid" (110,40 30x10)
-        text "after" (140,40 50x10)
-    block (anonymous) (0,50 200x10)
-      line (0,50 200x10) baseline=58
-        inline-block span#iflex (0,50 20x10) [display:inline-flex]
-          line (0,50 20x10) baseline=58
-            text "if" (0,50 20x10)
+          text "g2" (0,10 20x10)
+    block (anonymous) (0,20 200x0)
+      block div#lft (0,20 50x10) [float:left]
+        line (0,20 50x10) baseline=28
+          text "f" (0,20 10x10)
+      block span#fr (190,20 10x10) [float:right]
+        line (190,20 10x10) baseline=28
+          text "x" (190,20 10x10)
+    block div#ib (0,20 200x10)
+      line (50,20 140x10) baseline=28
+        text "before" (50,20 60x10)
+        inline-block span#ibs (110,20 30x10)
+          line (110,20 30x10) baseline=28
+            text "mid" (110,20 30x10)
+        text "after" (140,20 50x10)
+    block (anonymous) (0,30 200x10)
+      line (0,30 200x10) baseline=38
+        inline-block span#iflex (0,30 20x10) [display:inline-flex]
+          block (anonymous) (0,30 20x10)
+            line (0,30 20x10) baseline=38
+              text "if" (0,30 20x10)
       block div#abs (0,100 30x10) [absolute]
         line (0,100 30x10) baseline=108
           text "abs" (0,100 30x10)

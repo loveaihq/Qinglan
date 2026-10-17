@@ -68,6 +68,54 @@ keyword_enum!(BorderCollapse { Separate = "separate", Collapse = "collapse" } de
 keyword_enum!(EmptyCells { Show = "show", Hide = "hide" } default Show);
 keyword_enum!(CaptionSide { Top = "top", Bottom = "bottom" } default Top);
 keyword_enum!(TableLayout { Auto = "auto", Fixed = "fixed" } default Auto);
+keyword_enum!(FlexDirection { Row = "row", RowReverse = "row-reverse", Column = "column", ColumnReverse = "column-reverse" } default Row);
+keyword_enum!(FlexWrap { Nowrap = "nowrap", Wrap = "wrap", WrapReverse = "wrap-reverse" } default Nowrap);
+keyword_enum!(AlignKind {
+    Auto = "auto", Normal = "normal", Stretch = "stretch", FlexStart = "flex-start", FlexEnd = "flex-end", Start = "start",
+    End = "end", SelfStart = "self-start", SelfEnd = "self-end", Center = "center", Left = "left", Right = "right",
+    Baseline = "baseline", LastBaseline = "last baseline", SpaceBetween = "space-between", SpaceAround = "space-around",
+    SpaceEvenly = "space-evenly",
+} default Normal);
+
+/// A value of `justify-content`, `align-content`, `align-items` or `align-self` (css-align-3): the position or
+/// distribution keyword and the `safe` / `unsafe` overflow keyword in front of it (`Some(true)` is `safe`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AlignValue {
+    pub kind: AlignKind,
+    pub safe: Option<bool>,
+}
+
+impl AlignValue {
+    pub const NORMAL: AlignValue = AlignValue { kind: AlignKind::Normal, safe: None };
+    pub const AUTO: AlignValue = AlignValue { kind: AlignKind::Auto, safe: None };
+
+    pub fn to_css(self) -> String {
+        let k = self.kind.keyword();
+        match self.safe {
+            Some(true) => format!("safe {k}"),
+            Some(false) => format!("unsafe {k}"),
+            None => k.into(),
+        }
+    }
+}
+
+/// `flex-basis` (css-flexbox-1 7.3): `auto`, `content`, or a size.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FlexBasis {
+    Auto,
+    Content,
+    Size(Dim),
+}
+
+impl FlexBasis {
+    pub fn to_css(&self) -> String {
+        match self {
+            FlexBasis::Auto => "auto".into(),
+            FlexBasis::Content => "content".into(),
+            FlexBasis::Size(d) => d.to_css(),
+        }
+    }
+}
 
 /// `tab-size` (css-text-3 7.3): a number of space advances, or a length.
 #[derive(Clone, Debug, PartialEq)]
@@ -447,6 +495,16 @@ pub enum Value {
     EmptyCells(EmptyCells),
     CaptionSide(CaptionSide),
     TableLayout(TableLayout),
+    FlexDirection(FlexDirection),
+    FlexWrap(FlexWrap),
+    /// `order`.
+    Order(i32),
+    /// `flex-grow` / `flex-shrink`.
+    FlexFactor(f32),
+    FlexBasis(FlexBasis),
+    Align(AlignValue),
+    /// `row-gap` / `column-gap`: `None` is `normal`.
+    Gap(Option<Lp>),
     /// `border-spacing`: horizontal and vertical.
     TableSpacing(Lp, Lp),
     TabSize(TabSize),
@@ -562,9 +620,21 @@ pub enum PropId {
     EmptyCells,
     CaptionSide,
     TableLayout,
+    FlexDirection,
+    FlexWrap,
+    Order,
+    FlexGrow,
+    FlexShrink,
+    FlexBasis,
+    JustifyContent,
+    AlignItems,
+    AlignSelf,
+    AlignContent,
+    RowGap,
+    ColumnGap,
 }
 
-pub const PROP_COUNT: usize = PropId::TableLayout as usize + 1;
+pub const PROP_COUNT: usize = PropId::ColumnGap as usize + 1;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Group {
@@ -575,6 +645,8 @@ pub enum Group {
     Misc,
     /// Generated content: `content` and the counter properties (not inherited).
     Gen,
+    /// css-flexbox-1 / css-align-3 properties of flex containers and items (not inherited).
+    Flex,
     Ignored,
 }
 
@@ -602,6 +674,8 @@ impl PropId {
             | Direction | Visibility | Cursor | ListStyleType | ListStylePosition | TabSize | Quotes | BorderCollapse | BorderSpacing
             | EmptyCells | CaptionSide => Group::Text,
             Content | CounterReset | CounterIncrement | CounterSet => Group::Gen,
+            FlexDirection | FlexWrap | Order | FlexGrow | FlexShrink | FlexBasis | JustifyContent | AlignItems | AlignSelf
+            | AlignContent | RowGap | ColumnGap => Group::Flex,
             VerticalAlign | TextDecorationLine | TextDecorationStyle | TextDecorationColor | TextDecorationThickness
             | BackgroundColor => Group::Misc,
             BorderTopLeftRadius | BorderTopRightRadius | BorderBottomRightRadius | BorderBottomLeftRadius => Group::Ignored,
@@ -695,6 +769,18 @@ impl PropId {
             EmptyCells => "empty-cells",
             CaptionSide => "caption-side",
             TableLayout => "table-layout",
+            FlexDirection => "flex-direction",
+            FlexWrap => "flex-wrap",
+            Order => "order",
+            FlexGrow => "flex-grow",
+            FlexShrink => "flex-shrink",
+            FlexBasis => "flex-basis",
+            JustifyContent => "justify-content",
+            AlignItems => "align-items",
+            AlignSelf => "align-self",
+            AlignContent => "align-content",
+            RowGap => "row-gap",
+            ColumnGap => "column-gap",
         }
     }
 
@@ -716,7 +802,8 @@ pub const ALL_PROPS: [PropId; PROP_COUNT] = {
         ListStyleType, ListStylePosition, TabSize, VerticalAlign, TextDecorationLine, TextDecorationStyle, TextDecorationColor,
         TextDecorationThickness, BackgroundColor, BorderTopLeftRadius, BorderTopRightRadius, BorderBottomRightRadius,
         BorderBottomLeftRadius, Content, Quotes, CounterReset, CounterIncrement, CounterSet, BorderCollapse, BorderSpacing,
-        EmptyCells, CaptionSide, TableLayout,
+        EmptyCells, CaptionSide, TableLayout, FlexDirection, FlexWrap, Order, FlexGrow, FlexShrink, FlexBasis, JustifyContent,
+        AlignItems, AlignSelf, AlignContent, RowGap, ColumnGap,
     ]
 };
 
@@ -741,6 +828,7 @@ pub const FONT_BITS: u128 = group_bits(Group::Font);
 pub const TEXT_BITS: u128 = group_bits(Group::Text);
 pub const MISC_BITS: u128 = group_bits(Group::Misc);
 pub const GEN_BITS: u128 = group_bits(Group::Gen);
+pub const FLEX_BITS: u128 = group_bits(Group::Flex);
 
 /// One declaration of a declaration block: a longhand (or a custom property) with its value.
 #[derive(Clone, Debug, PartialEq)]

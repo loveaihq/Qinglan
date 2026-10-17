@@ -2,11 +2,11 @@
 
 测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-tables`，用时 0.7 秒。
 
-- 通过 **89 / 140**（63.6%）
+- 通过 **90 / 140**（64.3%）
 - bug 类失败：**31**
 - 跳过：无
 
-失败分类：bug (open) 31，limit (print) 2，step 2b 1，step 2c 7，step 2d 6，step 2e 4
+失败分类：bug (open) 31，limit (print) 2，step 2c 7，step 2d 6，step 2e 4
 
 ## 失败
 
@@ -43,7 +43,6 @@
 | table-cell-baseline-static-position.html | bug (open) | baseline details of table cells and inline-tables (empty cells, absolutely positioned boxes in a cell); not analyzed (10000 pixels differ (largest difference 255); first at (58,48): #ffffff, the reference has #008000) |
 | table-cell-child-overflow-measure.html | step 2e | uses svg, scrolling, sticky or form controls (10000 pixels differ (largest difference 255); first at (8,108): #008000, the reference has #ffffff) |
 | table-cell-overflow-auto.html | step 2e | uses svg, scrolling, sticky or form controls (1000 pixels differ (largest difference 255); first at (111,61): #008000, the reference has #000000) |
-| table-cell-width-0.html | step 2b | uses flex or grid (125923 pixels differ (largest difference 255); first at (30,8): #000000, the reference has #ffffff) |
 | table-intrinsic-size-001.html | bug (open) | the min-content size of a table whose width is smaller than its content (shrink-to-fit outer box): not analyzed (2000 pixels differ (largest difference 255); first at (78,48): #ffffff, the reference has #008000) |
 | table-intrinsic-size-002.html | bug (open) | the min-content size of a table whose width is smaller than its content (shrink-to-fit outer box): not analyzed (2000 pixels differ (largest difference 255); first at (78,48): #ffffff, the reference has #008000) |
 | table-intrinsic-size-003.html | step 2d | uses text features (4000 pixels differ (largest difference 255); first at (58,48): #ffffff, the reference has #008000) |
@@ -129,6 +128,7 @@
 - table-cell-overflow-explicit-height-002.html
 - table-cell-tiny-width-excess-width-distribution.html
 - table-cell-width-0-excess-width-distribution.html
+- table-cell-width-0.html
 - table-colspan-percent-auto.html
 - table-has-box-sizing-border-box-001.html
 - table-has-box-sizing-border-box-002.html

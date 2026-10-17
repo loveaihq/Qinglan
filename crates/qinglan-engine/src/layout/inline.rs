@@ -1121,7 +1121,7 @@ impl Layouter<'_> {
         // clipped or has none; replaced elements sit on the bottom margin edge.
         // (A text field keeps its text's baseline even though its content is clipped; a text area does not.)
         let clipped = o.clip && !bx.force_clip;
-        let table = matches!(bx.fallback, Some(crate::css::types::Display::InlineTable));
+        let table = matches!(bx.fallback, Some(crate::css::types::Display::InlineTable | crate::css::types::Display::InlineFlex));
         let baseline = if bx.kind == BoxKind::Replaced || clipped || matches!(bx.control(), Control::TextArea(..)) {
             None
         } else if table {
@@ -1351,7 +1351,7 @@ impl Layouter<'_> {
                         let fixed = tree.get(it.box_id).style.boxs.position == Position::Fixed;
                         let cb = cb_for_oof(self, fixed);
                         let (sx, sy) = (left + line_indent, top + y);
-                        let pend = Pending { id: it.box_id, owner: block, sx, sy, cb };
+                        let pend = Pending { id: it.box_id, owner: block, sx, sy, cb, align: None };
                         match if fixed { None } else { relative_inline_ancestor(tree, it.owner, block) } {
                             Some(span) => {
                                 // No line box: the element is empty here, a zero-width box on the strut's baseline.
@@ -1700,7 +1700,7 @@ impl Layouter<'_> {
                     ItemKind::Oof => {
                         let fixed = tree.get(it.box_id).style.boxs.position == Position::Fixed;
                         let cb = cb_for_oof(self, fixed);
-                        let pend = Pending { id: it.box_id, owner: block, sx: ox + g.x, sy: line_top, cb };
+                        let pend = Pending { id: it.box_id, owner: block, sx: ox + g.x, sy: line_top, cb, align: None };
                         match if fixed { None } else { relative_inline_ancestor(tree, it.owner, block) } {
                             Some(span) if self.stamp.get(span as usize).is_some_and(|sl| sl.0 == ln) => inline_oof.push((pend, InlineCb::Span(span))),
                             Some(span) => {

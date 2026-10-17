@@ -70,6 +70,9 @@ pub fn longhands_of(name: &str) -> Option<Vec<PropId>> {
         "background" => vec![BackgroundColor],
         "white-space" => vec![WhiteSpaceCollapse, TextWrapMode],
         "text-wrap" => vec![TextWrapMode],
+        "flex" | "-webkit-flex" => vec![FlexGrow, FlexShrink, FlexBasis],
+        "flex-flow" | "-webkit-flex-flow" => vec![FlexDirection, FlexWrap],
+        "gap" | "grid-gap" => vec![RowGap, ColumnGap],
         "all" => ALL_PROPS.iter().copied().filter(|p| *p != Direction).collect(),
         // Logical properties map to the physical ones (horizontal-tb, ltr only).
         "margin-block" => vec![MarginTop, MarginBottom],
@@ -111,6 +114,18 @@ pub fn longhand_by_name(name: &str) -> Option<PropId> {
 /// Logical-property aliases of single longhands (horizontal-tb, ltr).
 const ALIASES: &[(&str, &str)] = &[
     ("word-wrap", "overflow-wrap"),
+    ("grid-row-gap", "row-gap"),
+    ("grid-column-gap", "column-gap"),
+    ("-webkit-flex-direction", "flex-direction"),
+    ("-webkit-flex-wrap", "flex-wrap"),
+    ("-webkit-flex-grow", "flex-grow"),
+    ("-webkit-flex-shrink", "flex-shrink"),
+    ("-webkit-flex-basis", "flex-basis"),
+    ("-webkit-order", "order"),
+    ("-webkit-justify-content", "justify-content"),
+    ("-webkit-align-items", "align-items"),
+    ("-webkit-align-self", "align-self"),
+    ("-webkit-align-content", "align-content"),
     ("margin-block-start", "margin-top"),
     ("margin-block-end", "margin-bottom"),
     ("margin-inline-start", "margin-left"),
@@ -292,6 +307,39 @@ fn parse_value(name: &str, cvs: &[Cv], env: &ParseEnv) -> Option<Vec<(PropId, Va
                 _ => None,
             }
         }
+        "flex" | "-webkit-flex" => parse_flex(&items, q),
+        "flex-flow" | "-webkit-flex-flow" => {
+            let mut dir = None;
+            let mut wrap = None;
+            if items.is_empty() || items.len() > 2 {
+                return None;
+            }
+            for c in &items {
+                let taken = match (kw(c, super::types::FlexDirection::from_keyword), kw(c, super::types::FlexWrap::from_keyword)) {
+                    (Some(d), _) => dir.replace(d).is_some(),
+                    (None, Some(w)) => wrap.replace(w).is_some(),
+                    (None, None) => true,
+                };
+                if taken {
+                    return None;
+                }
+            }
+            Some(vec![
+                (FlexDirection, Value::FlexDirection(dir.unwrap_or_default())),
+                (FlexWrap, Value::FlexWrap(wrap.unwrap_or_default())),
+            ])
+        }
+        "gap" | "grid-gap" => {
+            if items.is_empty() || items.len() > 2 {
+                return None;
+            }
+            let a = p_gap(items.first()?, q)?;
+            let b = match items.get(1) {
+                Some(c) => p_gap(c, q)?,
+                None => a.clone(),
+            };
+            Some(vec![(RowGap, a), (ColumnGap, b)])
+        }
         "font" => parse_font_shorthand(cvs, q),
         "list-style" => parse_list_style(&items),
         "text-decoration" => parse_text_decoration(&items, q),
@@ -313,6 +361,98 @@ fn parse_value(name: &str, cvs: &[Cv], env: &ParseEnv) -> Option<Vec<(PropId, Va
             Some(vec![(prop, v)])
         }
     }
+}
+
+/// `<'row-gap'>`: `normal | <length-percentage [0,inf]>` (css-align-3 8).
+fn p_gap(c: &Cv, q: bool) -> Option<Value> {
+    if c.is_ident("normal") {
+        return Some(Value::Gap(None));
+    }
+    Some(Value::Gap(Some(p_lp(c, q, true)?)))
+}
+
+/// `flex-basis` (css-flexbox-1 7.3): `content | <'width'>`.
+fn p_flex_basis(c: &Cv, q: bool) -> Option<FlexBasis> {
+    if c.is_ident("content") {
+        return Some(FlexBasis::Content);
+    }
+    match p_size(c, q, false)? {
+        Value::Dim(Dim::Auto) => Some(FlexBasis::Auto),
+        Value::Dim(d) => Some(FlexBasis::Size(d)),
+        _ => None,
+    }
+}
+
+fn flex_number(c: &Cv) -> Option<f32> {
+    match c {
+        Cv::Tok(Token::Number { value, .. }) if *value >= 0.0 => Some(*value as f32),
+        _ => None,
+    }
+}
+
+/// The `flex` shorthand (css-flexbox-1 7.1): `none | [ <'flex-grow'> <'flex-shrink'>? || <'flex-basis'> ]`. An omitted
+/// `flex-grow` or `flex-shrink` is 1, an omitted `flex-basis` is `0%`; a unitless zero not preceded by two flex factors is
+/// a flex factor.
+fn parse_flex(items: &[&Cv], q: bool) -> Option<Vec<(PropId, Value)>> {
+    let make = |g: f32, s: f32, b: FlexBasis| {
+        vec![(PropId::FlexGrow, Value::FlexFactor(g)), (PropId::FlexShrink, Value::FlexFactor(s)), (PropId::FlexBasis, Value::FlexBasis(b))]
+    };
+    let first = items.first()?;
+    if items.len() == 1 {
+        match first.ident().map(str::to_ascii_lowercase).as_deref() {
+            Some("none") => return Some(make(0.0, 0.0, FlexBasis::Auto)),
+            Some("auto") => return Some(make(1.0, 1.0, FlexBasis::Auto)),
+            _ => {}
+        }
+    }
+    let mut i = 0;
+    let mut basis = None;
+    let mut nums: Vec<f32> = Vec::new();
+    if flex_number(first).is_none() {
+        basis = Some(p_flex_basis(first, q)?);
+        i = 1;
+    }
+    while i < items.len() && nums.len() < 2 {
+        let Some(n) = flex_number(items.get(i)?) else { break };
+        nums.push(n);
+        i += 1;
+    }
+    if basis.is_none() && i < items.len() {
+        basis = Some(p_flex_basis(items.get(i)?, q)?);
+        i += 1;
+    }
+    if i != items.len() || (nums.is_empty() && basis.is_none()) {
+        return None;
+    }
+    let grow = nums.first().copied().unwrap_or(1.0);
+    let shrink = nums.get(1).copied().unwrap_or(1.0);
+    Some(make(grow, shrink, basis.unwrap_or(FlexBasis::Size(Dim::Lp(Lp::Pct(0.0))))))
+}
+
+/// A value of `justify-content`, `align-content`, `align-items` or `align-self` (css-align-3 6, 7, 8).
+fn parse_align(prop: PropId, items: &[&Cv]) -> Option<Value> {
+    let ids: Vec<String> = items.iter().map(|c| c.ident().map(str::to_ascii_lowercase)).collect::<Option<_>>()?;
+    let (safe, rest) = match ids.first().map(String::as_str) {
+        Some("safe") => (Some(true), ids.get(1..)?),
+        Some("unsafe") => (Some(false), ids.get(1..)?),
+        _ => (None, ids.as_slice()),
+    };
+    let kind = match rest {
+        [k] => AlignKind::from_keyword(k).filter(|k| *k != AlignKind::LastBaseline)?,
+        [f, b] if b == "baseline" && f == "first" => AlignKind::Baseline,
+        [f, b] if b == "baseline" && f == "last" => AlignKind::LastBaseline,
+        _ => return None,
+    };
+    use AlignKind::*;
+    let content = matches!(prop, PropId::JustifyContent | PropId::AlignContent);
+    let ok = match kind {
+        Auto => prop == PropId::AlignSelf,
+        SpaceBetween | SpaceAround | SpaceEvenly => content,
+        Left | Right => prop == PropId::JustifyContent,
+        SelfStart | SelfEnd => !content,
+        _ => true,
+    };
+    ok.then_some(Value::Align(AlignValue { kind, safe }))
 }
 
 fn radius_ok(c: &Cv, quirks: bool) -> bool {
@@ -1082,6 +1222,13 @@ fn parse_longhand(prop: PropId, cvs: &[Cv], items: &[&Cv], q: bool) -> Option<Va
         EmptyCells => kw(one_ref?, super::types::EmptyCells::from_keyword).map(Value::EmptyCells),
         CaptionSide => kw(one_ref?, super::types::CaptionSide::from_keyword).map(Value::CaptionSide),
         TableLayout => kw(one_ref?, super::types::TableLayout::from_keyword).map(Value::TableLayout),
+        FlexDirection => kw(one_ref?, super::types::FlexDirection::from_keyword).map(Value::FlexDirection),
+        FlexWrap => kw(one_ref?, super::types::FlexWrap::from_keyword).map(Value::FlexWrap),
+        Order => parse_integer(one_ref?).map(Value::Order),
+        FlexGrow | FlexShrink => flex_number(one_ref?).map(Value::FlexFactor),
+        FlexBasis => p_flex_basis(one_ref?, q).map(Value::FlexBasis),
+        JustifyContent | AlignItems | AlignSelf | AlignContent => parse_align(prop, items),
+        RowGap | ColumnGap => p_gap(one_ref?, q),
         BorderSpacing => {
             if items.len() > 2 {
                 return None;

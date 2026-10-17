@@ -1012,3 +1012,56 @@ bug 类共 51 条，**没有修完**：每条在 `notes.txt` 里有原因（家�
 
 - 数据结构的压缩没做（盒子 64 字节、盒位置 32 字节、DOM 节点 72 字节、显示列表 3.6 MB）：分配器已经把余量做到 3.4 MB，再压要动很多用法。
 - `PoolAlloc` 下没重跑 hostile 页（见上）；`qinglan-cli` 的 `wpt.rs` 里 4 处排序没动（不在 `qinglan.exe` 里）。
+
+## 第 2 层 · 2b-1 flex（2026-10-17）
+
+接着 2a-3（`9e8fbf8`）。代码：`layout/flex.rs`（新）、`css/`（新属性组）、`layout/boxtree.rs`、`layout/block.rs`、`layout/position.rs`、`layout/intrinsic.rs`；测试：`tests/pages/flex-*.html`、`tests/flex.rs`、`tests/wpt/css/css-flexbox`。规范原文在 `docs/spec/css-flexbox-1.html`（只放本地）。
+
+### 1. 样式（`css/types.rs`、`computed.rs`、`parse_prop.rs`）
+
+- 新属性组 `Group::Flex`，`FlexStyle`（`Rc`，不继承，没写时共用初始值，每个元素只多一个指针）：`flex-direction`、`flex-wrap`、`order`、`flex-grow`、`flex-shrink`、`flex-basis`、`justify-content`、`align-items`、`align-self`、`align-content`、`row-gap`、`column-gap`。简写 `flex`（`none`/`auto`、1–3 个值；省略的 `flex-basis` 是 `0%`，规范原文，不是 `0px`）、`flex-flow`、`gap`/`grid-gap`；别名 `grid-row-gap`、`grid-column-gap` 和 `-webkit-flex*`、`-webkit-order`、`-webkit-justify-content`、`-webkit-align-*`（老中文站点常见）。对齐值带 `safe`/`unsafe`，`first baseline`/`last baseline` 两个词。
+- **blockify**（4）：父元素是 `flex`/`inline-flex` 时，`compute_box` 把子元素的 `display` blockify、`float` 取消（没声明任何盒属性的元素也走这条，不能再共用初始盒样式）。`display: contents` 底下的孩子不处理（它们的父是 `contents`）。
+- **flex 项的 `z-index`**（4.3）：静态定位的 flex 项有 `z-index` 时按 `position: relative` 算（没有偏移，画法和层叠一样）。近似：它会变成绝对定位后代的包含块。
+
+### 2. 盒子树（`boxtree.rs`）
+
+- `finish_flex`：flex 容器的孩子是 flex 项；每一段文字（和 `display: contents` 带来的行内盒）包进一个匿名块；**只有空白的一段不渲染**，不管 `white-space`（4）；脱离文档流的孩子留作占位。孩子按 `order` 稳定排序，所以**绘制顺序和点击顺序**自然是排序后的（5.4、附录 E）。`LayoutBox::flex_item` 让项成为块格式化上下文的根（外边距不和孩子合并）。
+
+### 3. 排版（`layout/flex.rs`，规范 9 的顺序）
+
+- 容器和表格一样整个排完（`no_stop`），按块格式化上下文根处理（躲浮动、`clear` 之后重新取空档：`block.rs` 里清除间距移动后重算 `avoid_floats`）。盒子自己的宽高、外边距、内边距用 `block_geometry`（`Geom` 的字段改成 `pub(super)`）。
+- **逻辑坐标**：`Axes` 把主轴/交叉轴的起点终点对应到物理边（`row-reverse`、`column-reverse`、`wrap-reverse`、`direction: rtl` 的行、rtl 的列交叉轴），放位置最后一步才换成物理坐标。
+- **项的大小**（9.2 第 3 步、4.5）：行方向 flex 基准尺寸来自 `width`/`flex-basis`，没有就是 `content_widths` 的最大内容宽度（带备忘，不排版）；自动最小尺寸 = 最小内容宽度，有定宽时取两者小的，再受 `max-width` 限制，滚动容器（`overflow` 非 visible/clip）是 0。列方向要内容高度：`flex_measure` 把项排一遍再撤销（`Mark`/`restore`，`Flow::ignore_h` 让它不看自己的 `height`/`min-height`/`max-height`），按（盒、宽度）记一项（类型和 `widths` 一样，不多一份哈希表的代码），所以嵌套容器每层只量一次。替换元素有比例时，列里的高度按宽度折算。
+- **9.7 解弹性长度**：按规范逐步写（冻结不弹性的项、剩余空间、`sum<1` 时乘、最小/最大违规按总违规冻结），整数（1/64 px）运算。
+- **9.3 分行、9.4 交叉尺寸、9.6**：行的交叉尺寸 = 最高的项，或基线对齐时"最高的上半部 + 最深的下半部"；单行且容器交叉尺寸确定时 = 容器内部尺寸（行内项直接按这个高度排，不用重排）；`align-content` 多行（包括 `wrap-reverse`）；`stretch` 的项（`auto` 交叉尺寸、没有 `auto` 外边距）长到行高并受 min/max 限制；`auto` 外边距吃掉主轴/交叉轴剩余空间；`safe`/`unsafe`；`gap`（百分比按内容框，高度不确定时按 0）。
+- **拉伸怎样不指数增长**：行容器的项在最终宽度排一遍；某项被拉高时，只有"高度变了内容也变"的项（本身是 flex 容器或表格、有百分比 `height`/`min-height`/`max-height` 的后代、有脱离文档流的后代，`height_sensitive`，按盒备忘）才整行重排，其他的直接把盒子拉高；重排用掉的工作量上限是整页预算的 1/8（`FLEX_REPEAT_SHARE`），超了就只拉高盒子。列容器的项最后排一遍（高度已知）。实测见下。
+- 9.8 确定尺寸：列项的"排后主轴尺寸"只在容器主轴尺寸确定或 `flex-basis` 确定时当作确定（给 `forced_h`），否则用 `ignore_h` 按内容排，百分比高度的孩子不按它解析（`percentage-heights-016`）。
+- **9.9 内在尺寸**（`flex_widths`）：行容器最大内容 = 各项贡献之和 + 间距，最小内容 = 贡献之和（单行）或最大的贡献（多行）；列容器取最大的贡献。贡献 = `outer_widths`（宽度或内容），**不能长大**（`flex-grow: 0`）且 `flex-basis` 是定长的项用 flex 基准尺寸夹在 min/max 之间（`intrinsic-size/row-006/007`）；`min-width: min-content|max-content` 关键字抬高贡献。没做 9.9.1.1 的理想算法（规范说它网页不兼容），也没做多行行容器交叉尺寸的"约束下重排"（用单行的式子）。
+- **4.1 脱离文档流的孩子**：`Pending` 多了 `align`（`StaticAlign`）：静态位置矩形是容器内容框，按 `justify-content` 和（自己的或容器的）`align-self` 当唯一项摆；`left/right/top/bottom` 都 `auto` 的方向才用。
+- **8.5 容器基线**：行里有 `align-self: baseline` 的项就取它们的共同基线，否则取第一项（最后基线同理），记在 `flex_base`；`first_baseline`/`last_baseline` 先看它，`inline-flex` 在行里按第一基线对齐。
+- **4.4 `visibility: collapse`（简化）**：折叠的项主轴尺寸算 0、外边距算 0，交叉尺寸照常（就是它的"支柱"），排版仍按原宽度，画法不画。没做规范的"整个算法重来一遍"，所以多行容器里折叠后重新分行不对。
+- **对齐细节**：`space-around`/`space-evenly` 没有空间时按 `safe center`（= `flex-start`，WPT 的两个测试一致，和 flexbox-1 的 `center` 不同）；`space-*` 的除法四舍五入（和 Edge 逐像素一样）；列容器里 `left`/`right` 当 `start`（css-align-3 6.3）。
+- 替换元素、表格当 flex 项：表格（`table.rs`）认 `Flow::forced_h` 和 `ignore_h`。
+
+### 4. 测试工具（`qinglan-cli wpt`）
+
+- 分类器：`display:flex` 之类不再算"后面的步骤"（只有 grid 还是 `step 2b`，2b-2 做）；`text-wrap`、`aspect-ratio`、`flex-wrap:balance` 归"没计划"。
+- XHTML 测试（`.xht`/`.xhtml`，当 HTML 解析）：除了去掉 `CDATA`，现在还去掉 XML 注释（`<style>` 里夹的 `<!-- -->` 会吞掉后面的规则），并且把自闭合的非空元素补成 `<div></div>`。老目录因此多过了几条：floats-clear 167 → 172、generated-content 186 → 188、css-tables 89 → 90，没有一条退步（`passing.txt` 846 → 1501 条）。
+- `tests/wpt/css/css-flexbox`：只拷有 `rel=match|mismatch` 又没有 `<script>` 的页面和它们引用的文件（1491 个文件，1.8 MB；`tests/wpt` 共 4.4 MB），提交 `3bcf9ec`（和以前一样）。
+
+### 5. WPT `css/css-flexbox`（`qinglan-cli wpt css/css-flexbox`）
+
+647 / 951 通过（68.0%，第一版 581）。没通过的 304 条：bug 类 87（`bug (open)`，每条在 `notes.txt` 有一行，按家族写原因，没逐个看的写明"没逐个分析"）、limit (test platform) 26（`flexbox_flex-*`：测试靠默认字体里真实文字的宽度，测试平台每字 1em，单词比盒子宽，自动最小尺寸不让它缩）、limit (placeholder boxes) 12（canvas、iframe、video、object 是灰框，fieldset 没特殊排版）、not planned 51（`flex-wrap: balance`（flexbox-2）、`aspect-ratio`、`text-wrap`）、后面的步骤 128（2b-2 grid 4、2c 30、2d 69、2e 25）。bug 类里家族：带比例的图片当 flex 项（转移尺寸，4.5、9.2 B）、表格当 flex 项、基线对齐里字号混用、9.8 的确定尺寸（拉伸后孩子的百分比高度）、多行/列容器的内在尺寸、`visibility: collapse` 的第二轮。
+
+### 6. 数字（release，插电 `BatteryStatus = 2`，没有别的 cargo/rustc/qpdf 在跑）
+
+- **体积**：`qinglan.exe` 1 927 168 → **1 984 000**（**+56 832**，比 2b-1 的 +50 KB 多 6.8 KB；2b 一共分到 +100 KB，grid 还剩约 43 KB）。链接映射里 `layout_block` 31 KB（`layout_flex`、`flex_inner`、`flex_item` 都内联进去），`flex_widths` 3 KB；`parse_value` 21 KB。已经把两个新哈希表（`measured`、`flex_base`）改成和 `widths` 同一种类型，省 2.9 KB。
+- **内存**（zhwiki-rec，1920×1080，`qinglan.exe --bench`，5 次新进程，滚到底的峰值私有内存）：46 415 872 / 46 166 016 / 46 514 176 / 46 063 616 / 46 309 376，**最大 46.51 MB**（≤ 50）。
+- **首屏**（`qinglan.exe --bench`，5 次中位数）：zhwiki-rec 113.1 毫秒（121.2 / 110.5 / 105.7 / 116.6 / 113.1），gh-ripgrep 169.8（169.8 / 158.1 / 166.0 / 170.2 / 183.4），gh-rust 148.6（219.7 / 148.6 / 141.1 / 135.1 / 157.0）；都 ≤ 200。flex 容器里首屏停止线不起作用（整个排完），GitHub 页面的首屏因此比 zhwiki 慢。
+- **嵌套**（`tests/flex.rs`，工作量 = 排版预算用掉的单位，深 5 → 深 20）：行里嵌行 228 → 818；列里嵌列（每层 `flex: 1`、顶层定高）1 050 → 10 370；每层都有个更高的兄弟逼着嵌套容器重排 1 088 → 12 068。随深度多项式增长（量大的是列方向的 `flex_measure`），不是指数；预算 20 000 000，用掉 0.06%。
+- 测试：`tests/pages/flex-row.html`、`flex-column.html`、`flex-misc.html`（手算数字 3 页，规范条款写在页头）；`fallbacks.html` 去掉 flex 部分；`tests/flex.rs`（属性解析、弹性分配、嵌套工作量）。
+
+### 7. 没做 / 留给后面
+
+- `aspect-ratio` 属性、图片等带比例的 flex 项的转移尺寸；表格当 flex 项的尺寸细节；`canvas`/`iframe` 的真内容（2e）；`writing-mode` 竖排的 flex（2d）；规范 9.9.1.1 的理想内在尺寸算法；`visibility: collapse` 的第二轮；flex 项 `z-index` 的"变 relative"是近似。
+- 首屏停止线不进 flex 容器：整页都包在 flex 里的页面（现代站点常见）首屏要排完整页。有预算压力时可以让 nowrap 的列容器在已知高度之后停（2b-2 或之后看数字再定）。

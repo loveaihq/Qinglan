@@ -18,6 +18,7 @@
 pub mod block;
 pub mod boxtree;
 pub mod dump;
+pub mod flex;
 pub mod floats;
 pub(crate) mod generated;
 pub mod image;
@@ -299,6 +300,16 @@ pub(crate) struct ResolvedFont {
 }
 
 /// An out-of-flow box waiting for its containing block to be finished (position.rs).
+/// How an out-of-flow child of a flex container sits in its static-position rectangle (css-flexbox-1 4.1): the
+/// rectangle is `rw` x `rh` from the static position; `ax` / `ay` are 0 (start), 1 (middle) or 2 (end).
+#[derive(Clone, Copy)]
+pub(crate) struct StaticAlign {
+    pub rw: LayoutUnit,
+    pub rh: LayoutUnit,
+    pub ax: u8,
+    pub ay: u8,
+}
+
 pub(crate) struct Pending {
     pub id: BoxId,
     /// The block container the box sits in; `(sx, sy)` is the static position in its coordinates.
@@ -307,6 +318,7 @@ pub(crate) struct Pending {
     pub sy: LayoutUnit,
     /// The containing block: a positioned box, or `None` for the initial containing block.
     pub cb: Option<BoxId>,
+    pub align: Option<StaticAlign>,
 }
 
 pub(crate) struct Layouter<'a> {
@@ -371,6 +383,16 @@ pub(crate) struct Layouter<'a> {
     pub grids: FxHashMap<BoxId, Rc<table::Grid>>,
     /// The painter's extra data for tables.
     pub tinfo: FxHashMap<BoxId, TableInfo>,
+    /// Flex items measured by a throw-away layout, by box: (the content width it was measured at, its border-box height)
+    /// (flex.rs). The type is that of `widths`, which keeps the binary from carrying one more hash map.
+    pub measured: FxHashMap<BoxId, (LayoutUnit, LayoutUnit)>,
+    /// Per box: 0 not looked at, 1 nothing below it depends on its height, 2 something does (flex.rs).
+    pub flex_sens: Vec<u8>,
+    /// Work spent laying stretched flex items out a second time.
+    pub flex_spent: u64,
+    /// The first and last baseline of flex containers (css-flexbox-1 8.5), relative to their border boxes; `LayoutUnit::MIN`
+    /// is "none".
+    pub flex_base: FxHashMap<BoxId, (LayoutUnit, LayoutUnit)>,
 }
 
 impl Layouter<'_> {
@@ -452,6 +474,10 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
         has_floats: tree.boxes.iter().any(floats::is_float),
         grids: FxHashMap::default(),
         tinfo: FxHashMap::default(),
+        measured: FxHashMap::default(),
+        flex_sens: Vec::new(),
+        flex_spent: 0,
+        flex_base: FxHashMap::default(),
     };
     l.prefetch_text();
     l.layout_root();

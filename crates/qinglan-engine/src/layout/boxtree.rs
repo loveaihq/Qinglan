@@ -118,6 +118,8 @@ pub struct LayoutBox {
     pub rare: Option<Box<Rare>>,
     /// Content is clipped to the padding box regardless of `overflow` (text fields).
     pub force_clip: bool,
+    /// A flex item (an in-flow child of a flex container): it starts a formatting context of its own (flex.rs).
+    pub flex_item: bool,
 }
 
 /// The parts of a [`LayoutBox`] that most boxes do not have.
@@ -156,6 +158,7 @@ impl LayoutBox {
             order: 0,
             rare: None,
             force_clip: false,
+            flex_item: false,
         }
     }
 
@@ -414,6 +417,7 @@ impl Builder<'_> {
             text: p.text.clone(),
             misc: self.init.misc.clone(),
             gen_: self.init.gen_.clone(),
+            flex: self.init.flex.clone(),
             custom: p.custom.clone(),
         })
     }
@@ -959,7 +963,9 @@ impl Builder<'_> {
         let role = self.role(id);
         let style = self.boxes.get(id as usize).map(|b| b.style.clone()).unwrap_or_else(|| self.init.clone());
         let any_internal = outs.iter().any(|o| matches!(o, Out::Block(b) if internal(self.role(*b))));
+        let flex = matches!(self.boxes.get(id as usize).and_then(|b| b.fallback), Some(Display::Flex | Display::InlineFlex));
         match role {
+            Role::Other if flex => self.finish_flex(id, outs, &style),
             Role::Table | Role::Group | Role::Row | Role::ColGroup => {
                 let kids = self.fix_table(role, outs, &style, false);
                 self.finish_table_part(id, role, kids);
@@ -979,6 +985,66 @@ impl Builder<'_> {
                 let outs = if any_internal { self.fix_table(Role::Other, outs, &style, false) } else { outs };
                 self.finish_plain(id, outs);
             }
+        }
+    }
+
+    /// css-flexbox-1 4: the in-flow children of a flex container are its flex items. Each run of text and inline boxes
+    /// among them is wrapped in an anonymous block (a run of white space alone makes nothing); out-of-flow children stay
+    /// placeholders. The items are put in `order` (stable), which is also the order they paint and are hit in (4.1, 5.4).
+    fn finish_flex(&mut self, id: BoxId, outs: Vec<Out>, style: &Rc<ComputedStyle>) {
+        let mut kids: Vec<BoxId> = Vec::new();
+        let mut run: Vec<BoxId> = Vec::new();
+        for o in outs {
+            match o {
+                Out::Block(b) => {
+                    self.flush_flex_run(&mut run, &mut kids, style);
+                    kids.push(b);
+                }
+                Out::Inline(b) => {
+                    let own = self.boxes.get(b as usize).is_some_and(|x| x.oof || matches!(x.kind, BoxKind::InlineBlock | BoxKind::Replaced));
+                    if own {
+                        self.flush_flex_run(&mut run, &mut kids, style);
+                        kids.push(b);
+                    } else {
+                        run.push(b);
+                    }
+                }
+            }
+        }
+        self.flush_flex_run(&mut run, &mut kids, style);
+        for &k in &kids {
+            if let Some(b) = self.box_mut(k)
+                && !b.oof
+            {
+                b.flex_item = true;
+            }
+        }
+        let boxes = &self.boxes;
+        crate::sorting::sort_by_u64_key(&mut kids, |&k| (i64::from(boxes.get(k as usize).map_or(0, |x| x.style.flex.order)) + (1i64 << 31)) as u64);
+        self.adopt(id, kids);
+    }
+
+    /// A run of text in a flex container becomes one anonymous item, unless it is only white space, which is never
+    /// rendered there whatever `white-space` says (css-flexbox-1 4).
+    fn flush_flex_run(&mut self, run: &mut Vec<BoxId>, kids: &mut Vec<BoxId>, container: &Rc<ComputedStyle>) {
+        if run.iter().all(|&b| self.only_space(b)) {
+            run.clear();
+        }
+        self.flush_run(run, kids, container);
+    }
+
+    fn only_space(&self, id: BoxId) -> bool {
+        let Some(b) = self.boxes.get(id as usize) else { return true };
+        match b.kind {
+            BoxKind::Text => {
+                let ws = |t: &str| t.chars().all(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{0C}'));
+                match b.synth() {
+                    Some(s) => ws(s),
+                    None => self.doc.node(b.node).is_some_and(|n| matches!(&n.data, NodeData::Text(t) if ws(t))),
+                }
+            }
+            BoxKind::Inline => !has_horizontal_edges(&b.style) && b.children.iter().all(|&c| self.only_space(c)),
+            _ => false,
         }
     }
 

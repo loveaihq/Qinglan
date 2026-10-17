@@ -38,19 +38,19 @@ pub(crate) struct BlockResult {
 
 /// The edges and size specifications of a block (see `block_geometry`).
 pub(crate) struct Geom {
-    pad: [LU; 4],
-    bor: [LU; 4],
-    h_extra: LU,
-    v_extra: LU,
-    m_top: LU,
-    m_bot: LU,
-    content_w: LU,
-    ml: LU,
-    spec_h: Option<LU>,
+    pub(super) pad: [LU; 4],
+    pub(super) bor: [LU; 4],
+    pub(super) h_extra: LU,
+    pub(super) v_extra: LU,
+    pub(super) m_top: LU,
+    pub(super) m_bot: LU,
+    pub(super) content_w: LU,
+    pub(super) ml: LU,
+    pub(super) spec_h: Option<LU>,
     /// The computed `height` is `auto` or 0 (CSS2 8.3.1: such a box can collapse through).
     h_zero_or_auto: bool,
-    min_h: LU,
-    max_h: Option<LU>,
+    pub(super) min_h: LU,
+    pub(super) max_h: Option<LU>,
     repl: Option<(LU, LU)>,
 }
 
@@ -64,6 +64,8 @@ pub(crate) struct Flow {
     pub forced_h: Option<LU>,
     /// A table cell (table.rs): these are its used border widths. A cell has no margins and its height is its content's.
     pub cell_bor: Option<[LU; 4]>,
+    /// Lay the box out as if its `height`, `min-height` and `max-height` were `auto` / 0 / `none` (a flex item's content size, flex.rs).
+    pub ignore_h: bool,
 }
 
 pub(crate) fn lp_has_percent(l: &Lp) -> bool {
@@ -118,7 +120,7 @@ fn overflow_bfc(bs: &BoxStyle) -> bool {
 /// Boxes that start a new block formatting context: their margins do not collapse with their
 /// children's (CSS2 9.4.1, 8.3.1).
 fn establishes_bfc(bx: &LayoutBox, bs: &BoxStyle) -> bool {
-    overflow_bfc(bs) || bs.display == Display::FlowRoot || super::floats::is_float(bx) || bx.fallback.is_some() || bx.oof || matches!(bx.kind, BoxKind::InlineBlock | BoxKind::Replaced)
+    overflow_bfc(bs) || bs.display == Display::FlowRoot || super::floats::is_float(bx) || bx.fallback.is_some() || bx.oof || bx.flex_item || matches!(bx.kind, BoxKind::InlineBlock | BoxKind::Replaced)
 }
 
 /// CSS2 10.3.3 and 10.4: content width and the two horizontal margins.
@@ -199,6 +201,9 @@ impl Layouter<'_> {
         let is_root = flow.root;
         if matches!(bx.fallback, Some(Display::Table | Display::InlineTable)) {
             return self.layout_table(id, cb_w, cb_h, flow);
+        }
+        if matches!(bx.fallback, Some(Display::Flex | Display::InlineFlex)) {
+            return self.layout_flex(id, cb_w, cb_h, flow);
         }
 
         if !self.charge(4 + bx.children.len() as u64) {
@@ -333,6 +338,10 @@ impl Layouter<'_> {
                         y = y.max(b - base.1);
                     }
                     if self.touched && y != gy2 {
+                        if avoid {
+                            // Clearance moved it: the room beside the floats is not where it was.
+                            (cw, shift, _) = self.avoid_floats(cid, base, content_left, g.content_w, y);
+                        }
                         self.restore(mark);
                         self.pos = (base.0 + content_left + shift, base.1 + y);
                         self.touched = false;
@@ -407,7 +416,7 @@ impl Layouter<'_> {
     }
 
     /// Edges, width and height specifications of block `id` in a containing block `cb_w` wide.
-    fn block_geometry(&mut self, id: BoxId, cb_w: LU, cb_h: Option<LU>, flow: Flow) -> Geom {
+    pub(super) fn block_geometry(&mut self, id: BoxId, cb_w: LU, cb_h: Option<LU>, flow: Flow) -> Geom {
         let tree = self.tree;
         let bx = tree.get(id);
         let style = bx.style.clone();
@@ -458,10 +467,11 @@ impl Layouter<'_> {
 
         // Height: a percentage needs a definite containing block height, otherwise it is `auto`
         // (10.5). Min/max (10.7) apply to the result.
-        let spec_h = if cell { None } else { resolve_dim(&bs.height, cb_h).map(to_ch) };
+        let sized = !cell && !flow.ignore_h;
+        let spec_h = if sized { resolve_dim(&bs.height, cb_h).map(to_ch) } else { None };
         let h_zero_or_auto = flow.forced_h.is_none() && repl.is_none() && spec_h.is_none_or(|h| h == LU::ZERO);
-        let min_h = if cell { LU::ZERO } else { resolve_dim(&bs.min_height, cb_h).map_or(LU::ZERO, to_ch) };
-        let max_h = if cell { None } else { resolve_dim(&bs.max_height, cb_h).map(to_ch) };
+        let min_h = if sized { resolve_dim(&bs.min_height, cb_h).map_or(LU::ZERO, to_ch) } else { LU::ZERO };
+        let max_h = if sized { resolve_dim(&bs.max_height, cb_h).map(to_ch) } else { None };
         let clamp_h = |h: LU| max_h.map_or(h, |m| h.min(m)).max(min_h);
         let spec_h = match (flow.forced_h, repl) {
             (Some(h), _) => Some(clamp_h(h)),
@@ -472,7 +482,7 @@ impl Layouter<'_> {
     }
 
     /// Final height, size and flags of block `id` once its content is laid out; list marker.
-    fn finish_box(&mut self, id: BoxId, g: &Geom, content_h_auto: LU, content_top: LU) {
+    pub(super) fn finish_box(&mut self, id: BoxId, g: &Geom, content_h_auto: LU, content_top: LU) {
         let tree = self.tree;
         let bx = tree.get(id);
         let bs = &bx.style.boxs;
@@ -507,6 +517,9 @@ impl Layouter<'_> {
 
     /// The baseline of the first line box in `id`'s subtree, relative to its border box.
     pub(super) fn first_baseline(&self, id: BoxId) -> Option<LU> {
+        if let Some(b) = self.flex_base.get(&id) {
+            return (b.0 != LU::MIN).then_some(b.0);
+        }
         let bx = self.tree.get(id);
         let o = self.out.get(id as usize)?;
         if bx.inline_children {
@@ -521,6 +534,9 @@ impl Layouter<'_> {
 
     /// The baseline of the last line box in `id`'s subtree, relative to its border box.
     pub(super) fn last_baseline(&self, id: BoxId) -> Option<LU> {
+        if let Some(b) = self.flex_base.get(&id) {
+            return (b.1 != LU::MIN).then_some(b.1);
+        }
         let bx = self.tree.get(id);
         let o = self.out.get(id as usize)?;
         if bx.inline_children {

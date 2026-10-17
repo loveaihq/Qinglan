@@ -1,18 +1,18 @@
 # WPT `css/CSS2/generated-content`
 
-测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/CSS2/generated-content`，用时 1.3 秒。
+测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/CSS2/generated-content`，用时 1.2 秒。
 
-- 通过 **186 / 205**（90.7%）
+- 通过 **188 / 205**（91.7%）
 - bug 类失败：**3**
 - 跳过：needs JS 21，no reftest 90
 
-失败分类：bug (open) 3，limit (counter styles) 2，limit (css-lists-3 counter scope) 3，limit (test platform) 3，limit (xhtml as html) 4，not planned 1，step 2a-2 1，step 2d 2
+失败分类：bug (open) 3，limit (counter styles) 2，limit (css-lists-3 counter scope) 3，limit (test platform) 3，limit (xhtml as html) 2，not planned 1，step 2a-2 1，step 2d 2
 
 ## 失败
 
 | 测试 | 类别 | 说明 |
 |---|---|---|
-| before-after-table-parts-001.xht | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation ...) (10466 pixels differ (largest difference 255); first at (104,290): #0000ff, the reference has #ffffff) |
+| before-after-table-parts-001.xht | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (10466 pixels differ (largest difference 255); first at (104,290): #0000ff, the reference has #ffffff) |
 | before-after-table-whitespace-001.xht | bug (open) | used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (17,61): #000000, the reference has #ffffff); not analyzed one by one (5120 pixels differ (largest difference 255); first at (17,61): #000000, the reference has #ffffff) |
 | bidi-generated-content-001.xht | step 2d | unicode-bidi/direction in generated content: bidi is step 2d (256 pixels differ (largest difference 255); first at (520,80): #000000, the reference has #ffffff) |
 | bidi-generated-content-002.xht | step 2d | unicode-bidi/direction in generated content: bidi is step 2d (768 pixels differ (largest difference 255); first at (104,80): #000000, the reference has #ffffff) |
@@ -28,8 +28,6 @@
 | content-counter-010.xht | limit (counter styles) | counter(c, armenian): the Armenian numbering system is not implemented, unknown counter styles fall back to decimal (4224 pixels differ (largest difference 255); first at (312,48): #000000, the reference has #ffffff) |
 | content-newline-001.xht | limit (test platform) | white-space:pre "This text\Ashould be on two lines." in a 200 px box: 23 glyphs of 16 px do not fit in the test platform, the reference wraps; with a real font it fits (4608 pixels differ (largest difference 255); first at (216,80): #000000, the reference has #ffffff) |
 | content-white-space-002.xht | limit (test platform) | a tab in white-space:pre text draws as a 1em square in the test platform (every glyph is a square); the reference uses 8 spaces (11264 pixels differ (largest difference 255); first at (22,86): #0000ff, the reference has #ffffff) |
-| quotes-035.xht | limit (xhtml as html) | the test writes <div/> (XHTML empty-element tags), which the HTML parser reads as open tags: the nesting differs from the XML one the test needs (1024 pixels differ (largest difference 255); first at (504,8): #000000, the reference has #ffffff) |
-| quotes-035a.xht | limit (xhtml as html) | the test writes <div/> (XHTML empty-element tags), which the HTML parser reads as open tags: the nesting differs from the XML one the test needs (1024 pixels differ (largest difference 255); first at (504,8): #000000, the reference has #ffffff) |
 | quotes-036.xht | limit (xhtml as html) | the test writes <div/> (XHTML empty-element tags), which the HTML parser reads as open tags: the nesting differs from the XML one the test needs (15616 pixels differ (largest difference 255); first at (184,8): #ffffff, the reference has #000000) |
 
 ## 通过
@@ -209,6 +207,8 @@
 - counters-root-000.xht
 - multiple-content-values-001.xht
 - other-attribute-001.xht
+- quotes-035.xht
+- quotes-035a.xht
 - quotes-applies-to-001.xht
 - quotes-applies-to-002.xht
 - quotes-applies-to-003.xht

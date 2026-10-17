@@ -1,0 +1,28 @@
+viewport 400x300
+block html (0,0 400x180)
+  block body (0,0 400x180)
+    block div#a.f (0,0 200x20) [display:flex]
+      block div#a1 (0,0 60x20)
+      block div#a2 (60,0 120x20)
+      block div#a3 (180,0 20x20)
+    block div#b.f (0,20 120x20) [display:flex]
+      block div#b1 (0,20 60x20)
+      block div#b2 (60,20 40x20)
+      block div#b3 (100,20 20x20)
+    block div#c.f (0,40 200x20) [display:flex]
+      block div#c2 (45,40 30x20)
+      block div#c3 (85,40 30x20)
+      block div#c1 (125,40 30x20)
+    block div#d.f (0,60 200x40) [display:flex]
+      block div#d2 (0,75 20x10)
+      block div#d1 (180,90 20x10)
+    block div#e.f (0,100 100x60) [display:flex]
+      block div#e1 (0,100 40x10)
+      block div#e2 (40,100 40x10)
+      block div#e3 (0,150 40x10)
+      block div#e4 (40,150 40x10)
+    block div#f.f (0,160 30x20) [display:flex]
+      block div#f1 (0,160 60x20)
+        line (0,160 60x10) baseline=168
+          text "abcdef" (0,160 60x10)
+      block div#f2 (60,160 10x20)

@@ -108,3 +108,7 @@
 - `filter`、`mix-blend-mode`、`clip-path`、`mask`、3D 变形、动画和过渡、`@container`、`:has()`、subgrid、masonry
 - SVG 滤镜、蒙版、动画、`foreignObject`
 - 视频、音频、`canvas`、`iframe` 的内容（仍然是占位框）
+
+## 进度
+
+- 2b-1（flex）完成（2026-10-17）：`css-flexbox` WPT 647 / 951，exe 1,984,000（+56,832，比 2b-1 的 +50 KB 多 6.8 KB，2b 总分配 +100 KB 内），zhwiki-rec 内存最大 46.51 MB，首屏中位数 113 / 170 / 149 毫秒；详见 `docs/decisions.md` "2b-1"。

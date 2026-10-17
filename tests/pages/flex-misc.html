@@ -1,0 +1,39 @@
+<!--
+viewport: 400x300
+Flex containers: inline-flex, absolutely positioned children, stretched items with percentages, `flex-basis` percentages (css-flexbox-1 4.1, 8.3, 9.4,
+9.8; step 2b-1). Font 10px/10px Ahem, body margin 0.
+
+a      div#a holds a span with display:inline-flex and two items "ab" and "c". The items are blockified; the container is shrink-to-fit (CSS2 10.3.9):
+       20 + 10 = 30 wide, 10 high, on the line: span#i (0,0 30x10), its items (0,0 20x10) and (20,0 10x10). div#a is 10 high.
+b      div#b y=10, position:relative, width 100, height 40, justify-content center, align-items flex-end. Its in-flow item b1 (10 x 10) is centred
+       on the main axis, x = 45, and sits at the cross end, y = 10 + 40 - 10 = 40. The absolutely positioned child (20 x 10, no offsets) does not take part
+       in the flexing; its static position is where it would be as the only item (4.1): x = (100 - 20) / 2 = 40, y = 10 + 30 = 40.
+       b1 (45,40 10x10), div#abs (40,40 20x10) [absolute].
+c      div#c y=50, width 100, align-items stretch (default). c1 and c2 are 40 wide; c1 is 30 high, c2 has no height: the line is 30 high (the tallest item,
+       9.4), c2 is stretched to 30 and its child cin (height 50%) then has a definite containing block (9.8): 15. c1 (0,50 40x30), c2 (40,50 40x30),
+       cin (40,50 40x15).
+d      div#d y=80, width 200. d1 flex:0 0 25% = 50 (a percentage of the definite 200); d2 flex:1 = 1 1 0%: the rest, 150. Both 10 high.
+       d1 (0,80 50x10), d2 (50,80 150x10). body = 90 high.
+check: inline-block span#i :: (0,0 30x10) [display:inline-flex]
+check: block div#a :: (0,0 400x10)
+check: block span#ia :: (0,0 20x10)
+check: block span#ic :: (20,0 10x10)
+check: block div#b :: (0,10 100x40) [display:flex] [relative]
+check: block div#b1 :: (45,40 10x10)
+check: block div#abs :: (40,40 20x10) [absolute]
+check: block div#c :: (0,50 100x30) [display:flex]
+check: block div#c1 :: (0,50 40x30)
+check: block div#c2 :: (40,50 40x30)
+check: block div#cin :: (40,50 40x15)
+check: block div#d1 :: (0,80 50x10)
+check: block div#d2 :: (50,80 150x10)
+check: block body :: (0,0 400x90)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+</style>
+<div id="a"><span id="i" style="display:inline-flex"><span id="ia">ab</span><span id="ic">c</span></span></div>
+<div id="b" style="display:flex;position:relative;width:100px;height:40px;justify-content:center;align-items:flex-end"><div id="b1" style="width:10px;height:10px"></div><div id="abs" style="position:absolute;width:20px;height:10px"></div></div>
+<div id="c" style="display:flex;width:100px"><div id="c1" style="width:40px;height:30px"></div><div id="c2" style="width:40px"><div id="cin" style="height:50%"></div></div></div>
+<div id="d" style="display:flex;width:200px"><div id="d1" style="flex:0 0 25%;height:10px"></div><div id="d2" style="flex:1;height:10px"></div></div>

@@ -42,6 +42,54 @@ const OPEN_TIMEOUT: Duration = Duration::from_secs(20);
 /// One test (both renders and the comparison) may take this long; a hang kills the run.
 const TEST_LIMIT: Duration = Duration::from_secs(60);
 
+/// XML comments are not content; in HTML a `<style>` keeps the text of a comment (`<!-- ... -->` around a remark in the
+/// middle of a style sheet would swallow the rule after it).
+fn strip_comments(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut rest = src;
+    while let Some(a) = rest.find("<!--") {
+        let (head, tail) = rest.split_at(a);
+        out.push_str(head);
+        match tail.find("-->") {
+            Some(b) => rest = tail.get(b + 3..).unwrap_or(""),
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// XML has `<div/>`; HTML ignores the slash, so an XHTML test would nest what follows. Every self-closed element that is
+/// not a void element becomes `<div></div>`.
+fn open_self_closed(src: &str) -> String {
+    const VOID: [&str; 16] = ["br", "img", "hr", "input", "meta", "link", "col", "area", "base", "param", "wbr", "source", "track", "embed", "basefont", "frame"];
+    let mut out = String::with_capacity(src.len() + 64);
+    let mut rest = src;
+    while let Some(i) = rest.find("/>") {
+        let (head, tail) = rest.split_at(i);
+        let tag = head.rfind('<').map(|lt| head.get(lt + 1..).unwrap_or("").chars().take_while(char::is_ascii_alphanumeric).collect::<String>().to_ascii_lowercase());
+        let closing = head.rfind('>').zip(head.rfind('<')).is_some_and(|(gt, lt)| gt > lt);
+        match tag {
+            Some(t) if !t.is_empty() && !closing && !VOID.contains(&t.as_str()) && !head.get(head.rfind('<').unwrap_or(0)..).is_some_and(|h| h.starts_with("<!") || h.starts_with("<?")) => {
+                out.push_str(head);
+                out.push_str("></");
+                out.push_str(&t);
+                out.push('>');
+            }
+            _ => {
+                out.push_str(head);
+                out.push_str("/>");
+            }
+        }
+        rest = tail.get(2..).unwrap_or("");
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Serves the files under a directory as the paths of `http://wpt.test/`.
 struct WptTransport {
     root: PathBuf,
@@ -102,7 +150,8 @@ impl Transport for WptTransport {
         if file.extension().is_some_and(|e| e == "xht" || e == "xhtml")
             && let Some(body) = &found
         {
-            found = Some(String::from_utf8_lossy(body).replace("<![CDATA[", "").replace("]]>", "").into_bytes());
+            let text = String::from_utf8_lossy(body).replace("<![CDATA[", "").replace("]]>", "");
+            found = Some(open_self_closed(&strip_comments(&text)).into_bytes());
         }
         let (status, body, headers) = match found {
             Some(body) => (200, body, vec![("Content-Type".to_string(), mime_of(&file).to_string())]),
@@ -353,8 +402,8 @@ fn compare(x: &Frame, y: &Frame, fuzzy: Option<(u32, u32)>) -> Result<(), String
 fn classify(src: &str) -> Option<(&'static str, &'static str)> {
     let s = src.to_ascii_lowercase().replace(": ", ":");
     let has = |ns: &[&str]| ns.iter().any(|n| s.contains(n));
-    if has(&["display:flex", "display:inline-flex", "display:grid", "flex:", "grid-template"]) {
-        return Some(("2b", "flex or grid"));
+    if has(&["display:grid", "display:inline-grid", "grid-template", "grid-area", "grid-column", "grid-row"]) {
+        return Some(("2b", "grid (step 2b-2)"));
     }
     if has(&["gradient", "box-shadow", "border-radius", "opacity:", "transform:", "background-image", "text-shadow", "outline:", "-dashed", ":dashed", ":dotted", "groove", "ridge", "background:url", "mix-blend"]) {
         return Some(("2c", "painting effects"));
@@ -365,8 +414,8 @@ fn classify(src: &str) -> Option<(&'static str, &'static str)> {
     if has(&["<svg", "position:sticky", "overflow:auto", "overflow:scroll", "<input", "<button", "<select", "<textarea"]) {
         return Some(("2e", "svg, scrolling, sticky or form controls"));
     }
-    if has(&["column-count", "column-width", "column-", "columns:", "shape-outside", ":has(", "@container", "animation", "transition", "clip-path", "mask", "filter:"]) {
-        return Some(("none", "a feature layer 2 does not do (multi-column, shapes, animation ...)"));
+    if has(&["text-wrap", "flex-wrap:balance", "aspect-ratio", "column-count", "column-width", "column-", "columns:", "shape-outside", ":has(", "@container", "animation", "transition", "clip-path", "mask", "filter:"]) {
+        return Some(("none", "a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...)"));
     }
     None
 }

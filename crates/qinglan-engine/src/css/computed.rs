@@ -121,6 +121,43 @@ impl GenStyle {
     }
 }
 
+/// The flex container and flex item properties (css-flexbox-1 5-8, css-align-3 gaps). None are inherited.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FlexStyle {
+    pub direction: FlexDirection,
+    pub wrap: FlexWrap,
+    pub order: i32,
+    pub grow: f32,
+    pub shrink: f32,
+    pub basis: FlexBasis,
+    pub justify_content: AlignValue,
+    pub align_items: AlignValue,
+    pub align_self: AlignValue,
+    pub align_content: AlignValue,
+    /// `None` is `normal` (0 in a flex container).
+    pub row_gap: Option<Lp>,
+    pub column_gap: Option<Lp>,
+}
+
+impl FlexStyle {
+    pub fn initial() -> FlexStyle {
+        FlexStyle {
+            direction: FlexDirection::Row,
+            wrap: FlexWrap::Nowrap,
+            order: 0,
+            grow: 0.0,
+            shrink: 1.0,
+            basis: FlexBasis::Auto,
+            justify_content: AlignValue::NORMAL,
+            align_items: AlignValue::NORMAL,
+            align_self: AlignValue::AUTO,
+            align_content: AlignValue::NORMAL,
+            row_gap: None,
+            column_gap: None,
+        }
+    }
+}
+
 /// The computed style of an element.
 #[derive(Clone, Debug)]
 pub struct ComputedStyle {
@@ -130,6 +167,7 @@ pub struct ComputedStyle {
     pub text: Rc<TextStyle>,
     pub misc: Rc<MiscStyle>,
     pub gen_: Rc<GenStyle>,
+    pub flex: Rc<FlexStyle>,
     pub custom: Rc<CustomProps>,
 }
 
@@ -228,6 +266,7 @@ impl ComputedStyle {
             text: Rc::new(TextStyle::initial()),
             misc: Rc::new(MiscStyle::initial()),
             gen_: Rc::new(GenStyle::initial()),
+            flex: Rc::new(FlexStyle::initial()),
             custom: Rc::new(CustomProps::default()),
         }
     }
@@ -598,7 +637,9 @@ fn blockify(d: Display) -> Display {
 }
 
 pub fn compute_box(parent: &Rc<BoxStyle>, init_rc: &Rc<BoxStyle>, d: &Declared<'_>, ctx: &LenCtx, is_root: bool) -> Rc<BoxStyle> {
-    if !d.touches(BOX_BITS) && !is_root {
+    // css-flexbox-1 4: the children of a flex container are blockified and do not float.
+    let flex_item = matches!(parent.display, Display::Flex | Display::InlineFlex);
+    if !d.touches(BOX_BITS) && !is_root && !flex_item {
         return init_rc.clone();
     }
     let init = BoxStyle::initial();
@@ -672,6 +713,14 @@ pub fn compute_box(parent: &Rc<BoxStyle>, init_rc: &Rc<BoxStyle>, d: &Declared<'
     if matches!(b.position, Position::Absolute | Position::Fixed) {
         b.float = Float::None;
         b.display = blockify(b.display);
+    } else if flex_item {
+        b.float = Float::None;
+        b.display = blockify(b.display);
+        // css-flexbox-1 4.3: `z-index` applies to a flex item that is not positioned and gives it a stacking context; a
+        // relatively positioned box without offsets paints and stacks the same way.
+        if b.z_index.is_some() && b.position == Position::Static {
+            b.position = Position::Relative;
+        }
     } else if b.float != Float::None || is_root {
         b.display = blockify(b.display);
     }
@@ -817,6 +866,53 @@ pub fn compute_gen(parent: &Rc<GenStyle>, init_rc: &Rc<GenStyle>, d: &Declared<'
     Rc::new(g)
 }
 
+/// The flex properties (not inherited: only `inherit` copies the value of the parent).
+pub fn compute_flex(parent: &Rc<FlexStyle>, init_rc: &Rc<FlexStyle>, d: &Declared<'_>, ctx: &LenCtx) -> Rc<FlexStyle> {
+    if !d.touches(FLEX_BITS) {
+        return init_rc.clone();
+    }
+    let mut f = FlexStyle::initial();
+    macro_rules! simple {
+        ($prop:expr, $variant:ident, $field:ident) => {
+            match pick(d, $prop) {
+                Pick::Inherit => f.$field = parent.$field.clone(),
+                Pick::Initial => {}
+                Pick::Value(Value::$variant(v)) => f.$field = v.clone(),
+                Pick::Value(_) => {}
+            }
+        };
+    }
+    simple!(PropId::FlexDirection, FlexDirection, direction);
+    simple!(PropId::FlexWrap, FlexWrap, wrap);
+    simple!(PropId::Order, Order, order);
+    simple!(PropId::FlexGrow, FlexFactor, grow);
+    simple!(PropId::FlexShrink, FlexFactor, shrink);
+    simple!(PropId::JustifyContent, Align, justify_content);
+    simple!(PropId::AlignItems, Align, align_items);
+    simple!(PropId::AlignSelf, Align, align_self);
+    simple!(PropId::AlignContent, Align, align_content);
+    match pick(d, PropId::FlexBasis) {
+        Pick::Inherit => f.basis = parent.basis.clone(),
+        Pick::Initial => {}
+        Pick::Value(Value::FlexBasis(FlexBasis::Size(s))) => f.basis = FlexBasis::Size(s.compute(ctx)),
+        Pick::Value(Value::FlexBasis(b)) => f.basis = b.clone(),
+        Pick::Value(_) => {}
+    }
+    match pick(d, PropId::RowGap) {
+        Pick::Inherit => f.row_gap = parent.row_gap.clone(),
+        Pick::Initial => {}
+        Pick::Value(Value::Gap(g)) => f.row_gap = g.as_ref().map(|l| l.compute(ctx)),
+        Pick::Value(_) => {}
+    }
+    match pick(d, PropId::ColumnGap) {
+        Pick::Inherit => f.column_gap = parent.column_gap.clone(),
+        Pick::Initial => {}
+        Pick::Value(Value::Gap(g)) => f.column_gap = g.as_ref().map(|l| l.compute(ctx)),
+        Pick::Value(_) => {}
+    }
+    Rc::new(f)
+}
+
 // -----------------------------------------------------------------------------------------------
 // Serialization (for `qinglan-cli style` and tests)
 
@@ -924,6 +1020,19 @@ impl ComputedStyle {
         add(PropId::EmptyCells, t.empty_cells.keyword().into());
         add(PropId::CaptionSide, t.caption_side.keyword().into());
         add(PropId::TableLayout, b.table_layout.keyword().into());
+        let fl = &self.flex;
+        add(PropId::FlexDirection, fl.direction.keyword().into());
+        add(PropId::FlexWrap, fl.wrap.keyword().into());
+        add(PropId::Order, fl.order.to_string());
+        add(PropId::FlexGrow, fmt_num(fl.grow));
+        add(PropId::FlexShrink, fmt_num(fl.shrink));
+        add(PropId::FlexBasis, fl.basis.to_css());
+        add(PropId::JustifyContent, fl.justify_content.to_css());
+        add(PropId::AlignItems, fl.align_items.to_css());
+        add(PropId::AlignSelf, fl.align_self.to_css());
+        add(PropId::AlignContent, fl.align_content.to_css());
+        add(PropId::RowGap, fl.row_gap.as_ref().map_or("normal".into(), Lp::to_css));
+        add(PropId::ColumnGap, fl.column_gap.as_ref().map_or("normal".into(), Lp::to_css));
         v.push(("lang", t.lang.as_deref().unwrap_or("").to_string()));
         v
     }

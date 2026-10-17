@@ -1,0 +1,24 @@
+viewport 400x300
+block html (0,0 400x90)
+  block body (0,0 400x90)
+    block div#a (0,0 400x10)
+      line (0,0 400x10) baseline=8
+        inline-block span#i (0,0 30x10) [display:inline-flex]
+          block span#ia (0,0 20x10)
+            line (0,0 20x10) baseline=8
+              text "ab" (0,0 20x10)
+          block span#ic (20,0 10x10)
+            line (20,0 10x10) baseline=8
+              text "c" (20,0 10x10)
+    block div#b (0,10 100x40) [display:flex] [relative]
+      block div#b1 (45,40 10x10)
+      block div#abs (40,40 20x10) [absolute]
+    block div#c (0,50 100x30) [display:flex]
+      block div#c1 (0,50 40x30)
+      block div#c2 (40,50 40x30)
+        block div#cin (40,50 40x15)
+    block div#d (0,80 200x10) [display:flex]
+      block div#d1 (0,80 50x10)
+      block div#d2 (50,80 150x10)
+paint-above div#b relative z=0
+paint-above div#abs absolute z=0

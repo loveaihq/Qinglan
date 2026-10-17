@@ -179,7 +179,19 @@ impl Layouter<'_> {
         if r.0 < min_w {
             r = solve(self, Some(min_w));
         }
-        let (content_w, ml, _mr, left_f) = r;
+        let (content_w, ml, mr, mut left_f) = r;
+        // css-flexbox-1 4.1: the static position of a child of a flex container is aligned in the container's content box.
+        if let Some(a) = p.align
+            && left.is_none()
+            && right.is_none()
+        {
+            let outer = ml + content_w + mr + h_extra;
+            left_f += match a.ax {
+                1 => (a.rw - outer).half(),
+                2 => a.rw - outer,
+                _ => zero,
+            };
+        }
 
         // Vertical (CSS2 10.6.4): a box with `top` and `bottom` and an auto height fills the space between.
         let auto_h = replaced_w.is_none() && resolve_dim(&bs.height, Some(ch)).is_none();
@@ -188,7 +200,7 @@ impl Layouter<'_> {
             (true, Some(t), Some(b)) => Some((ch - t - b - mt0 - mb0 - v_extra).max0()),
             _ => None,
         };
-        let res = self.layout_block(p.id, cw, Some(ch), Flow { root: false, forced_w: Some(content_w), forced_h, cell_bor: None });
+        let res = self.layout_block(p.id, cw, Some(ch), Flow { root: false, forced_w: Some(content_w), forced_h, cell_bor: None, ignore_h: false });
         let h = res.h;
         let (top_f, mt) = match (top, bottom) {
             (Some(t), Some(b)) if !auto_h || forced_h.is_none() => {
@@ -202,6 +214,18 @@ impl Layouter<'_> {
             (Some(t), _) => (t, mt0),
             (None, Some(b)) => (ch - b - mb0 - h - mt0, mt0),
             (None, None) => (sy, mt0),
+        };
+        let top_f = match p.align {
+            Some(a) if top.is_none() && bottom.is_none() => {
+                let outer = mt0 + h + mb0;
+                top_f
+                    + match a.ay {
+                        1 => (a.rh - outer).half(),
+                        2 => a.rh - outer,
+                        _ => zero,
+                    }
+            }
+            _ => top_f,
         };
         let (x_cb, y_cb) = (left_f + ml, top_f + mt);
         if let Some(o) = self.out.get_mut(p.id as usize) {

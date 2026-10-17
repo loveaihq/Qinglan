@@ -709,7 +709,12 @@ impl Layouter<'_> {
         let lead_y = if nrows > 0 { sp1 } else { LU::ZERO };
         let rows_h = |rh: &[LU]| sum(rh) + if nrows > 0 { mul(sp1, nrows + 1) } else { LU::ZERO };
         let to_bb = |h: LU| if border_box { h } else { h + vx };
-        let (spec, min_h) = (resolve_dim(&bs.height, cb_h).map(to_bb), resolve_dim(&bs.min_height, cb_h).map(to_bb));
+        // A forced height (a stretched flex item) acts as the height; `ignore_h` measures the table by its rows.
+        let (spec, min_h) = if flow.ignore_h {
+            (None, None)
+        } else {
+            (flow.forced_h.map(to_bb).or_else(|| resolve_dim(&bs.height, cb_h).map(to_bb)), resolve_dim(&bs.min_height, cb_h).map(to_bb))
+        };
         let spec_h = match (spec, min_h) {
             (Some(a), Some(b)) => Some(a.max(b)),
             (a, b) => a.or(b),

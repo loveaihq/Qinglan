@@ -1,12 +1,12 @@
 # WPT `css/css-lists`
 
-测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-lists`，用时 0.9 秒。
+测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-lists`，用时 0.8 秒。
 
 - 通过 **80 / 143**（55.9%）
 - bug 类失败：**15**
 - 跳过：needs JS 28，no reftest 48
 
-失败分类：bug (open) 15，limit (::marker style) 8，limit (css-lists-3 reversed()) 32，limit (list-style-image) 1，step 2b 2，step 2c 2，step 2d 3
+失败分类：bug (open) 15，limit (::marker style) 8，limit (css-lists-3 reversed()) 32，limit (list-style-image) 1，step 2c 2，step 2d 5
 
 ## 失败
 
@@ -68,8 +68,8 @@
 | list-style-type-decimal-vertical-rl.html | step 2c | uses painting effects (17600 pixels differ (largest difference 255); first at (8,40): #000000, the reference has #ffffff) |
 | list-style-type-string-002.html | step 2d | uses text features (21504 pixels differ (largest difference 255); first at (0,32): #000000, the reference has #ffffff) |
 | list-style-type-string-003.html | step 2d | uses text features (21504 pixels differ (largest difference 255); first at (0,32): #000000, the reference has #ffffff) |
-| list-style-type-string-005a.html | step 2b | uses flex or grid (19456 pixels differ (largest difference 255); first at (200,12): #000000, the reference has #ffffff) |
-| list-style-type-string-005b.html | step 2b | uses flex or grid (48640 pixels differ (largest difference 255); first at (200,12): #000000, the reference has #ffffff) |
+| list-style-type-string-005a.html | step 2d | uses text features (9728 pixels differ (largest difference 255); first at (592,12): #000000, the reference has #ffffff) |
+| list-style-type-string-005b.html | step 2d | uses text features (38912 pixels differ (largest difference 255); first at (624,12): #ffffff, the reference has #000000) |
 | list-style-type-string-007.html | step 2d | uses text features (5660 pixels differ (largest difference 255); first at (188,18): #ffffff, the reference has #000000) |
 | list-type-none-style-image.html | limit (list-style-image) | list-style-image is not supported (an image marker is a later step) (256 pixels differ (largest difference 255); first at (16,16): #ffffff, the reference has #000000) |
 | marker-counter.html | limit (::marker style) | ::marker supports only `content` (and list-style-type); the test needs the marker box styled (color, font, text-fill) or compared glyph for glyph with the built-in marker (2432 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #000000) |

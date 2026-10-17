@@ -1,0 +1,57 @@
+<!--
+viewport: 400x300
+Flex containers, row direction (css-flexbox-1 5.1, 7, 8.1, 8.2, 9.2-9.7, 4.5; step 2b-1). Font 10px/10px Ahem, body margin 0. Every container is a
+block-level flex container, 100% wide unless a width is set; its items are blockified.
+
+a      div#a width 200, height 20. a1 flex:1 1 0 (min-width:0), a2 flex:2 1 0, a3 width 20 (flex 0 1 auto). Free space (9.7): 200 - 20 = 180 to
+       share 1:2 (the items with a flex base size of 0 and no content): a1 = 60, a2 = 120; a3 stays 20 (it can shrink but there is no negative
+       free space). Items stretch to the line (20 high): a1 (0,0 60x20), a2 (60,0 120x20), a3 (180,0 20x20).
+b      div#b y=20, width 120. b1 width 90, b2 width 60, b3 width 30, all flex-shrink 1: they need 180, 120 are there: negative free space -60 is shared
+       by (shrink factor x flex base size) = 90 : 60 : 30: b1 loses 30, b2 20, b3 10 -> 60, 40, 20 (9.7 step 4c). b1 (0,20 60x20), b2 (60,20 40x20),
+       b3 (100,20 20x20).
+c      div#c y=40, width 200, gap 10px, justify-content center. Items c1 (order 2), c2 (order -1), c3, each 30 wide: in order c2, c3, c1 (5.4).
+       They take 90 + 2 gaps of 10 = 110; the free space 90 is split in two: the first starts at x=45: c2 (45,40 30x20), c3 (85,40 30x20), c1 (125,40 30x20).
+       (The box tree is in order-modified order, so the dump lists c2, c3, c1.)
+d      div#d y=60, width 200, height 40, align-items flex-end. d2 (20 x 10, align-self center) is at the start; d1 (20 x 10, margin-left:auto) takes all the
+       free space in its auto margin (9.5 step 12): x = 200 - 20 = 180. d2 y = 60 + (40 - 10) / 2 = 75; d1 y = 60 + 40 - 10 = 90.
+       The document order is d2, d1: d2 (0,75 20x10), d1 (180,90 20x10).
+e      div#e y=100, width 100, height 60, flex-wrap:wrap, align-content:space-between. Four items 40 x 10: two fit a line (80; a third would make 120 > 100).
+       Two lines of 10: the free cross space 60 - 20 = 40 goes between them (8.4): line 1 at y=100, line 2 at y=100 + 10 + 40 = 150.
+       e1 (0,100 40x10), e2 (40,100 40x10), e3 (0,150 40x10), e4 (40,150 40x10).
+f      div#f y=160, width 30, height 20. f1 flex:1 1 0 holds the word "abcdef" = 60 wide: its automatic minimum size (4.5) is its min-content width, 60,
+       so it does not shrink below that although it has a base size of 0 and the container is only 30 wide. f2 (width 10, flex none) follows it:
+       f1 (0,160 60x20), f2 (60,160 10x20). The container stays 30 wide and the items overflow it.
+check: block div#a :: (0,0 200x20) [display:flex]
+check: block div#a1 :: (0,0 60x20)
+check: block div#a2 :: (60,0 120x20)
+check: block div#a3 :: (180,0 20x20)
+check: block div#b :: (0,20 120x20) [display:flex]
+check: block div#b1 :: (0,20 60x20)
+check: block div#b2 :: (60,20 40x20)
+check: block div#b3 :: (100,20 20x20)
+check: block div#c2 :: (45,40 30x20)
+check: block div#c3 :: (85,40 30x20)
+check: block div#c1 :: (125,40 30x20)
+check: block div#d1 :: (180,90 20x10)
+check: block div#d2 :: (0,75 20x10)
+check: block div#e :: (0,100 100x60) [display:flex]
+check: block div#e1 :: (0,100 40x10)
+check: block div#e2 :: (40,100 40x10)
+check: block div#e3 :: (0,150 40x10)
+check: block div#e4 :: (40,150 40x10)
+check: block div#f :: (0,160 30x20) [display:flex]
+check: block div#f1 :: (0,160 60x20)
+check: block div#f2 :: (60,160 10x20)
+check: block body :: (0,0 400x180)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+.f { display: flex }
+</style>
+<div id="a" class="f" style="width:200px;height:20px"><div id="a1" style="flex:1 1 0;min-width:0"></div><div id="a2" style="flex:2 1 0"></div><div id="a3" style="width:20px"></div></div>
+<div id="b" class="f" style="width:120px;height:20px"><div id="b1" style="width:90px"></div><div id="b2" style="width:60px"></div><div id="b3" style="width:30px"></div></div>
+<div id="c" class="f" style="width:200px;height:20px;gap:10px;justify-content:center"><div id="c1" style="width:30px;order:2"></div><div id="c2" style="width:30px;order:-1"></div><div id="c3" style="width:30px"></div></div>
+<div id="d" class="f" style="width:200px;height:40px;align-items:flex-end"><div id="d2" style="width:20px;height:10px;align-self:center"></div><div id="d1" style="width:20px;height:10px;margin-left:auto"></div></div>
+<div id="e" class="f" style="width:100px;height:60px;flex-wrap:wrap;align-content:space-between"><div id="e1" style="width:40px;height:10px"></div><div id="e2" style="width:40px;height:10px"></div><div id="e3" style="width:40px;height:10px"></div><div id="e4" style="width:40px;height:10px"></div></div>
+<div id="f" class="f" style="width:30px;height:20px"><div id="f1" style="flex:1 1 0">abcdef</div><div id="f2" style="flex:none;width:10px"></div></div>

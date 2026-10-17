@@ -1,0 +1,19 @@
+viewport 400x300
+block html (0,0 400x250)
+  block body (0,0 400x250)
+    block div#a.c (0,0 100x100) [display:flex]
+      block div#a1 (0,0 100x25)
+      block div#a2 (0,25 100x75)
+    block div#b.c (0,100 100x50) [display:flex]
+      block div#b1 (30,100 40x30)
+      block div#b2 (30,130 40x20)
+    block div#c.c (0,150 100x60) [display:flex]
+      block div#c1 (0,200 100x10)
+      block div#c2 (0,180 100x20)
+    block div#d (0,210 200x40) [display:flex]
+      block div#d1 (0,218 20x10)
+        line (0,218 20x10) baseline=226
+          text "aa" (0,218 20x10)
+      block div#d2 (20,210 20x20)
+        line (20,210 20x20) baseline=226
+          text "b" (20,210 20x20)

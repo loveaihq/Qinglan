@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use super::computed::{
-    ComputedStyle, CustomProps, Declared, Env, compute_border, compute_box, compute_font, compute_gen, compute_misc, compute_text,
+    ComputedStyle, CustomProps, Declared, Env, compute_border, compute_box, compute_flex, compute_font, compute_gen, compute_misc, compute_text,
 };
 use super::media::MediaEnv;
 use super::parse_prop::{ParseEnv, parse_declaration};
@@ -1090,7 +1090,8 @@ fn style_for(
     let text = compute_text(&parent.text, &declared, &own, lang);
     let misc = compute_misc(&parent.misc, &init.misc, &declared, &own);
     let gen_ = compute_gen(&parent.gen_, &init.gen_, &declared);
-    ComputedStyle { boxs, border, font, text, misc, gen_, custom }
+    let flex = compute_flex(&parent.flex, &init.flex, &declared, &own);
+    ComputedStyle { boxs, border, font, text, misc, gen_, flex, custom }
 }
 
 /// The value `revert` / `revert-layer` rolls back to for property `p`, looking at `entries[..i]`.

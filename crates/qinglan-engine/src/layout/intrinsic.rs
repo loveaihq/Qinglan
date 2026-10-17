@@ -51,6 +51,7 @@ impl Layouter<'_> {
                 (w, w)
             }
             _ if matches!(bx.fallback, Some(crate::css::types::Display::Table | crate::css::types::Display::InlineTable)) => self.table_widths(id),
+            _ if matches!(bx.fallback, Some(crate::css::types::Display::Flex | crate::css::types::Display::InlineFlex)) => self.flex_widths(id),
             _ if bx.inline_children => self.measure_inline(id),
             _ => {
                 let (mut min, mut max) = (LU::ZERO, LU::ZERO);
@@ -96,6 +97,13 @@ impl Layouter<'_> {
         if let Some(mn) = fixed_len(&bs.min_width).map(to_cw) {
             min = min.max(mn);
             max = max.max(mn);
+        }
+        // `min-width: min-content | max-content` (css-sizing-3 3.1) raises the contribution to the content's own size.
+        if matches!(bs.min_width, Dim::MinContent | Dim::MaxContent) {
+            let (cmin, cmax) = self.content_widths(id);
+            let k = if bs.min_width == Dim::MaxContent { cmax } else { cmin };
+            min = min.max(k);
+            max = max.max(k);
         }
         (min + h_extra + margins, max + h_extra + margins)
     }

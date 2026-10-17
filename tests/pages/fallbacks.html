@@ -1,40 +1,35 @@
 <!--
 viewport: 200x300
-The layer 1 fallbacks (L1 task 9): flex and grid are laid out as blocks (tables are real since step 2a-2, see tables-*.html), their inline forms are atomic
-inlines (inline-block, step 1b-2). Floats are real since step 2a-1 (CSS2 9.5; a floated span is a block because the
+The layer 1 fallbacks (L1 task 9): grid is laid out as a block (flex is real since step 2b-1, see flex-*.html; tables since 2a-2, see tables-*.html), its inline form is an atomic
+inline (inline-block, step 1b-2). Floats are real since step 2a-1 (CSS2 9.5; a floated span is a block because the
 cascade blockifies it, CSS2 9.7). Font 10px/10px, body margin 0, widths are the full 200 unless set.
 
-flex   two children stack: f1 (0,0), f2 (0,10), the flex box is 20 high.
-grid   the text "g1" gets an anonymous block, then g2: 10 + 10 = 20 high at y=20.
-lft    float:left width 50: a float, (0,40 50x10); it takes no room in the flow.
-fr     float:right on a span: shrink-to-fit "x" = 10 wide, at the right edge: (190,40 10x10).
-ib     both floats are at y=40..50, so the line at y=40 is x=50..190 = 140 wide: "before" 60 + inline-block "mid" 30 + "after" 50
+grid   the text "g1" gets an anonymous block, then g2: 10 + 10 = 20 high at y=0.
+lft    float:left width 50: a float, (0,20 50x10); it takes no room in the flow.
+fr     float:right on a span: shrink-to-fit "x" = 10 wide, at the right edge: (190,20 10x10).
+ib     both floats are at y=20..30, so the line at y=20 is x=50..190 = 140 wide: "before" 60 + inline-block "mid" 30 + "after" 50
        = 140 fits exactly. The inline-block is shrink-to-fit, "mid" = 30 wide, 10 high, x=50+60=110, baseline = its text's, so
-       the line is 10 high: div#ib is 10 high at y=40 (the floats do not push it down), "before" starts at x=50.
+       the line is 10 high: div#ib is 10 high at y=20 (the floats do not push it down), "before" starts at x=50.
 abs    position:absolute;top:100px: out of flow, shrink-to-fit "abs" = 30 wide, top = 100 from the initial containing block,
        left = static position = 0: (0,100 30x10). It does not take room in the flow.
-iflex  display:inline-flex: an atomic inline, shrink-to-fit 20 wide, on the line after div#ib (y=50, the abs box takes no room).
-       body = 50 + 10 = 60 high.
-check: block div#flex :: (0,0 200x20) [display:flex]
-check: block div#f1 :: (0,0 200x10)
-check: block div#f2 :: (0,10 200x10)
-check: block div#grid :: (0,20 200x20) [display:grid]
-check: block (anonymous) :: (0,20 200x10)
-check: block div#g2 :: (0,30 200x10)
-check: block div#lft :: (0,40 50x10) [float:left]
-check: block span#fr :: (190,40 10x10) [float:right]
-check: block div#ib :: (0,40 200x10)
-check: text "before" :: (50,40 60x10)
-check: inline-block span#ibs :: (110,40 30x10)
+iflex  display:inline-flex: an atomic inline, shrink-to-fit 20 wide (its one item is the anonymous block of "if"), on the line after div#ib (y=30, the abs box takes no room).
+       body = 30 + 10 = 40 high.
+check: block div#grid :: (0,0 200x20) [display:grid]
+check: block (anonymous) :: (0,0 200x10)
+check: block div#g2 :: (0,10 200x10)
+check: block div#lft :: (0,20 50x10) [float:left]
+check: block span#fr :: (190,20 10x10) [float:right]
+check: block div#ib :: (0,20 200x10)
+check: text "before" :: (50,20 60x10)
+check: inline-block span#ibs :: (110,20 30x10)
 check: block div#abs :: (0,100 30x10) [absolute]
-check: inline-block span#iflex :: (0,50 20x10) [display:inline-flex]
-check: block body :: (0,0 200x60)
+check: inline-block span#iflex :: (0,30 20x10) [display:inline-flex]
+check: block body :: (0,0 200x40)
 -->
 <!doctype html>
 <style>
 body { margin: 0; font: 10px/10px Ahem }
 </style>
-<div id="flex" style="display:flex"><div id="f1" style="height:10px">one</div><div id="f2" style="height:10px">two</div></div>
 <div id="grid" style="display:grid">g1<div id="g2" style="height:10px">g2</div></div>
 <div id="lft" style="float:left;width:50px;height:10px">f</div>
 <span id="fr" style="float:right">x</span>
