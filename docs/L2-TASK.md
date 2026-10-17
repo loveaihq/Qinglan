@@ -51,6 +51,7 @@
 - 真实网页：Hacker News、两个 GBK 老网站、维基信息框，和 Edge 对比明显改善。
 
 ## 2b flex 和 grid
+为了省用量，2b 分两小步：**2b-1** flex，**2b-2** grid，并重跑真实网页对比；2b-2 之后做第 2 层的第一次审查（2a + 2b）。
 
 - **flex**（css-flexbox-1 全部）：方向、换行、`order`、`flex-grow/shrink/basis`、`min-width: auto` 的自动最小尺寸、固有尺寸、`justify-content`、`align-items/self/content`、基线对齐、多行、`gap`。
 - **grid**（css-grid-1 主体，加 `gap`）：显式和隐式轨道、`fr`、`repeat()`（含 `auto-fill`/`auto-fit`）、`minmax()`、命名线和命名区域、自动放置（含 `dense`）、对齐、轨道尺寸算法（11.5–11.8）。不做 subgrid、masonry。
