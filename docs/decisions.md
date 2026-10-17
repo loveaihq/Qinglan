@@ -921,3 +921,55 @@ bug 类共 51 条，**没有修完**：每条在 `notes.txt` 里有原因（家�
 - `white-space: nowrap` 的行和浮动、浮动在行内元素里的盒边。
 - 表格里的生成内容、层叠上下文和命中检测（2a-2）。
 - 行尾保留换行之后的空行（`content-175`）。
+
+## 第 2 层 · 2a-2 表格、层叠顺序、WPT、真实网页（2026-10-17）
+
+接着 2a-1（`26b5823`）。代码在 `layout/table.rs`（新）、`layout/boxtree.rs`（匿名表格对象）、`paint/build.rs`、`interact.rs`、`css/`。
+
+### 1. 盒子树：表格的各个部分和匿名对象（CSS2 17.2.1，`boxtree.rs`）
+
+- 表格部分仍是 `BoxKind::Block`，`fallback` 记着它的 `display`（`role_of` 把它分成 表/行组/行/单元格/列/列组/标题）；`inline-table` 是 `InlineBlock`，`fallback = InlineTable`。
+- `finish_block` 先看自己的角色：表、行组、行、列组的孩子过 `fix_table`——不合格的孩子（行组里的单元格、表里的文字……）每一段连续的包进一个匿名行（再包进匿名单元格），表里的行再包进匿名行组；其他盒子里的表格部分（连着的一段）包进匿名表格，**在行内元素里是匿名 `inline-table`**（不把行内盒拆开，`table-anonymous-objects-167` 一类）。表格部分之间的空白文字不产生盒子。
+- 表的孩子按这个顺序排：列和列组、标题、第一个 `thead`、其他行组、第一个 `tfoot`（CSS2 17.2：表头总在上、表尾总在下；多出来的 `thead`/`tfoot` 当普通行组）。
+- **单元格的内容放进一个匿名块**（`finish_block` 的 `Role::Cell`）：`vertical-align` 是挪这个块的 `y`，不用重排单元格（嵌套表格重排两次会指数增长）。
+- `border-collapse`、`border-spacing`、`empty-cells`、`caption-side`（继承，放在 `TextStyle`）和 `table-layout`（`BoxStyle`）进了层叠；UA 样式表：`table { border-spacing: 2px }`、`th { text-align: center }`（浏览器是 `-internal-center`：父元素设了 `text-align` 就听父元素的，没做，`th-text-align` 失败）；`cellspacing` 属性是 `border-spacing` 的提示。
+
+### 2. 表格布局（`layout/table.rs`）
+
+- **格子**（HTML 4.9.12）：单元格占本行第一个空位，`colspan` 上限 1000（HTML 的上限），`rowspan` 上限 65534 且不超出行组（`rowspan=0` 到行组末尾），列数上限 1000，行数上限 65534；只有 `td`/`th` 看这两个属性。格子的数据只有单元格表（位置、跨度），**不是 行×列 的二维数组**，所以大小跟单元格数成正比。排版用的工作量（`charge`）：单元格 + 行 + 列。表格整个排完，不在里面停（第一屏优先的停止线对表格无效，`no_stop`）。
+- **列宽（自动布局）**：每个单元格最小/最大内容宽度 = 内容的（`content_widths`）+ 内边距 + 边框；有固定 `width` 的单元格最大宽度 = 这个宽度（最小不变），百分比宽度记在列上（`content-box` 时再加内边距和边框，`fixed-table-layout-025` 一类）。单列单元格定列的最小/最大/固定/百分比；跨列的单元格把需要的部分按各列最大宽度的比例补给它们（先处理跨得少的）。**分配**（css-tables-3 "distributing excess width"、浏览器的做法）：每列从最小宽度起，多出来的先给有百分比的列（到百分比算出来的宽度），再给有固定宽度的列（到固定宽度），再给其余的（到最大宽度），最后还多的按现有宽度比例给自动列（没有自动列给固定列，再给全部）。表宽 `auto` 时取 `min(max(最小, 可用), 最大)`（最大宽度要把百分比列算进去）；有 `width` 取 `width`，但不小于最小宽度；还不小于最宽的标题。
+- **固定布局**（17.5.2.1）：`table-layout: fixed` 并且 `width` 不是 `auto`；列宽取 `col` 的宽度、没有就取第一行单元格的宽度（跨列的均分，百分比按表宽），没有宽度的列平分剩下的；单元格盒子宽度就是列宽（内边距比列宽还大时盒子也不比列宽大）。
+- **行高**：单元格按列宽排完得到自然高度；行高 = 单元格自然高度、单元格 `height`、`tr` 的 `height` 的最大值，基线对齐的单元格按"基线以上最大 + 基线以下最大"算；跨行的单元格缺的高度平均补给它跨的行；表的 `height`/`min-height` 比内容大时，多的按行高比例补给各行（空表也按它长高）。`vertical-align` 只认 top/middle/bottom/baseline（别的当 baseline）；基线 = 第一行的基线，没有就是内容区底边。
+- **标题**（17.4）：表盒子（`BoxOut`）是整个"表包装盒"（标题包括在内），表自己的背景和边框只画格子盒：`LayoutResult::tables[表].y/h`（有标题或合并边框时才有这一项）；标题的宽度 = 表盒宽度（表至少和最宽的标题一样宽）；`caption-side: bottom` 放在下面。标题的相对定位偏移照做。
+- **`empty-cells: hide`**（17.6.1.1）：分离边框模型里，内容高度为 0 的单元格不画背景和边框（`BoxOut::hide`）。**没做**：整行都是这样的单元格时这一行没有高度（`empty-cells-applies-to-011/012/017`）。
+- **`visibility: collapse`**：只做了行（行和它后面的间距都没有；单元格因为继承 `visibility` 也不画）；列和跨过被折叠的行/列的单元格没做（`visibility-collapse-*`、`column-visibility-*`）。
+- 没做：HTML 的 `rules`/`frame` 属性（`rules-groups`）、`col`/`colgroup` 的边框和合并边框冲突里它们的位置、单元格百分比高度（当 `auto`，`percent-height-*`）、表格分页。
+
+### 3. 边框（17.6）
+
+- 分离模型：和块一样画盒子的边框，间距是 `border-spacing`。表格的内边距照常。
+- **合并模型**：先把所有格线的边框摊平——表、行组、行、单元格各自的边框放进它们贴着的格线（`Edge`），按 17.6.2.1 选：`hidden` 压倒一切，其余先比宽度，再比样式（`double > solid > dashed > dotted > ridge > outset > groove > inset`），再比谁离单元格近（单元格 > 行 > 行组 > 表），完全一样时先放进去的（左上的单元格）留下。**列和列组的边框不参与**。边的宽度取整数像素（和 Blink 一样，`border_px`）；一条边两边的盒子各得一半，**前面的得小的（向下取整），后面的得大的**（1px 的边：前一个格子 0、后一个 1），表的外边也是（表是"前面"的：上、左边得小的）。表在合并模型里没有内边距，边框宽度就是这样得来的；单元格的边框宽度也用这个（`Flow::cell_bor`）。边的数组（上下各一份）最多 262144 格，更大的表退回分离模型（`MAX_EDGE_SLOTS`），画不出合并边框。
+- 画法：排版时把每条边变成矩形（`TableInfo::segs`，相对表盒子，同色同宽相邻的合并），绘制时在表的子孙背景之后画（所以在单元格背景之上、文字之下）；垂直的边在两头伸出相邻水平边宽度的一半，转角不留缺口；表、行组、行、单元格、列自己的边框在合并模型里不画。`double`、`dotted` 等样式按实线画（2c 做）。
+
+### 4. 层叠顺序（CSS2 附录 E，`layout/mod.rs`、`paint/build.rs`、`interact.rs`）
+
+- 层叠上下文：根、有 `z-index`（不是 `auto`）的定位盒、`position: fixed`（`makes_context`；不安排 `opacity`/`transform`，2c 往 `makes_context` 加一行就行）。每个定位盒记它属于哪个上下文（`ctx`：沿 `parent` 往上第一个造上下文的盒子）和是不是 `z-index: auto`；`LayoutResult::stacked` 按 (上下文, z-index, 文档顺序) 排好，`stacked_in(ctx)` 二分取一个上下文的那一段。`below`/`above`（全局一份）留着，布局转储用。
+- 画法：一个上下文的顺序是：自己的背景和边框、负 `z-index` 的孩子（按 z、文档顺序，每个孩子是自己的上下文）、流内块的背景和边框、浮动、流内行内内容、`z-index: auto`/0 的定位盒（按文档顺序；`auto` 的像一个上下文那样画，但它里面的定位盒属于外面的上下文）、正的。`fixed_below`（固定盒画在页面下面的那一段）现在是根的负 z-index 孩子画完之后的位置。`positioned()` 画完恢复调用前的裁剪和固定标志（嵌套上下文里不丢）。
+- **点击检测**（`link_at`）：`PageIndex` 按上面的顺序给每个上下文的"流内内容"和每个 `z-index: auto` 定位盒编一个号（`rank_context`，后画的号大）；一个字块的号 = 沿 `parent` 往上找到的第一个有号的盒子的号；碰到的字块里号最大的赢，号相同取树里靠后的。只有文字和原子行内（图片等）参与点击检测（和以前一样）：`z-index` 更高的盒子里的文字或图片盖在链接上面时，下面的链接点不中；盖在上面的只是背景、没有文字，下面的链接仍然点得中（没做"背景挡住鼠标"）。
+
+### 5. WPT（`qinglan-cli wpt <目录>`，提交 3bcf9ec）
+
+| 目录 | 通过 / 可判定 | bug 类 | 说明 |
+|---|---|---|---|
+| css/CSS2/tables | 219 / 250（87.6%） | 26 | 每条在 notes.txt（`bug (open)` 写了家族原因；没逐个看的写"没分析"）；其余失败：bug (open) 26，not planned 1，step 2c 4 |
+| css/CSS2/zindex | 29 / 29（100%） | 0 | |
+| css/css-tables | 89 / 140（63.6%） | 31 | 同上；其余失败是后面步骤的特性（分类见 `RESULTS-*.md`：bug (open) 31，limit (print) 2，step 2b 1，step 2c 7，step 2d 6，step 2e 4），打印分页 2 条记 `limit (print)` |
+
+- 拷了 419 个有 `rel=match|mismatch`、没有 `<script>` 的页面和它们引用的文件（`tests/wpt/` 共 2.7 MB）。分类器去掉了"用了表格 = 2a-2"那条（`classify`），所以表格的失败现在算 bug。
+- 修了的（在这一步里，通过数从第一次的 164 / 250、80 / 140 涨到现在）：空白在匿名表格的两个部分之间截断了连续段（一个匿名表被拆成好几个）；`display: table` 的空表有 `height`/`width`；单元格百分比宽度要加内边距和边框；列元素的百分比宽度（固定布局）；单元格盒子不比列宽大；行内元素里的表格部分做匿名 `inline-table`；`inline-table` 的基线是第一行的；表至少和最宽的标题一样宽；`min-height`；标题的相对定位；行的 `visibility: collapse`。
+- `passing.txt` 807 条，`--check` 全过（以前的 470 条一条没退步）。
+
+### 6. 没做的 / 留给后面
+
+- `visibility: collapse` 的列、整行 `empty-cells: hide` 的行、`rules`/`frame`、列和列组的边框、单元格百分比高度、`th` 的 `-internal-center`、标题的最小宽度算进 `content_widths`（嵌套里）、表格的 `clip` 用样式边框不是合并后的（`overflow: hidden` 的合并表格差 1px 左右）。
+- 表格里 `position: relative` 的单元格/行/行组的偏移没有做（只有标题做了）。

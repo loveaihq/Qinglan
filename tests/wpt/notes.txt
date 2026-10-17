@@ -111,3 +111,76 @@ css/css-lists/list-type-none-style-image.html	limit (list-style-image)	list-styl
 css/css-lists/marker-counter.html	limit (::marker style)	::marker supports only `content` (and list-style-type); the test needs the marker box styled (color, font, text-fill) or compared glyph for glyph with the built-in marker
 css/css-lists/marker-webkit-text-fill-color.html	limit (::marker style)	::marker supports only `content` (and list-style-type); the test needs the marker box styled (color, font, text-fill) or compared glyph for glyph with the built-in marker
 css/css-lists/nested-marker-styling.html	limit (::marker style)	::marker supports only `content` (and list-style-type); the test needs the marker box styled (color, font, text-fill) or compared glyph for glyph with the built-in marker
+css/CSS2/tables/border-collapse-offset-001.xht	bug (open)	collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one
+css/CSS2/tables/border-collapse-visibility-collapse-001.tentative.html	bug (open)	visibility: collapse is done for rows (the row and its spacing go); columns, and cells that span collapsed rows or columns, are not
+css/CSS2/tables/border-conflict-element-001d.xht	bug (open)	collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one
+css/CSS2/tables/collapsing-border-model-013.html	bug (open)	collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one
+css/CSS2/tables/collapsing-border-model-014.html	bug (open)	collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one
+css/CSS2/tables/empty-cells-applies-to-011.xht	bug (open)	a row whose cells are all empty with empty-cells: hide has no height (CSS2 17.6.1.1); not done
+css/CSS2/tables/empty-cells-applies-to-012.xht	bug (open)	a row whose cells are all empty with empty-cells: hide has no height (CSS2 17.6.1.1); not done
+css/CSS2/tables/empty-cells-applies-to-017.xht	bug (open)	a row whose cells are all empty with empty-cells: hide has no height (CSS2 17.6.1.1); not done
+css/CSS2/tables/fixed-table-layout-017.xht	bug (open)	fixed layout with col / colgroup elements (width in %, span, widths on the group): not analyzed one by one
+css/CSS2/tables/fixed-table-layout-018.xht	bug (open)	fixed layout with col / colgroup elements (width in %, span, widths on the group): not analyzed one by one
+css/CSS2/tables/fixed-table-layout-019.xht	bug (open)	fixed layout with col / colgroup elements (width in %, span, widths on the group): not analyzed one by one
+css/CSS2/tables/fixed-table-layout-020.xht	bug (open)	fixed layout with col / colgroup elements (width in %, span, widths on the group): not analyzed one by one
+css/CSS2/tables/fixed-table-layout-021.xht	bug (open)	fixed layout with col / colgroup elements (width in %, span, widths on the group): not analyzed one by one
+css/CSS2/tables/fixed-table-layout-022.xht	bug (open)	fixed layout with col / colgroup elements (width in %, span, widths on the group): not analyzed one by one
+css/CSS2/tables/fixed-table-layout-023.xht	bug (open)	fixed layout with col / colgroup elements (width in %, span, widths on the group): not analyzed one by one
+css/CSS2/tables/fixed-table-layout-027.xht	bug (open)	fixed layout with col / colgroup elements (width in %, span, widths on the group): not analyzed one by one
+css/CSS2/tables/table-anonymous-objects-079.xht	bug (open)	font-family: monospace with white-space: nowrap on body: the text of the red and green parts differs on the test platform; not analyzed
+css/CSS2/tables/table-anonymous-objects-080.xht	bug (open)	font-family: monospace with white-space: nowrap on body: the text of the red and green parts differs on the test platform; not analyzed
+css/CSS2/tables/table-anonymous-objects-081.xht	bug (open)	font-family: monospace with white-space: nowrap on body: the text of the red and green parts differs on the test platform; not analyzed
+css/CSS2/tables/table-anonymous-objects-082.xht	bug (open)	font-family: monospace with white-space: nowrap on body: the text of the red and green parts differs on the test platform; not analyzed
+css/CSS2/tables/table-anonymous-objects-083.xht	bug (open)	font-family: monospace with white-space: nowrap on body: the text of the red and green parts differs on the test platform; not analyzed
+css/CSS2/tables/table-anonymous-objects-084.xht	bug (open)	font-family: monospace with white-space: nowrap on body: the text of the red and green parts differs on the test platform; not analyzed
+css/CSS2/tables/table-anonymous-objects-085.xht	bug (open)	font-family: monospace with white-space: nowrap on body: the text of the red and green parts differs on the test platform; not analyzed
+css/CSS2/tables/table-anonymous-objects-086.xht	bug (open)	font-family: monospace with white-space: nowrap on body: the text of the red and green parts differs on the test platform; not analyzed
+css/CSS2/tables/table-anonymous-objects-211.xht	bug (open)	not analyzed
+css/CSS2/tables/table-vertical-align-baseline-009.xht	bug (open)	baseline details of table cells and inline-tables (empty cells, absolutely positioned boxes in a cell); not analyzed
+css/css-tables/absolute-tables-008.tentative.html	bug (open)	absolutely positioned tables with height / insets: not analyzed
+css/css-tables/absolute-tables-009.tentative.html	bug (open)	absolutely positioned tables with height / insets: not analyzed
+css/css-tables/absolute-tables-010.tentative.html	bug (open)	absolutely positioned tables with height / insets: not analyzed
+css/css-tables/absolute-tables-011.tentative.html	bug (open)	absolutely positioned tables with height / insets: not analyzed
+css/css-tables/baseline-empty-cell-001.html	bug (open)	baseline details of table cells and inline-tables (empty cells, absolutely positioned boxes in a cell); not analyzed
+css/css-tables/border-collapse-double-border.html	bug (open)	collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one
+css/css-tables/calc-percent-plus-0px-auto.html	bug (open)	calc() with a percentage in the width of a table or cell is treated as auto; not analyzed further
+css/css-tables/calc-percent-plus-0px-fixed.html	bug (open)	calc() with a percentage in the width of a table or cell is treated as auto; not analyzed further
+css/css-tables/caption-relative-positioning.html	bug (open)	not analyzed
+css/css-tables/col-definite-max-size-001.html	bug (open)	min-width / max-width / width on a col element are not applied (only a fixed width or % width is)
+css/css-tables/col-definite-min-size-001.html	bug (open)	min-width / max-width / width on a col element are not applied (only a fixed width or % width is)
+css/css-tables/col-definite-size-001.html	bug (open)	min-width / max-width / width on a col element are not applied (only a fixed width or % width is)
+css/css-tables/collapsed-border-fragmentation-001-print.html	limit (print)	a reftest for paged media (print fragmentation); the harness renders the screen
+css/css-tables/collapsed-border-fragmentation-002-print.html	limit (print)	a reftest for paged media (print fragmentation); the harness renders the screen
+css/css-tables/collapsed-border-positioned-tr-td.html	bug (open)	collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one
+css/css-tables/percent-height-replaced-in-percent-cell-002.html	bug (open)	a percentage height inside a table cell is treated as auto (the cell height is not definite when its content is laid out)
+css/css-tables/percent-height-replaced-in-percent-cell-003.html	bug (open)	a percentage height inside a table cell is treated as auto (the cell height is not definite when its content is laid out)
+css/css-tables/percent-height-replaced-in-percent-cell-004.html	bug (open)	a percentage height inside a table cell is treated as auto (the cell height is not definite when its content is laid out)
+css/css-tables/percentages-grandchildren-quirks-mode-002.html	bug (open)	a percentage height inside a table cell is treated as auto (the cell height is not definite when its content is laid out)
+css/css-tables/rules-groups.html	bug (open)	the HTML rules / frame attributes are not implemented (only the UA colour rule is there)
+css/css-tables/table-cell-baseline-static-position.html	bug (open)	baseline details of table cells and inline-tables (empty cells, absolutely positioned boxes in a cell); not analyzed
+css/css-tables/table-intrinsic-size-001.html	bug (open)	the min-content size of a table whose width is smaller than its content (shrink-to-fit outer box): not analyzed
+css/css-tables/table-intrinsic-size-002.html	bug (open)	the min-content size of a table whose width is smaller than its content (shrink-to-fit outer box): not analyzed
+css/css-tables/tentative/border-collapse-spanning-cells-002.html	bug (open)	collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one
+css/css-tables/tentative/border-collapse-spanning-cells-003.html	bug (open)	collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one
+css/css-tables/tentative/border-collapse-spanning-cells-004.html	bug (open)	collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one
+css/css-tables/tentative/padding-percentage.html	bug (open)	percentage padding of cells: not analyzed
+css/css-tables/tentative/paint/collapsed-border-large-cell.html	bug (open)	collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one
+css/css-tables/tentative/paint/overflow-hidden-table.html	bug (open)	not analyzed
+css/css-tables/th-text-align.html	bug (open)	th uses text-align: center; browsers use -internal-center (the parent value wins when it is set); not done
+css/css-tables/visibility-collapse-border-spacing-002.html	bug (open)	visibility: collapse is done for rows (the row and its spacing go); columns, and cells that span collapsed rows or columns, are not
+css/css-tables/visibility-collapse-colspan-003.html	bug (open)	visibility: collapse is done for rows (the row and its spacing go); columns, and cells that span collapsed rows or columns, are not
+css/css-tables/visibility-collapse-rowspan-005.html	bug (open)	visibility: collapse is done for rows (the row and its spacing go); columns, and cells that span collapsed rows or columns, are not
+css/CSS2/floats/floats-in-table-caption-001.html	bug (open)	used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (122,80): #ffffff, the reference has #000000); not analyzed one by one
+css/CSS2/floats/floats-wrap-bfc-005.xht	bug (open)	used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (208,8): #000000, the reference has #00ffff); not analyzed one by one
+css/CSS2/floats/floats-wrap-bfc-006.xht	bug (open)	used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (218,122): #800080, the reference has #00ffff); not analyzed one by one
+css/CSS2/floats/table-sizing-with-adjacent-floats.html	bug (open)	used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (8,64): #ffffff, the reference has #008000); not analyzed one by one
+css/CSS2/floats-clear/clear-applies-to-013.xht	bug (open)	used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (8,120): #ffffff, the reference has #0000ff); not analyzed one by one
+css/CSS2/floats-clear/margin-collapse-122.xht	bug (open)	used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (27,67): #ff0000, the reference has #00ffff); not analyzed one by one
+css/CSS2/floats-clear/margin-collapse-125.xht	bug (open)	used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (27,67): #ff0000, the reference has #00ffff); not analyzed one by one
+css/CSS2/floats-clear/margin-collapse-134.xht	bug (open)	used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (24,150): #000000, the reference has #ffffff); not analyzed one by one
+css/CSS2/floats-clear/margin-collapse-142.xht	bug (open)	used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (27,83): #ff0000, the reference has #00ffff); not analyzed one by one
+css/CSS2/floats-clear/margin-collapse-157.xht	bug (open)	used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (11,67): #ffffff, the reference has #000000); not analyzed one by one
+css/CSS2/floats-clear/margin-collapse-clear-009.xht	bug (open)	used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (29,175): #ffffff, the reference has #000000); not analyzed one by one
+css/CSS2/floats-clear/table-among-floats-001.html	bug (open)	used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (133,64): #ff0000, the reference has #008000); not analyzed one by one
+css/CSS2/generated-content/before-after-table-whitespace-001.xht	bug (open)	used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (17,61): #000000, the reference has #ffffff); not analyzed one by one
+css/css-lists/inline-list-with-table-child.html	bug (open)	used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (25,25): #ffffff, the reference has #000000); not analyzed one by one

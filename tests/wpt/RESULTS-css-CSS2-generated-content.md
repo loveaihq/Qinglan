@@ -1,26 +1,21 @@
 # WPT `css/CSS2/generated-content`
 
-测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/CSS2/generated-content`，用时 1.6 秒。
+测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/CSS2/generated-content`，用时 1.3 秒。
 
-- 通过 **181 / 205**（88.3%）
-- bug 类失败：**2**
+- 通过 **186 / 205**（90.7%）
+- bug 类失败：**3**
 - 跳过：needs JS 21，no reftest 90
 
-失败分类：bug (open) 2，limit (counter styles) 2，limit (css-lists-3 counter scope) 3，limit (test platform) 3，limit (xhtml as html) 4，step 2a-2 8，step 2d 2
+失败分类：bug (open) 3，limit (counter styles) 2，limit (css-lists-3 counter scope) 3，limit (test platform) 3，limit (xhtml as html) 4，not planned 1，step 2a-2 1，step 2d 2
 
 ## 失败
 
 | 测试 | 类别 | 说明 |
 |---|---|---|
-| after-content-display-012.xht | step 2a-2 | uses tables (25088 pixels differ (largest difference 255); first at (8,80): #ffff00, the reference has #ffffff) |
-| after-content-display-013.xht | step 2a-2 | uses tables (25088 pixels differ (largest difference 255); first at (8,80): #ffff00, the reference has #ffffff) |
-| before-after-table-parts-001.xht | step 2a-2 | uses tables (136305 pixels differ (largest difference 255); first at (15,244): #00ffff, the reference has #ffffff) |
-| before-after-table-whitespace-001.xht | step 2a-2 | uses tables (14284 pixels differ (largest difference 255); first at (15,28): #000000, the reference has #ffffff) |
-| before-content-display-012.xht | step 2a-2 | uses tables (27648 pixels differ (largest difference 255); first at (8,64): #ffff00, the reference has #000000) |
-| before-content-display-013.xht | step 2a-2 | uses tables (27648 pixels differ (largest difference 255); first at (8,64): #ffff00, the reference has #000000) |
+| before-after-table-parts-001.xht | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation ...) (10466 pixels differ (largest difference 255); first at (104,290): #0000ff, the reference has #ffffff) |
+| before-after-table-whitespace-001.xht | bug (open) | used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (17,61): #000000, the reference has #ffffff); not analyzed one by one (5120 pixels differ (largest difference 255); first at (17,61): #000000, the reference has #ffffff) |
 | bidi-generated-content-001.xht | step 2d | unicode-bidi/direction in generated content: bidi is step 2d (256 pixels differ (largest difference 255); first at (520,80): #000000, the reference has #ffffff) |
 | bidi-generated-content-002.xht | step 2d | unicode-bidi/direction in generated content: bidi is step 2d (768 pixels differ (largest difference 255); first at (104,80): #000000, the reference has #ffffff) |
-| content-081.xht | step 2a-2 | uses tables (3080 pixels differ (largest difference 255); first at (10,78): #000000, the reference has #ffffff) |
 | content-082.xht | step 2a-2 | generated content in a table cell (td:before); tables are step 2a-2 (16 pixels differ (largest difference 238); first at (10,81): #0000ee, the reference has #008000) |
 | content-174.xht | limit (test platform) | the generated text (white-space:nowrap, 53 glyphs of monospace 16px) is 848 px wide in the test platform, the reference wraps at the 800 px viewport; with a real monospace font it fits (256 pixels differ (largest difference 255); first at (648,8): #008000, the reference has #ffffff) |
 | content-175.xht | bug (open) | an inline box whose ::after ends in a preserved newline (white-space:pre, "  \A"): after the forced break the closing padding of the inline box goes to a new empty line (layout shows a third line box holding only the [last] inline fragment); browsers keep it on the broken line and make no extra line (5888 pixels differ (largest difference 255); first at (376,72): #ffffff, the reference has #000080) |
@@ -49,6 +44,8 @@
 - after-content-display-009.xht
 - after-content-display-010.xht
 - after-content-display-011.xht
+- after-content-display-012.xht
+- after-content-display-013.xht
 - after-content-display-014.xht
 - after-content-display-015.xht
 - after-content-display-016.xht
@@ -77,6 +74,8 @@
 - before-content-display-009.xht
 - before-content-display-010.xht
 - before-content-display-011.xht
+- before-content-display-012.xht
+- before-content-display-013.xht
 - before-content-display-014.xht
 - before-content-display-015.xht
 - before-content-display-016.xht
@@ -145,6 +144,7 @@
 - content-076.xht
 - content-077.xht
 - content-080.xht
+- content-081.xht
 - content-083.xht
 - content-085.xht
 - content-086.xht

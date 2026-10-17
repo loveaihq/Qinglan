@@ -353,9 +353,6 @@ fn compare(x: &Frame, y: &Frame, fuzzy: Option<(u32, u32)>) -> Result<(), String
 fn classify(src: &str) -> Option<(&'static str, &'static str)> {
     let s = src.to_ascii_lowercase().replace(": ", ":");
     let has = |ns: &[&str]| ns.iter().any(|n| s.contains(n));
-    if has(&["display:table", "display:inline-table", "<table", "table-cell", "table-row", "table-caption"]) {
-        return Some(("2a-2", "tables"));
-    }
     if has(&["display:flex", "display:inline-flex", "display:grid", "flex:", "grid-template"]) {
         return Some(("2b", "flex or grid"));
     }

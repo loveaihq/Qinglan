@@ -218,3 +218,25 @@
 - 电池、别的会话有 1–12 个 rustc 时同一个 bench 量过（解码已挪到后台、探头还在界面线程）：`scroll-max-ours-ms` 142–462（另有 49–50 帧贴窗口超过 50 ms），这些数字不能当结果。当时用临时计时查出最长的事件是 `Page::apply_image` 里的 WIC 探头（每张图 60–460 ms），不是解码；原因和改法见 decisions.md 2-0 第 5 节。
 - 没有重新量速度对比（旧、新交替）：这一步没动排版和光栅，只动了图片的启动和补画；首屏和启动的数字只是参考。
 - 测试：`cargo test --workspace`：294 个通过、0 个失败；`cargo clippy --workspace --all-targets`：0 条警告。新增 4 个测试（异步解码 3 个在 `tests/paint.rs`，读头部 1 个在 `qinglan-win`）。
+
+## 第 2 层 · 2a 之后重跑（2026-10-17，2a-2 收尾）
+
+方法同上：`tools/corpus_run.py render`（`qinglan-cli render --width 1280 --height 2400 --replay`）、`edge`（Edge 无头，JS 关，每页一个新的空 `--user-data-dir`，放在临时目录里，不碰用户的 profile）、`compose`、`check`。Edge 这次重新抓了实时网页，所以和录制的内容有出入（新闻、论坛首页的文字不同）。**`bench` 没重跑**（速度在 2a 末的空闲机器上统一量）。逐页看图的只有 hn-front、zol-gbk、enwiki-popul、zhwiki-rust；其余页只看了指标（`check`）和上次的分类，所以下面"哪些页变好了"只对这四页有把握。
+
+**汇总**
+
+- 49 / 49 能打开，没有崩溃、卡死、错误页（`render` 49 页全部 exit 0，8 秒跑完）。方块（`.notdef`）0；GBK、Big5、Shift_JIS 页的字仍然对。
+- **U+FFFD**：只有 `rust-std-vec` 的排版文字里有 49 个，来自 rustdoc 的 `.item-info .stab::before { content: "\0"; color: transparent }`（CSS Syntax 4.3.7：转义 `\0` 是 U+FFFD；字是透明的，看不见，Edge 也是这样）。不是乱码。
+- **表格**：Hacker News 首页和单条（`hn-front`、`hn-item`）、维基的 wikitable（`enwiki-popul` 的大表格：合并边框、列宽、表头、标题行的位置和 Edge 对得上）、维基的提示框（`zhwiki-rust` 的消歧义框，一个有边框的表格）、`v2ex-topic`、GBK 老站（`zol-gbk`、`pconline-gbk`）里的表格现在是真表格。HN 的版面和 Edge 一样（以前"几乎一致，行内间距略不同"，现在没有看出差别；缺的只有投票箭头和 Y 标志，图片录制时没取到）。
+- **文字覆盖率**（`check`）：多数页和第 1 层一样；掉下来的：enwiki-main 69.7%（以前 99.9%）、enwiki-popul 85.3%、jawiki-japan 89.3%、zhwiki-beijing 90.1%、enwiki-hk 90.8%、enwiki-rust 92.6%、zhwiki-apple 95.3%、zhwiki-rust 96.6%、zol-gbk 96.6%（以前都是 100%）；asahi-home 33.2%（和第 1 层一样，没变）。我的判断（**没有逐页验证**）：不是丢字——`check` 按 12 个字符一块对比，2a-1 的生成内容（维基引用的 `[`、`]`，分隔符 `·`）在 DOM 文字里没有、排版里有，插在中间让包着它们的块对不上（`extra_absent` 和 `dropped_absent` 是同一个数量级）。检查方法没改，下一步要是在意再把生成内容从排版文字里剔掉。
+- 没有观察到表格造成的新崩溃、卡死、乱码。
+
+**和 Edge 的差别**：没有逐页重新分类。已看的四页和指标说明：剩下的差别和上一轮一样，几乎都是第 2 层后面的特性——Vector 2022 / GitHub / MDN / 新闻站的 flex、grid 布局（2b），背景、渐变、圆角、阴影、背景图（2c），SVG、表单控件的外观（搜索框画成空框，2e）。以前"表格退路"的那几页（hn-front、hn-item、enwiki-popul、zol-gbk、pconline-gbk），现在的差别都是上面三类。
+
+**疑似 bug 清单（这一轮）**
+
+1. `check` 的覆盖率因生成内容变低（上面）：检查方法的问题，不是引擎丢字（推测，未逐页验证）。
+2. asahi-home 33.2%：第 1 层就有，没有调查。
+3. 没有需要修的崩溃、卡死、乱码，所以这一轮没有改引擎。
+
+WPT 和表格的细节（没做的）在 `docs/decisions.md` 的 2a-2 一节。

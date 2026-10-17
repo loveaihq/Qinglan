@@ -1,12 +1,12 @@
 # WPT `css/css-lists`
 
-测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-lists`，用时 1.2 秒。
+测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-lists`，用时 0.9 秒。
 
 - 通过 **80 / 143**（55.9%）
-- bug 类失败：**14**
+- bug 类失败：**15**
 - 跳过：needs JS 28，no reftest 48
 
-失败分类：bug (open) 14，limit (::marker style) 8，limit (css-lists-3 reversed()) 32，limit (list-style-image) 1，step 2a-2 1，step 2b 2，step 2c 2，step 2d 3
+失败分类：bug (open) 15，limit (::marker style) 8，limit (css-lists-3 reversed()) 32，limit (list-style-image) 1，step 2b 2，step 2c 2，step 2d 3
 
 ## 失败
 
@@ -51,7 +51,7 @@
 | inline-block-list-marker.html | limit (::marker style) | ::marker supports only `content` (and list-style-type); the test needs the marker box styled (color, font, text-fill) or compared glyph for glyph with the built-in marker (38796 pixels differ (largest difference 255); first at (56,30): #000000, the reference has #ffffff) |
 | inline-block-list.html | bug (open) | marker of an inline-level list item (display:inline / inline-block list-item): css-lists-3 3.1 gives them no outside marker; the engine draws one at the wrong place; not related to floats (40140 pixels differ (largest difference 255); first at (56,30): #000000, the reference has #ffffff) |
 | inline-list-marker.html | limit (::marker style) | ::marker supports only `content` (and list-style-type); the test needs the marker box styled (color, font, text-fill) or compared glyph for glyph with the built-in marker (51113 pixels differ (largest difference 255); first at (57,0): #000000, the reference has #ffffff) |
-| inline-list-with-table-child.html | step 2a-2 | uses tables (140756 pixels differ (largest difference 255); first at (25,25): #ffffff, the reference has #000000) |
+| inline-list-with-table-child.html | bug (open) | used to be classed "2a-2 tables" (the page has a table); it still fails now that tables exist (first difference: (25,25): #ffffff, the reference has #000000); not analyzed one by one (21176 pixels differ (largest difference 255); first at (25,25): #ffffff, the reference has #000000) |
 | inline-list.html | bug (open) | marker of an inline-level list item (display:inline / inline-block list-item): css-lists-3 3.1 gives them no outside marker; the engine draws one at the wrong place; not related to floats (51933 pixels differ (largest difference 255); first at (55,0): #000000, the reference has #ffffff) |
 | li-value-reversed-006a.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (2360 pixels differ (largest difference 255); first at (8,40): #000000, the reference has #ffffff) |
 | li-value-reversed-006b.html | limit (css-lists-3 reversed()) | uses counter-reset: reversed(name) or an <ol reversed> with reversed() counters (css-lists-3 4.4.1/4.5): not in the 2a-1 task (counter-reset/increment/set of CSS2 12.4 only); the plain counter-reset name N form works (2740 pixels differ (largest difference 255); first at (8,20): #000000, the reference has #ffffff) |
