@@ -1,10 +1,10 @@
 <!--
 viewport: 200x300
-The layer 1 fallbacks (L1 task 9): grid is laid out as a block (flex is real since step 2b-1, see flex-*.html; tables since 2a-2, see tables-*.html), its inline form is an atomic
-inline (inline-block, step 1b-2). Floats are real since step 2a-1 (CSS2 9.5; a floated span is a block because the
+The layer 1 fallbacks (L1 task 9), what is left of them: the display values that are real now (flex since step 2b-1, see flex-*.html; grid since 2b-2, see grid-*.html;
+tables since 2a-2, see tables-*.html) are only here to check that they still stack with the rest; an inline flex container is an atomic inline (step 1b-2). Floats are real since step 2a-1 (CSS2 9.5; a floated span is a block because the
 cascade blockifies it, CSS2 9.7). Font 10px/10px, body margin 0, widths are the full 200 unless set.
 
-grid   the text "g1" gets an anonymous block, then g2: 10 + 10 = 20 high at y=0.
+grid   a grid with one column: the text "g1" is an anonymous grid item, then g2: two auto rows of 10 = 20 high at y=0.
 lft    float:left width 50: a float, (0,20 50x10); it takes no room in the flow.
 fr     float:right on a span: shrink-to-fit "x" = 10 wide, at the right edge: (190,20 10x10).
 ib     both floats are at y=20..30, so the line at y=20 is x=50..190 = 140 wide: "before" 60 + inline-block "mid" 30 + "after" 50

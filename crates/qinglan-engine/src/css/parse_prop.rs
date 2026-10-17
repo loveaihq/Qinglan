@@ -73,6 +73,14 @@ pub fn longhands_of(name: &str) -> Option<Vec<PropId>> {
         "flex" | "-webkit-flex" => vec![FlexGrow, FlexShrink, FlexBasis],
         "flex-flow" | "-webkit-flex-flow" => vec![FlexDirection, FlexWrap],
         "gap" | "grid-gap" => vec![RowGap, ColumnGap],
+        "grid-template" => vec![GridTemplateRows, GridTemplateColumns, GridTemplateAreas],
+        "grid" => vec![GridTemplateRows, GridTemplateColumns, GridTemplateAreas, GridAutoRows, GridAutoColumns, GridAutoFlow],
+        "grid-area" => vec![GridRowStart, GridColumnStart, GridRowEnd, GridColumnEnd],
+        "grid-row" => vec![GridRowStart, GridRowEnd],
+        "grid-column" => vec![GridColumnStart, GridColumnEnd],
+        "place-items" => vec![AlignItems, JustifyItems],
+        "place-self" => vec![AlignSelf, JustifySelf],
+        "place-content" => vec![AlignContent, JustifyContent],
         "all" => ALL_PROPS.iter().copied().filter(|p| *p != Direction).collect(),
         // Logical properties map to the physical ones (horizontal-tb, ltr only).
         "margin-block" => vec![MarginTop, MarginBottom],
@@ -340,6 +348,21 @@ fn parse_value(name: &str, cvs: &[Cv], env: &ParseEnv) -> Option<Vec<(PropId, Va
             };
             Some(vec![(RowGap, a), (ColumnGap, b)])
         }
+        "grid-template" => super::parse_grid::parse_template(&items),
+        "grid" => super::parse_grid::parse_grid(&items),
+        "grid-area" | "grid-row" | "grid-column" => super::parse_grid::parse_lines(name, &items),
+        "place-items" | "place-self" | "place-content" => {
+            let (a, j) = match name {
+                "place-items" => (AlignItems, JustifyItems),
+                "place-self" => (AlignSelf, JustifySelf),
+                _ => (AlignContent, JustifyContent),
+            };
+            let lead = |i: usize| items.get(i).and_then(|c| c.ident()).is_some_and(|s| matches!(s.to_ascii_lowercase().as_str(), "safe" | "unsafe" | "first" | "last"));
+            let k = if lead(0) { 2 } else { 1 };
+            let (x, y) = (items.get(..k)?, items.get(k..)?);
+            let y = if y.is_empty() { x } else { y };
+            Some(vec![(a, parse_align(a, x)?), (j, parse_align(j, y)?)])
+        }
         "font" => parse_font_shorthand(cvs, q),
         "list-style" => parse_list_style(&items),
         "text-decoration" => parse_text_decoration(&items, q),
@@ -446,9 +469,9 @@ fn parse_align(prop: PropId, items: &[&Cv]) -> Option<Value> {
     use AlignKind::*;
     let content = matches!(prop, PropId::JustifyContent | PropId::AlignContent);
     let ok = match kind {
-        Auto => prop == PropId::AlignSelf,
+        Auto => matches!(prop, PropId::AlignSelf | PropId::JustifySelf),
         SpaceBetween | SpaceAround | SpaceEvenly => content,
-        Left | Right => prop == PropId::JustifyContent,
+        Left | Right => matches!(prop, PropId::JustifyContent | PropId::JustifyItems | PropId::JustifySelf),
         SelfStart | SelfEnd => !content,
         _ => true,
     };
@@ -467,7 +490,7 @@ fn kw<T>(c: &Cv, f: impl Fn(&str) -> Option<T>) -> Option<T> {
 }
 
 /// `<length-percentage>`, non-negative if `nonneg`; unitless numbers as px in quirks mode.
-fn p_lp(c: &Cv, quirks: bool, nonneg: bool) -> Option<Lp> {
+pub(super) fn p_lp(c: &Cv, quirks: bool, nonneg: bool) -> Option<Lp> {
     let lp = match parse_length_percentage(c, true) {
         Some(l) => l,
         None if quirks => match c {
@@ -1227,7 +1250,12 @@ fn parse_longhand(prop: PropId, cvs: &[Cv], items: &[&Cv], q: bool) -> Option<Va
         Order => parse_integer(one_ref?).map(Value::Order),
         FlexGrow | FlexShrink => flex_number(one_ref?).map(Value::FlexFactor),
         FlexBasis => p_flex_basis(one_ref?, q).map(Value::FlexBasis),
-        JustifyContent | AlignItems | AlignSelf | AlignContent => parse_align(prop, items),
+        JustifyContent | AlignItems | AlignSelf | AlignContent | JustifyItems | JustifySelf => parse_align(prop, items),
+        GridTemplateColumns | GridTemplateRows => super::parse_grid::parse_tracks(items),
+        GridTemplateAreas => super::parse_grid::parse_areas(items),
+        GridAutoColumns | GridAutoRows => super::parse_grid::parse_auto_tracks(items),
+        GridAutoFlow => super::parse_grid::parse_flow(items),
+        GridRowStart | GridColumnStart | GridRowEnd | GridColumnEnd => super::parse_grid::grid_line(items).map(Value::GridLine),
         RowGap | ColumnGap => p_gap(one_ref?, q),
         BorderSpacing => {
             if items.len() > 2 {

@@ -3,7 +3,7 @@
 来源：<https://github.com/web-platform-tests/wpt>，提交 `3bcf9ec39dc0f83e20f5665a988c12c0dff5f1e9`（2026-10-16 取，稀疏浅克隆），
 许可证 BSD-3-Clause（见 `LICENSE.md`）。只放用到的目录和它们引用的文件：
 
-- `css/CSS2/floats`、`css/CSS2/floats-clear`、`css/CSS2/generated-content`、`css/css-lists`、`css/CSS2/tables`、`css/CSS2/zindex`、`css/css-tables`、`css/css-flexbox`（2b-1）：被测的测试（后三个只拷了有 `rel=match|mismatch`、没有 `<script>` 的页面和它们引用的参考页、图片、样式表；testharness 和只能人看的页面没拷，所以比 WPT 里的文件数少很多）
+- `css/CSS2/floats`、`css/CSS2/floats-clear`、`css/CSS2/generated-content`、`css/css-lists`、`css/CSS2/tables`、`css/CSS2/zindex`、`css/css-tables`、`css/css-flexbox`（2b-1）、`css/css-grid`（2b-2，2659 个文件）：被测的测试（后三个只拷了有 `rel=match|mismatch`、没有 `<script>` 的页面和它们引用的参考页、图片、样式表；testharness 和只能人看的页面没拷，所以比 WPT 里的文件数少很多）
 - `css/CSS2/support`、`css/CSS2/reference`、`css/reference`、`css/support`、`css/CSS2/positioning/absolute-non-replaced-width-017-ref.xht`：测试引用的图片、参考页、样式表
 - `fonts/Ahem.ttf`、`fonts/ahem.css`：Ahem 字体（测试平台里每个字 1em 见方，就是它的样子，所以这一步不加载它）
 

@@ -182,3 +182,29 @@ fn zhwiki_above_the_stop_line_is_identical() {
     assert!(c.complete > 100, "{} boxes", c.complete);
     assert!(part.work * 3 < full.work);
 }
+
+/// A page wrapped in a flex or grid container (column flex, a row with a sidebar, a grid shell with a header, a main area and
+/// a footer) is cut by the stop line too, and above the line it is what the full layout gives.
+#[test]
+fn flex_and_grid_shells_are_cut_by_the_stop_line() {
+    let mut long = String::new();
+    for i in 0..1000 {
+        long.push_str(&format!("<p>paragraph {i} of the long main area</p>"));
+    }
+    let shells = [
+        ("column flex", format!("<body style='margin:0;display:flex;flex-direction:column'><div>head</div><div>{long}</div><div>foot</div>")),
+        ("row flex", format!("<body style='margin:0;display:flex'><div style='width:100px'>side</div><div style='flex:1'>{long}</div>")),
+        ("grid", format!("<body style='margin:0;display:grid;grid-template-columns:100px 1fr;grid-template-rows:auto auto auto'><div style='grid-column:1/3'>head</div><div>side</div><div>{long}</div><div style='grid-column:1/3'>foot</div>")),
+    ];
+    for (name, src) in &shells {
+        let full = lay(src, 400.0, 300.0, None);
+        let stop = 600.0;
+        let part = lay(src, 400.0, 300.0, Some(stop));
+        assert!(part.partial, "{name}: not cut");
+        // (A row or grid shell still measures the min-content width of the items, which reads all their text.)
+        let factor = if *name == "column flex" { 10 } else { 2 };
+        assert!(part.work * factor < full.work, "{name}: {} of {} work units", part.work, full.work);
+        let c = compare(name, &full, &part, stop);
+        assert!(c.complete >= 3, "{name}: {} boxes fully above the line", c.complete);
+    }
+}

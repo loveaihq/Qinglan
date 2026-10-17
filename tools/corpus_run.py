@@ -5,6 +5,8 @@ Stages (run them in this order; each takes optional page names):
   record   qinglan-cli record <url> tests/corpus/local/<name>      (skipped when the recording exists)
   render   qinglan-cli render ... --replay <dir> --width 1280 --height 2400  -> tests/out/<name>-ours.png
   edge     Edge headless, JS off, same size, isolated empty --user-data-dir   -> tests/out/<name>-edge.png
+           (`--keep-edge` skips the capture and keeps the existing <name>-edge.png: the live pages change from day to day,
+           which makes a new capture differ from the recording; the other stages are not affected)
   compose  ours | edge side by side, scaled down                        -> tests/out/<name>.png
   check    text completeness/order (layout text vs DOM text), tofu, U+FFFD, broken images
   bench    qinglan-cli bench x3 at 1920x1080: first screen, full layout, private bytes after scrolling
@@ -413,7 +415,8 @@ def pmap(fn, names, workers):
 
 def main():
     stage = sys.argv[1]
-    names = sys.argv[2:] or [p[0] for p in PAGES]
+    keep_edge = "--keep-edge" in sys.argv
+    names = [a for a in sys.argv[2:] if not a.startswith("--")] or [p[0] for p in PAGES]
     OUT.mkdir(parents=True, exist_ok=True)
     res = load()
     if stage == "record":
@@ -423,6 +426,10 @@ def main():
         for n, r in pmap(render_one, names, 4):
             res.setdefault(n, {})["render"] = r
             print(n, r and (r["rc"], r["timeout"]), flush=True)
+    elif stage == "edge" and keep_edge:
+        for n in names:
+            e = OUT / f"{n}-edge.png"
+            print(n, "kept" if e.exists() else "MISSING", flush=True)
     elif stage == "edge":
         for n, r in pmap(edge_one, names, 3):
             res.setdefault(n, {})["edge"] = r

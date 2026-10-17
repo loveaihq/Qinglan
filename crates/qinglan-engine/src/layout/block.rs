@@ -205,6 +205,9 @@ impl Layouter<'_> {
         if matches!(bx.fallback, Some(Display::Flex | Display::InlineFlex)) {
             return self.layout_flex(id, cb_w, cb_h, flow);
         }
+        if matches!(bx.fallback, Some(Display::Grid | Display::InlineGrid)) {
+            return self.layout_grid(id, cb_w, cb_h, flow);
+        }
 
         if !self.charge(4 + bx.children.len() as u64) {
             return BlockResult { h: LU::ZERO, ml: LU::ZERO, mt: Margin::default(), mb: Margin::default(), top_only: Margin::default(), bot_only: Margin::default(), through: false, rel: (LU::ZERO, LU::ZERO) };

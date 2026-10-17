@@ -1,0 +1,19 @@
+viewport 400x300
+block html (0,0 400x90)
+  block body (0,0 400x90)
+    block div#g.g (0,0 60x20) [display:grid]
+      block div#g1 (0,0 40x10)
+      block div#g2 (0,10 40x10)
+      block div#g3 (40,10 20x10)
+    block div#h.g (0,20 60x20) [display:grid]
+      block div#h1 (0,20 40x10)
+      block div#h2 (0,30 40x10)
+      block div#h3 (40,20 20x10)
+    block div#i.g (0,40 60x30) [display:grid]
+      block div#i1 (20,50 20x20)
+      block div#i2 (0,40 40x10)
+      block div#i3 (40,40 20x10)
+      block div#i4 (0,50 20x10)
+    block div#j.g (0,70 60x20) [display:grid]
+      block div#j1 (20,70 40x10)
+      block div#j2 (0,80 40x10)

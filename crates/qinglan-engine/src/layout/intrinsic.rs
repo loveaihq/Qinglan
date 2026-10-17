@@ -52,6 +52,7 @@ impl Layouter<'_> {
             }
             _ if matches!(bx.fallback, Some(crate::css::types::Display::Table | crate::css::types::Display::InlineTable)) => self.table_widths(id),
             _ if matches!(bx.fallback, Some(crate::css::types::Display::Flex | crate::css::types::Display::InlineFlex)) => self.flex_widths(id),
+            _ if matches!(bx.fallback, Some(crate::css::types::Display::Grid | crate::css::types::Display::InlineGrid)) => self.grid_widths(id),
             _ if bx.inline_children => self.measure_inline(id),
             _ => {
                 let (mut min, mut max) = (LU::ZERO, LU::ZERO);

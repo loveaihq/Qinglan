@@ -117,6 +117,149 @@ impl FlexBasis {
     }
 }
 
+/// The most tracks a grid axis may have (explicit and implicit together), and the most repetitions `repeat()` expands to.
+/// Blink and Gecko allow 10 000; the occupancy map of the auto-placement algorithm is `rows x columns` bits, so this
+/// keeps it at 125 KB.
+pub const GRID_MAX_TRACKS: usize = 1000;
+
+/// A track breadth (css-grid-1 7.2.1): `auto`, `min-content`, `max-content`, a flexible `<flex>` or a length.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Bread {
+    Auto,
+    MinContent,
+    MaxContent,
+    Fr(f32),
+    Lp(Lp),
+}
+
+impl Bread {
+    pub fn to_css(&self) -> String {
+        match self {
+            Bread::Auto => "auto".into(),
+            Bread::MinContent => "min-content".into(),
+            Bread::MaxContent => "max-content".into(),
+            Bread::Fr(f) => format!("{}fr", super::values::fmt_num(*f)),
+            Bread::Lp(l) => l.to_css(),
+        }
+    }
+}
+
+/// A track sizing function (7.2): the minimum and maximum breadth. `fit` marks `fit-content(<length-percentage>)`, whose
+/// argument is `max`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Track {
+    pub min: Bread,
+    pub max: Bread,
+    pub fit: bool,
+}
+
+impl Track {
+    pub const AUTO: Track = Track { min: Bread::Auto, max: Bread::Auto, fit: false };
+
+    pub fn compute(&self, ctx: &super::values::LenCtx) -> Track {
+        let c = |b: &Bread| if let Bread::Lp(l) = b { Bread::Lp(l.compute(ctx)) } else { b.clone() };
+        Track { min: c(&self.min), max: c(&self.max), fit: self.fit }
+    }
+
+    pub fn to_css(&self) -> String {
+        if self.fit {
+            format!("fit-content({})", self.max.to_css())
+        } else if self.min == self.max {
+            self.min.to_css()
+        } else if self.min == Bread::Auto && matches!(self.max, Bread::Fr(_)) {
+            self.max.to_css()
+        } else {
+            format!("minmax({}, {})", self.min.to_css(), self.max.to_css())
+        }
+    }
+}
+
+/// The repeated part of a track list written with `repeat(auto-fill | auto-fit, ...)`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AutoRepeat {
+    /// The number of tracks of the list before the repeated part.
+    pub at: usize,
+    /// `auto-fit` (empty repetitions collapse) rather than `auto-fill`.
+    pub fit: bool,
+    pub tracks: Vec<Track>,
+    /// The line names around the repeated tracks: `tracks.len() + 1` entries.
+    pub names: Vec<Vec<Rc<str>>>,
+}
+
+/// A track list (7.2): the tracks and the names of the lines between them. `names[i]` belongs to the line before track
+/// `i`; with an `auto` repeat after `at` tracks there is one entry more, `names[at]` being the line before the repeated
+/// part and `names[at + 1]` the one after it.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct TrackList {
+    pub tracks: Vec<Track>,
+    pub names: Vec<Vec<Rc<str>>>,
+    pub auto: Option<AutoRepeat>,
+}
+
+impl TrackList {
+    pub fn compute(&self, ctx: &super::values::LenCtx) -> TrackList {
+        TrackList {
+            tracks: self.tracks.iter().map(|t| t.compute(ctx)).collect(),
+            names: self.names.clone(),
+            auto: self.auto.as_ref().map(|a| AutoRepeat { at: a.at, fit: a.fit, tracks: a.tracks.iter().map(|t| t.compute(ctx)).collect(), names: a.names.clone() }),
+        }
+    }
+
+    pub fn to_css(&self) -> String {
+        let names = |n: Option<&Vec<Rc<str>>>| n.filter(|v| !v.is_empty()).map(|v| format!("[{}] ", v.join(" "))).unwrap_or_default();
+        let mut s = String::new();
+        for i in 0..=self.tracks.len() {
+            if let Some(a) = self.auto.as_ref().filter(|a| a.at == i) {
+                s.push_str(&names(self.names.get(i)));
+                s.push_str(&format!("repeat({}, {}) ", if a.fit { "auto-fit" } else { "auto-fill" }, a.tracks.iter().map(Track::to_css).collect::<Vec<_>>().join(" ")));
+            }
+            s.push_str(&names(self.names.get(i + usize::from(self.auto.as_ref().is_some_and(|a| a.at <= i)))));
+            if let Some(t) = self.tracks.get(i) {
+                s.push_str(&t.to_css());
+                s.push(' ');
+            }
+        }
+        s.trim_end().to_string()
+    }
+}
+
+/// `grid-template-areas` (7.3): the named areas of a `rows` x `cols` grid as (name, row start, column start, row end,
+/// column end) lines, counted from 1.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Areas {
+    pub rows: u32,
+    pub cols: u32,
+    pub list: Vec<(Rc<str>, u32, u32, u32, u32)>,
+}
+
+/// A `<grid-line>` (8.3).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum GridLine {
+    #[default]
+    Auto,
+    /// A line number (negative ones count from the end).
+    Num(i32),
+    /// A custom ident alone: the named area's edge, else the first line with that name.
+    Ident(Rc<str>),
+    /// `<integer> <ident>`: the n-th line with that name.
+    NumIdent(i32, Rc<str>),
+    Span(u32),
+    SpanIdent(u32, Rc<str>),
+}
+
+impl GridLine {
+    pub fn to_css(&self) -> String {
+        match self {
+            GridLine::Auto => "auto".into(),
+            GridLine::Num(n) => n.to_string(),
+            GridLine::Ident(s) => s.to_string(),
+            GridLine::NumIdent(n, s) => format!("{n} {s}"),
+            GridLine::Span(n) => format!("span {n}"),
+            GridLine::SpanIdent(n, s) => format!("span {n} {s}"),
+        }
+    }
+}
+
 /// `tab-size` (css-text-3 7.3): a number of space advances, or a length.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TabSize {
@@ -503,6 +646,15 @@ pub enum Value {
     FlexFactor(f32),
     FlexBasis(FlexBasis),
     Align(AlignValue),
+    /// `grid-template-columns` / `-rows`: `None` is `none`.
+    Tracks(Option<Rc<TrackList>>),
+    /// `grid-template-areas`: `None` is `none`.
+    Areas(Option<Rc<Areas>>),
+    /// `grid-auto-columns` / `-rows`.
+    AutoTracks(Rc<Vec<Track>>),
+    /// `grid-auto-flow`: (`column`, `dense`).
+    GridFlow(bool, bool),
+    GridLine(GridLine),
     /// `row-gap` / `column-gap`: `None` is `normal`.
     Gap(Option<Lp>),
     /// `border-spacing`: horizontal and vertical.
@@ -632,9 +784,22 @@ pub enum PropId {
     AlignContent,
     RowGap,
     ColumnGap,
+    JustifyItems,
+    JustifySelf,
+    GridTemplateColumns,
+    GridTemplateRows,
+    GridTemplateAreas,
+    GridAutoColumns,
+    GridAutoRows,
+    GridAutoFlow,
+    // The four grid lines of an item, in the order `GridStyle::line` keeps them.
+    GridRowStart,
+    GridColumnStart,
+    GridRowEnd,
+    GridColumnEnd,
 }
 
-pub const PROP_COUNT: usize = PropId::ColumnGap as usize + 1;
+pub const PROP_COUNT: usize = PropId::GridColumnEnd as usize + 1;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Group {
@@ -647,6 +812,8 @@ pub enum Group {
     Gen,
     /// css-flexbox-1 / css-align-3 properties of flex containers and items (not inherited).
     Flex,
+    /// css-grid-1 template, auto-placement and item placement properties (not inherited).
+    Grid,
     Ignored,
 }
 
@@ -675,7 +842,9 @@ impl PropId {
             | EmptyCells | CaptionSide => Group::Text,
             Content | CounterReset | CounterIncrement | CounterSet => Group::Gen,
             FlexDirection | FlexWrap | Order | FlexGrow | FlexShrink | FlexBasis | JustifyContent | AlignItems | AlignSelf
-            | AlignContent | RowGap | ColumnGap => Group::Flex,
+            | AlignContent | RowGap | ColumnGap | JustifyItems | JustifySelf => Group::Flex,
+            GridTemplateColumns | GridTemplateRows | GridTemplateAreas | GridAutoColumns | GridAutoRows | GridAutoFlow | GridRowStart
+            | GridColumnStart | GridRowEnd | GridColumnEnd => Group::Grid,
             VerticalAlign | TextDecorationLine | TextDecorationStyle | TextDecorationColor | TextDecorationThickness
             | BackgroundColor => Group::Misc,
             BorderTopLeftRadius | BorderTopRightRadius | BorderBottomRightRadius | BorderBottomLeftRadius => Group::Ignored,
@@ -781,6 +950,18 @@ impl PropId {
             AlignContent => "align-content",
             RowGap => "row-gap",
             ColumnGap => "column-gap",
+            JustifyItems => "justify-items",
+            JustifySelf => "justify-self",
+            GridTemplateColumns => "grid-template-columns",
+            GridTemplateRows => "grid-template-rows",
+            GridTemplateAreas => "grid-template-areas",
+            GridAutoColumns => "grid-auto-columns",
+            GridAutoRows => "grid-auto-rows",
+            GridAutoFlow => "grid-auto-flow",
+            GridRowStart => "grid-row-start",
+            GridColumnStart => "grid-column-start",
+            GridRowEnd => "grid-row-end",
+            GridColumnEnd => "grid-column-end",
         }
     }
 
@@ -803,7 +984,8 @@ pub const ALL_PROPS: [PropId; PROP_COUNT] = {
         TextDecorationThickness, BackgroundColor, BorderTopLeftRadius, BorderTopRightRadius, BorderBottomRightRadius,
         BorderBottomLeftRadius, Content, Quotes, CounterReset, CounterIncrement, CounterSet, BorderCollapse, BorderSpacing,
         EmptyCells, CaptionSide, TableLayout, FlexDirection, FlexWrap, Order, FlexGrow, FlexShrink, FlexBasis, JustifyContent,
-        AlignItems, AlignSelf, AlignContent, RowGap, ColumnGap,
+        AlignItems, AlignSelf, AlignContent, RowGap, ColumnGap, JustifyItems, JustifySelf, GridTemplateColumns, GridTemplateRows,
+        GridTemplateAreas, GridAutoColumns, GridAutoRows, GridAutoFlow, GridRowStart, GridColumnStart, GridRowEnd, GridColumnEnd,
     ]
 };
 
@@ -829,6 +1011,7 @@ pub const TEXT_BITS: u128 = group_bits(Group::Text);
 pub const MISC_BITS: u128 = group_bits(Group::Misc);
 pub const GEN_BITS: u128 = group_bits(Group::Gen);
 pub const FLEX_BITS: u128 = group_bits(Group::Flex);
+pub const GRID_BITS: u128 = group_bits(Group::Grid);
 
 /// One declaration of a declaration block: a longhand (or a custom property) with its value.
 #[derive(Clone, Debug, PartialEq)]

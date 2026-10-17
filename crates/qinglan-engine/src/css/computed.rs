@@ -134,6 +134,8 @@ pub struct FlexStyle {
     pub align_items: AlignValue,
     pub align_self: AlignValue,
     pub align_content: AlignValue,
+    pub justify_items: AlignValue,
+    pub justify_self: AlignValue,
     /// `None` is `normal` (0 in a flex container).
     pub row_gap: Option<Lp>,
     pub column_gap: Option<Lp>,
@@ -152,6 +154,8 @@ impl FlexStyle {
             align_items: AlignValue::NORMAL,
             align_self: AlignValue::AUTO,
             align_content: AlignValue::NORMAL,
+            justify_items: AlignValue::NORMAL,
+            justify_self: AlignValue::AUTO,
             row_gap: None,
             column_gap: None,
         }
@@ -168,7 +172,30 @@ pub struct ComputedStyle {
     pub misc: Rc<MiscStyle>,
     pub gen_: Rc<GenStyle>,
     pub flex: Rc<FlexStyle>,
+    pub grid: Rc<GridStyle>,
     pub custom: Rc<CustomProps>,
+}
+
+/// The grid container and grid item properties (css-grid-1 7, 8). None are inherited.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GridStyle {
+    pub cols: Option<Rc<TrackList>>,
+    pub rows: Option<Rc<TrackList>>,
+    pub areas: Option<Rc<Areas>>,
+    pub auto_cols: Rc<Vec<Track>>,
+    pub auto_rows: Rc<Vec<Track>>,
+    /// `grid-auto-flow`: `column` and `dense`.
+    pub flow_col: bool,
+    pub dense: bool,
+    /// `grid-row-start`, `grid-column-start`, `grid-row-end`, `grid-column-end`.
+    pub line: [GridLine; 4],
+}
+
+impl GridStyle {
+    pub fn initial() -> GridStyle {
+        let auto = Rc::new(vec![Track::AUTO]);
+        GridStyle { cols: None, rows: None, areas: None, auto_cols: auto.clone(), auto_rows: auto, flow_col: false, dense: false, line: Default::default() }
+    }
 }
 
 impl BoxStyle {
@@ -267,6 +294,7 @@ impl ComputedStyle {
             misc: Rc::new(MiscStyle::initial()),
             gen_: Rc::new(GenStyle::initial()),
             flex: Rc::new(FlexStyle::initial()),
+            grid: Rc::new(GridStyle::initial()),
             custom: Rc::new(CustomProps::default()),
         }
     }
@@ -638,7 +666,7 @@ fn blockify(d: Display) -> Display {
 
 pub fn compute_box(parent: &Rc<BoxStyle>, init_rc: &Rc<BoxStyle>, d: &Declared<'_>, ctx: &LenCtx, is_root: bool) -> Rc<BoxStyle> {
     // css-flexbox-1 4: the children of a flex container are blockified and do not float.
-    let flex_item = matches!(parent.display, Display::Flex | Display::InlineFlex);
+    let flex_item = matches!(parent.display, Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid);
     if !d.touches(BOX_BITS) && !is_root && !flex_item {
         return init_rc.clone();
     }
@@ -891,6 +919,8 @@ pub fn compute_flex(parent: &Rc<FlexStyle>, init_rc: &Rc<FlexStyle>, d: &Declare
     simple!(PropId::AlignItems, Align, align_items);
     simple!(PropId::AlignSelf, Align, align_self);
     simple!(PropId::AlignContent, Align, align_content);
+    simple!(PropId::JustifyItems, Align, justify_items);
+    simple!(PropId::JustifySelf, Align, justify_self);
     match pick(d, PropId::FlexBasis) {
         Pick::Inherit => f.basis = parent.basis.clone(),
         Pick::Initial => {}
@@ -911,6 +941,49 @@ pub fn compute_flex(parent: &Rc<FlexStyle>, init_rc: &Rc<FlexStyle>, d: &Declare
         Pick::Value(_) => {}
     }
     Rc::new(f)
+}
+
+/// The grid properties (not inherited: only `inherit` copies the value of the parent).
+pub fn compute_grid(parent: &Rc<GridStyle>, init_rc: &Rc<GridStyle>, d: &Declared<'_>, ctx: &LenCtx) -> Rc<GridStyle> {
+    if !d.touches(GRID_BITS) {
+        return init_rc.clone();
+    }
+    let mut g = GridStyle::initial();
+    for (p, rows) in [(PropId::GridTemplateColumns, false), (PropId::GridTemplateRows, true)] {
+        let dst = if rows { &mut g.rows } else { &mut g.cols };
+        match pick(d, p) {
+            Pick::Inherit => *dst = if rows { parent.rows.clone() } else { parent.cols.clone() },
+            Pick::Value(Value::Tracks(t)) => *dst = t.as_ref().map(|l| Rc::new(l.compute(ctx))),
+            _ => {}
+        }
+    }
+    match pick(d, PropId::GridTemplateAreas) {
+        Pick::Inherit => g.areas = parent.areas.clone(),
+        Pick::Value(Value::Areas(a)) => g.areas = a.clone(),
+        _ => {}
+    }
+    for (p, rows) in [(PropId::GridAutoColumns, false), (PropId::GridAutoRows, true)] {
+        let dst = if rows { &mut g.auto_rows } else { &mut g.auto_cols };
+        match pick(d, p) {
+            Pick::Inherit => *dst = if rows { parent.auto_rows.clone() } else { parent.auto_cols.clone() },
+            Pick::Value(Value::AutoTracks(t)) => *dst = Rc::new(t.iter().map(|x| x.compute(ctx)).collect()),
+            _ => {}
+        }
+    }
+    match pick(d, PropId::GridAutoFlow) {
+        Pick::Inherit => (g.flow_col, g.dense) = (parent.flow_col, parent.dense),
+        Pick::Value(Value::GridFlow(c, dn)) => (g.flow_col, g.dense) = (*c, *dn),
+        _ => {}
+    }
+    for (i, p) in [PropId::GridRowStart, PropId::GridColumnStart, PropId::GridRowEnd, PropId::GridColumnEnd].into_iter().enumerate() {
+        let Some(dst) = g.line.get_mut(i) else { continue };
+        match pick(d, p) {
+            Pick::Inherit => *dst = parent.line.get(i).cloned().unwrap_or_default(),
+            Pick::Value(Value::GridLine(l)) => *dst = l.clone(),
+            _ => {}
+        }
+    }
+    Rc::new(g)
 }
 
 // -----------------------------------------------------------------------------------------------
@@ -1033,6 +1106,29 @@ impl ComputedStyle {
         add(PropId::AlignContent, fl.align_content.to_css());
         add(PropId::RowGap, fl.row_gap.as_ref().map_or("normal".into(), Lp::to_css));
         add(PropId::ColumnGap, fl.column_gap.as_ref().map_or("normal".into(), Lp::to_css));
+        add(PropId::JustifyItems, fl.justify_items.to_css());
+        add(PropId::JustifySelf, fl.justify_self.to_css());
+        let gr = &self.grid;
+        let tracks = |t: &Option<Rc<TrackList>>| t.as_ref().map_or("none".to_string(), |l| l.to_css());
+        add(PropId::GridTemplateColumns, tracks(&gr.cols));
+        add(PropId::GridTemplateRows, tracks(&gr.rows));
+        let areas = gr.areas.as_ref().map_or("none".to_string(), |a| {
+            (1..=a.rows)
+                .map(|r| {
+                    let row: Vec<&str> = (1..=a.cols).map(|c| a.list.iter().find(|x| r >= x.1 && r < x.3 && c >= x.2 && c < x.4).map_or(".", |x| &*x.0)).collect();
+                    format!("\"{}\"", row.join(" "))
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        });
+        add(PropId::GridTemplateAreas, areas);
+        let auto = |t: &Rc<Vec<Track>>| t.iter().map(Track::to_css).collect::<Vec<_>>().join(" ");
+        add(PropId::GridAutoColumns, auto(&gr.auto_cols));
+        add(PropId::GridAutoRows, auto(&gr.auto_rows));
+        add(PropId::GridAutoFlow, format!("{}{}", if gr.flow_col { "column" } else { "row" }, if gr.dense { " dense" } else { "" }));
+        for (p, l) in [PropId::GridRowStart, PropId::GridColumnStart, PropId::GridRowEnd, PropId::GridColumnEnd].into_iter().zip(gr.line.iter()) {
+            add(p, l.to_css());
+        }
         v.push(("lang", t.lang.as_deref().unwrap_or("").to_string()));
         v
     }

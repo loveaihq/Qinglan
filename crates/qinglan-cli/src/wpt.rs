@@ -402,8 +402,8 @@ fn compare(x: &Frame, y: &Frame, fuzzy: Option<(u32, u32)>) -> Result<(), String
 fn classify(src: &str) -> Option<(&'static str, &'static str)> {
     let s = src.to_ascii_lowercase().replace(": ", ":");
     let has = |ns: &[&str]| ns.iter().any(|n| s.contains(n));
-    if has(&["display:grid", "display:inline-grid", "grid-template", "grid-area", "grid-column", "grid-row"]) {
-        return Some(("2b", "grid (step 2b-2)"));
+    if has(&["grid-lanes", "masonry", "subgrid"]) {
+        return Some(("none", "subgrid and masonry (grid-lanes) are not planned"));
     }
     if has(&["gradient", "box-shadow", "border-radius", "opacity:", "transform:", "background-image", "text-shadow", "outline:", "-dashed", ":dashed", ":dotted", "groove", "ridge", "background:url", "mix-blend"]) {
         return Some(("2c", "painting effects"));
@@ -414,7 +414,9 @@ fn classify(src: &str) -> Option<(&'static str, &'static str)> {
     if has(&["<svg", "position:sticky", "overflow:auto", "overflow:scroll", "<input", "<button", "<select", "<textarea"]) {
         return Some(("2e", "svg, scrolling, sticky or form controls"));
     }
-    if has(&["text-wrap", "flex-wrap:balance", "aspect-ratio", "column-count", "column-width", "column-", "columns:", "shape-outside", ":has(", "@container", "animation", "transition", "clip-path", "mask", "filter:"]) {
+    // `columns:` as a property of its own, not the end of `grid-template-columns:`.
+    let columns = s.match_indices("columns:").any(|(i, _)| s[..i].chars().next_back().is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '-')));
+    if columns || has(&["text-wrap", "flex-wrap:balance", "aspect-ratio", "column-count", "column-width", "column-rule", "column-fill", "column-span", "shape-outside", ":has(", "@container", "animation", "transition", "clip-path", "mask", "filter:"]) {
         return Some(("none", "a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...)"));
     }
     None

@@ -1,0 +1,47 @@
+<!--
+viewport: 400x300
+Grid alignment, intrinsic tracks and out-of-flow children (css-grid-1 10, 9, 11.8; css-align-3; step 2b-2). Font 10px/10px Ahem, body margin 0.
+
+k      div#k y=0, 100 x 50, one cell (columns 100px, rows 50px). k1 20 x 10 with justify-self center and align-self end: x = (100 - 20) / 2 = 40,
+       y = 50 - 10 = 40: (40,40 20x10).
+l      div#l y=50, the same cell with justify-items end and align-items center: l1 20 x 10: x = 100 - 20 = 80, y = 50 + (50 - 10) / 2 = 70: (80,70 20x10).
+m      div#m y=100, the same cell; m1 20 x 10 with margin auto: auto margins take the free space in both axes (10.2): (40,120 20x10).
+n      div#n y=150, columns 20px 20px in 100 with justify-content space-between: the free 60 goes between the tracks: n1 (0,150 20x10), n2 (80,150 20x10).
+o      div#o y=160, height 50, one 10px row, align-content center: the free 40 is split: the row starts at y = 160 + 20 = 180. o1 stretches over the
+       auto column, which grows into the free width (11.8): (0,180 100x10).
+p      div#p y=210, direction rtl, columns 20px 30px: column 1 is at the right edge. p1 (80,210 20x10), p2 (50,210 30x10).
+q      div#q y=220, columns fit-content(30px) 1fr in 100, q1 = "aaa bb" (min-content 30, max-content 60): the fit-content track is its max-content
+       size limited to 30, so 30 (the word "aaa" is 30 wide): 2 lines, 20 high; 1fr = 70. q1 (0,220 30x20), q2 (30,220 70x20).
+r      div#r y=240, position relative, 100 x 50, columns 50px 50px, rows 50px. ra is absolutely positioned with grid-column 2 and grid-row 1: its
+       containing block is that grid area (9) so left/top 0 is the area's corner: (50,240 10x10). rb has no grid lines: static position, in the corner
+       of the content box (0,240 10x10).
+check: block div#k :: (0,0 100x50) [display:grid]
+check: block div#k1 :: (40,40 20x10)
+check: block div#l1 :: (80,70 20x10)
+check: block div#m1 :: (40,120 20x10)
+check: block div#n1 :: (0,150 20x10)
+check: block div#n2 :: (80,150 20x10)
+check: block div#o1 :: (0,180 100x10)
+check: block div#p1 :: (80,210 20x10)
+check: block div#p2 :: (50,210 30x10)
+check: block div#q :: (0,220 100x20) [display:grid]
+check: block div#q1 :: (0,220 30x20)
+check: block div#q2 :: (30,220 70x20)
+check: block div#r :: (0,240 100x50) [display:grid]
+check: block div#ra :: (50,240 10x10) [absolute]
+check: block div#rb :: (0,240 10x10) [absolute]
+check: block body :: (0,0 400x290)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+.g { display: grid; width: 100px }
+</style>
+<div id="k" class="g" style="height:50px;grid-template:50px / 100px"><div id="k1" style="width:20px;height:10px;justify-self:center;align-self:end"></div></div>
+<div id="l" class="g" style="height:50px;grid-template:50px / 100px;justify-items:end;align-items:center"><div id="l1" style="width:20px;height:10px"></div></div>
+<div id="m" class="g" style="height:50px;grid-template:50px / 100px"><div id="m1" style="width:20px;height:10px;margin:auto"></div></div>
+<div id="n" class="g" style="grid-template-columns:20px 20px;justify-content:space-between"><div id="n1" style="height:10px"></div><div id="n2" style="height:10px"></div></div>
+<div id="o" class="g" style="height:50px;grid-template-rows:10px;align-content:center"><div id="o1"></div></div>
+<div id="p" class="g" style="direction:rtl;grid-template-columns:20px 30px"><div id="p1" style="height:10px"></div><div id="p2" style="height:10px"></div></div>
+<div id="q" class="g" style="grid-template-columns:fit-content(30px) 1fr"><div id="q1">aaa bb</div><div id="q2"></div></div>
+<div id="r" class="g" style="position:relative;height:50px;grid-template-columns:50px 50px;grid-template-rows:50px"><div id="ra" style="position:absolute;grid-column:2;grid-row:1;left:0;top:0;width:10px;height:10px"></div><div id="rb" style="position:absolute;width:10px;height:10px"></div></div>

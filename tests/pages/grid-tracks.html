@@ -1,0 +1,65 @@
+<!--
+viewport: 400x300
+Grid tracks (css-grid-1 7, 11.4-11.8; step 2b-2). Font 10px/10px Ahem, body margin 0. Every container is a block-level grid container; its items
+are blockified and stretch (align/justify-items: normal) unless a size is set.
+
+a      div#a y=0, width 200, columns 20px 1fr 3fr, column gap 10, row gap 4. Free space (11.7): 200 - 20 - 2 x 10 = 160 for 4 fr: 1fr = 40, so the tracks
+       are 20, 40, 120 at x = 0, 30, 80. Row 1 = 10 (a1-a3 are 10 high), row 2 = 20 (a4 spans columns 2-3 and is 20 high): the container is
+       10 + 4 + 20 = 34 high. a1 (0,0 20x10), a2 (30,0 40x10), a3 (80,0 120x10), a4 (30,14 170x20) = 40 + 10 + 120 wide.
+b      div#b y=34, width 120, columns auto auto, items "aa bb" (min-content 20, max-content 50) and "cc dd ee" (20, 80). Base sizes 20, 20 (minimum
+       contributions), growth limits 50, 80. Maximize (11.6): the 80 of free space is shared equally, 40 each; track 1 stops at its limit 50 (+30),
+       so track 2 gets the rest: 20 + 40 + 10 = 70. "cc dd ee" does not fit 70 and takes two lines (20 high), and so does the row.
+       b1 (0,34 50x20), b2 (50,34 70x20), container 120 x 20.
+c      div#c y=54, width 90, repeat(auto-fill, minmax(30px, 1fr)): 3 repetitions fit 90 (7.2.3.2); each 1fr = 30. Four 10 high items fill the first
+       row and begin a second: c1 (0,54), c2 (30,54), c3 (60,54), c4 (0,64), all 30x10; the container is 20 high.
+d      div#d y=74, the same with auto-fit and two items: the unused third track collapses (7.2.3.2), the two others share the 90: d1 (0,74 45x10),
+       d2 (45,74 45x10).
+e      div#e y=84, width 100, columns 40px 40px, grid-auto-rows 15px: five empty items; the fifth makes an implicit row (7.6):
+       e1 (0,84), e2 (40,84), e3 (0,99), e4 (40,99), e5 (0,114), all 40x15; the container is 45 high.
+f      div#f y=129, width 100, columns 30px 1fr, rows 10px 20px, areas "h h" / "s m" (7.3). Document order m, h, s: fh (0,129 100x10), fs (0,139 30x20),
+       fm (30,139 70x20); the container is 30 high.
+h      div#h y=159, width 50, height 60, rows 10px 1fr 20px: the 1fr row gets 60 - 30 = 30: h1 (0,159 50x10), h2 (0,169 50x30), h3 (0,199 50x20).
+check: block div#a :: (0,0 200x34) [display:grid]
+check: block div#a1 :: (0,0 20x10)
+check: block div#a2 :: (30,0 40x10)
+check: block div#a3 :: (80,0 120x10)
+check: block div#a4 :: (30,14 170x20)
+check: block div#b :: (0,34 120x20) [display:grid]
+check: block div#b1 :: (0,34 50x20)
+check: block div#b2 :: (50,34 70x20)
+check: block div#c :: (0,54 90x20) [display:grid]
+check: block div#c1 :: (0,54 30x10)
+check: block div#c2 :: (30,54 30x10)
+check: block div#c3 :: (60,54 30x10)
+check: block div#c4 :: (0,64 30x10)
+check: block div#d :: (0,74 90x10) [display:grid]
+check: block div#d1 :: (0,74 45x10)
+check: block div#d2 :: (45,74 45x10)
+check: block div#e :: (0,84 100x45) [display:grid]
+check: block div#e1 :: (0,84 40x15)
+check: block div#e2 :: (40,84 40x15)
+check: block div#e3 :: (0,99 40x15)
+check: block div#e4 :: (40,99 40x15)
+check: block div#e5 :: (0,114 40x15)
+check: block div#f :: (0,129 100x30) [display:grid]
+check: block div#fh :: (0,129 100x10)
+check: block div#fs :: (0,139 30x20)
+check: block div#fm :: (30,139 70x20)
+check: block div#h :: (0,159 50x60) [display:grid]
+check: block div#h1 :: (0,159 50x10)
+check: block div#h2 :: (0,169 50x30)
+check: block div#h3 :: (0,199 50x20)
+check: block body :: (0,0 400x219)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+.g { display: grid }
+</style>
+<div id="a" class="g" style="width:200px;grid-template-columns:20px 1fr 3fr;gap:4px 10px"><div id="a1" style="height:10px"></div><div id="a2" style="height:10px"></div><div id="a3" style="height:10px"></div><div id="a4" style="grid-column:2/4;height:20px"></div></div>
+<div id="b" class="g" style="width:120px;grid-template-columns:auto auto"><div id="b1">aa bb</div><div id="b2">cc dd ee</div></div>
+<div id="c" class="g" style="width:90px;grid-template-columns:repeat(auto-fill,minmax(30px,1fr))"><div id="c1" style="height:10px"></div><div id="c2" style="height:10px"></div><div id="c3" style="height:10px"></div><div id="c4" style="height:10px"></div></div>
+<div id="d" class="g" style="width:90px;grid-template-columns:repeat(auto-fit,minmax(30px,1fr))"><div id="d1" style="height:10px"></div><div id="d2" style="height:10px"></div></div>
+<div id="e" class="g" style="width:100px;grid-template-columns:40px 40px;grid-auto-rows:15px"><div id="e1"></div><div id="e2"></div><div id="e3"></div><div id="e4"></div><div id="e5"></div></div>
+<div id="f" class="g" style="width:100px;grid-template-columns:30px 1fr;grid-template-rows:10px 20px;grid-template-areas:'h h' 's m'"><div id="fm" style="grid-area:m"></div><div id="fh" style="grid-area:h"></div><div id="fs" style="grid-area:s"></div></div>
+<div id="h" class="g" style="width:50px;height:60px;grid-template-rows:10px 1fr 20px"><div id="h1"></div><div id="h2"></div><div id="h3"></div></div>

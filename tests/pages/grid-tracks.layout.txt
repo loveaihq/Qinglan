@@ -1,0 +1,39 @@
+viewport 400x300
+block html (0,0 400x219)
+  block body (0,0 400x219)
+    block div#a.g (0,0 200x34) [display:grid]
+      block div#a1 (0,0 20x10)
+      block div#a2 (30,0 40x10)
+      block div#a3 (80,0 120x10)
+      block div#a4 (30,14 170x20)
+    block div#b.g (0,34 120x20) [display:grid]
+      block div#b1 (0,34 50x20)
+        line (0,34 50x10) baseline=42
+          text "aa bb" (0,34 50x10)
+      block div#b2 (50,34 70x20)
+        line (50,34 70x10) baseline=42
+          text "cc dd" (50,34 50x10)
+        line (50,44 70x10) baseline=52
+          text "ee" (50,44 20x10)
+    block div#c.g (0,54 90x20) [display:grid]
+      block div#c1 (0,54 30x10)
+      block div#c2 (30,54 30x10)
+      block div#c3 (60,54 30x10)
+      block div#c4 (0,64 30x10)
+    block div#d.g (0,74 90x10) [display:grid]
+      block div#d1 (0,74 45x10)
+      block div#d2 (45,74 45x10)
+    block div#e.g (0,84 100x45) [display:grid]
+      block div#e1 (0,84 40x15)
+      block div#e2 (40,84 40x15)
+      block div#e3 (0,99 40x15)
+      block div#e4 (40,99 40x15)
+      block div#e5 (0,114 40x15)
+    block div#f.g (0,129 100x30) [display:grid]
+      block div#fm (30,139 70x20)
+      block div#fh (0,129 100x10)
+      block div#fs (0,139 30x20)
+    block div#h.g (0,159 50x60) [display:grid]
+      block div#h1 (0,159 50x10)
+      block div#h2 (0,169 50x30)
+      block div#h3 (0,199 50x20)

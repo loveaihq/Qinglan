@@ -1,0 +1,43 @@
+<!--
+viewport: 400x300
+Grid item placement (css-grid-1 8.3-8.5; step 2b-2). Font 10px/10px Ahem, body margin 0. Every container is 60 wide with the columns 20px 20px 20px
+and implicit rows of 10px (grid-auto-rows).
+
+g      div#g y=0, sparse packing. g1 and g2 span 2 columns, g3 is one cell. g1 goes to row 1, columns 1-2. g2 does not fit beside it (columns 2-3
+       overlap g1, and the cursor is past column 2) and opens row 2, where the cursor stays: g3 takes the next free cell from there, row 2 column 3
+       (8.5). g1 (0,0 40x10), g2 (0,10 40x10), g3 (40,10 20x10); the container is 20 high.
+h      div#h y=20, grid-auto-flow: row dense: the same items, but g3 goes back to the first hole, row 1 column 3: h3 (40,20 20x10), h1 (0,20 40x10),
+       h2 (0,30 40x10). The container is 20 high.
+i      div#i y=40: i1 grid-row 2 / 4, grid-column 2: rows 2-3 of column 2 (20,50 20x20). i2 grid-area 1 / 1 / 2 / 3 (row-start / column-start / row-end /
+       column-end): row 1, columns 1-2 (0,40 40x10). i3 grid-column -2 / -1 (negative lines count from the end of the explicit grid: column 3) with an
+       automatic row: the first row where column 3 is free, row 1 (40,40 20x10). i4 is auto: the cursor is at row 1 column 3, which is taken, so it
+       goes to row 2 column 1 (0,50 20x10). Three rows: the container is 30 high.
+j      div#j y=70, columns [a] 20px [b] 20px [c] 20px [d]. j1 grid-column b / d: columns 2-3 (20,70 40x10). j2 grid-column a / span 2: columns 1-2; its
+       column start (1) is before the cursor's (2), so it goes to the next row: (0,80 40x10). The container is 20 high.
+check: block div#g :: (0,0 60x20) [display:grid]
+check: block div#g1 :: (0,0 40x10)
+check: block div#g2 :: (0,10 40x10)
+check: block div#g3 :: (40,10 20x10)
+check: block div#h :: (0,20 60x20) [display:grid]
+check: block div#h1 :: (0,20 40x10)
+check: block div#h2 :: (0,30 40x10)
+check: block div#h3 :: (40,20 20x10)
+check: block div#i :: (0,40 60x30) [display:grid]
+check: block div#i1 :: (20,50 20x20)
+check: block div#i2 :: (0,40 40x10)
+check: block div#i3 :: (40,40 20x10)
+check: block div#i4 :: (0,50 20x10)
+check: block div#j :: (0,70 60x20) [display:grid]
+check: block div#j1 :: (20,70 40x10)
+check: block div#j2 :: (0,80 40x10)
+check: block body :: (0,0 400x90)
+-->
+<!doctype html>
+<style>
+body { margin: 0; font: 10px/10px Ahem }
+.g { display: grid; width: 60px; grid-template-columns: repeat(3, 20px); grid-auto-rows: 10px }
+</style>
+<div id="g" class="g"><div id="g1" style="grid-column:span 2"></div><div id="g2" style="grid-column:span 2"></div><div id="g3"></div></div>
+<div id="h" class="g" style="grid-auto-flow:row dense"><div id="h1" style="grid-column:span 2"></div><div id="h2" style="grid-column:span 2"></div><div id="h3"></div></div>
+<div id="i" class="g"><div id="i1" style="grid-row:2/4;grid-column:2"></div><div id="i2" style="grid-area:1/1/2/3"></div><div id="i3" style="grid-column:-2/-1"></div><div id="i4"></div></div>
+<div id="j" class="g" style="grid-template-columns:[a] 20px [b] 20px [c] 20px [d]"><div id="j1" style="grid-column:b/d"></div><div id="j2" style="grid-column:a/span 2"></div></div>

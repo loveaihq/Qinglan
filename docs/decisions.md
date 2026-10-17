@@ -1065,3 +1065,42 @@ bug 类共 51 条，**没有修完**：每条在 `notes.txt` 里有原因（家�
 
 - `aspect-ratio` 属性、图片等带比例的 flex 项的转移尺寸；表格当 flex 项的尺寸细节；`canvas`/`iframe` 的真内容（2e）；`writing-mode` 竖排的 flex（2d）；规范 9.9.1.1 的理想内在尺寸算法；`visibility: collapse` 的第二轮；flex 项 `z-index` 的"变 relative"是近似。
 - 首屏停止线不进 flex 容器：整页都包在 flex 里的页面（现代站点常见）首屏要排完整页。有预算压力时可以让 nowrap 的列容器在已知高度之后停（2b-2 或之后看数字再定）。
+
+
+## 第 2 层 · 2b-2 grid（2026-10-17）
+
+接着 2b-1（`ad58292`）。代码：`css/parse_grid.rs`（新）、`css/types.rs`、`computed.rs`、`parse_prop.rs`（新属性组 `Group::Grid`、`GridStyle`）、`layout/grid.rs`（新）、`layout/flex.rs`、`layout/mod.rs`、`layout/block.rs`、`layout/boxtree.rs`、`layout/intrinsic.rs`；测试：`tests/pages/grid-*.html`、`tests/grid.rs`、`tests/firstscreen.rs`、`tests/wpt/css/css-grid`。规范原文在 `docs/spec/css-grid-1.html`（只放本地）。
+
+### 1. 样式
+
+- 新属性 12 个：`justify-items`、`justify-self`（进 `FlexStyle`）和 `grid-template-columns/rows/areas`、`grid-auto-columns/rows/flow`、`grid-row/column-start/end`（进 `GridStyle`，不继承，没写时共用初始值）。简写：`grid-template`、`grid`、`grid-area`、`grid-row`、`grid-column`、`place-items`、`place-self`、`place-content`。轨道列表支持 `repeat()`（整数展开，`auto-fill`/`auto-fit` 留到排版时按容器大小定个数）、`minmax()`、`fit-content()`、`min-content`/`max-content`、`fr`、`[线名]`。`subgrid`、`masonry` 不认（声明无效）。
+- **上限**（记在 `GRID_MAX_TRACKS`）：每个方向的轨道（显式加隐式）和 `repeat()` 展开的个数都是 1000 条（Blink、Gecko 约 10000；占用图是 行×列 个比特，1000×1000 约 125 KB，所以取 1000）。超出的 `repeat()` 在 1000 处截断，超出的自动放置项不排版。工作量：放置和轨道尺寸按项数×跨度计入排版预算。
+- grid 项和 flex 项一样 blockify、取消浮动、按 `order` 排序、`z-index` 当 `position: relative`；盒子树复用 `finish_flex`（文字段包进匿名项，只有空白的不渲染）。
+
+### 2. 排版（`layout/grid.rs`）
+
+- 顺序：显式网格（`auto-fill` 个数按 7.2.3.2，轨道最小 1px 防除零）→ 项的线（8.3、8.3.1，命名线、`name-start`/`name-end` 区域线、负数线、`span`、不够的线当隐式线都有名字）→ 自动放置（8.5，稀疏和 `dense`，`grid-auto-flow: column`，四步按规范）→ 轨道尺寸（11.4–11.8：非跨行的先做，跨行的按跨度从小到大，每步按 11.5.1 先到限制再到限制之外，再是跨弹性轨道的项，最大化，展开 `fr`（`find_fr`，内容尺寸下取各项的最大值，受容器 `min-height`/`max-height` 约束），拉伸 `auto` 轨道）→ 对齐（10：`justify/align-content`，`justify/align-items/self`，自动外边距，`safe`/`unsafe`，`direction: rtl` 把列镜像）。
+- **6.6 自动最小尺寸**：跨的轨道里有 `auto` 最小值、跨多条时没有弹性轨道，才用内容最小尺寸；全是定长最大值时取其和为上限。`fr` 的整数余数按小数部分从大到小每条补 1/64 px，所以 99 条 `1fr` 加起来正好是容器宽。
+- **不指数增长**：列用内在宽度（有备忘，不排版）；行需要项在最终宽度的高度时用 `flex_measure`（和 flex 同一个备忘，按（盒、宽度）记一项，嵌套每层只量一次），再最终排一次；固定尺寸行里的项不量。实测（`tests/grid.rs`，工作量 = 排版预算用掉的单位，深 5 → 深 20）：列里嵌 2485 → 31689，行（`auto 1fr` + `min-height`）里嵌 1835 → 24400，跨三列的嵌套 2731 → 36751；随深度多项式增长，预算 20 000 000，用掉 0.18%。
+- **脱离文档流的孩子**（9）：包含块是网格容器时，包含块是项的线所指的网格区域（`auto` 或不存在的线 = 内边距边），静态位置在该区域里按 `justify-self`/`align-self` 对齐（规范 9.2 写的是内容框，各浏览器和 WPT 的 `positioned-grid-items-*` 都是区域，选区域；两个方向的线都是 `auto` 时才用内容框）；包含块是别的盒子时，静态位置在内容框里。
+- **容器基线**：第一行的第一项、最后一行的最后一项的基线。
+- **没做**：基线对齐（`baseline` 当 `start`，没有基线共享组和"shim"）、`subgrid`、竖排、`masonry`、网格容器的 `grid-template` 用百分比的循环依赖（百分比轨道在不定高时当 `auto`，不再重算）、行的内在尺寸用的循环百分比。
+
+### 3. 首屏优先进入 flex 和 grid
+
+停止线以前不进 flex 容器（整个排完）；现在在下面的条件下进去（条件不满足就和以前一样整个排完）。**原则**：只有上方的东西不依赖被截掉的部分才能截；被截的盒子高度是下界（高度 ≥ 停止线以上的部分），所以它后面的内容一定在线以下。每个项有自己的停止线（`item_stop`：并排的项不能互相截断，项的 `origin_y` 取估计的顶）。
+
+- **列 flex**（不反向、不换行、高度不定、没有 `max-height`、`min-height` 在停止线以内）：项一个接一个，没有剩余空间，所以起点在停止线以下的项和后面的项不量、不排；每个项量内容高度时也带停止线。
+- **行 flex**（一行、不换行、各项 `align` 是拉伸或顶端对齐）：把停止线传进每个项（项的顶是容器内容框的顶）。
+- **grid**（高度不定、至多一条弹性行、`align-content` 和各项 `align-self` 是顶端或拉伸、`min-height` 在停止线以内）：量行高时按"行的起点下界"（前面定长行之和）带停止线，起点一定在线以下的项不量；最终排版时用真实的行起点，线以下的项不排。
+- 被截的容器记进 `cut`（里面的绝对定位孩子等完整排版）。`tests/firstscreen.rs` 的相等测试（各页 25%/50%/75%、中文维基）通过；新的 `flex_and_grid_shells_are_cut_by_the_stop_line`：列 flex 的工作量降到 1/10 以下，行 flex 和 grid 外壳降到 1/2 以下（行和 grid 的外壳还要读全部文字来算项的最小内容宽度，这部分省不掉）。已知的近似：被拉伸的项里有百分比高度的后代时，行高是下界，后代的高度可能和完整排版不一样（相等测试没有碰到）。
+
+### 4. WPT `css/css-grid`
+
+554 / 1573 通过（35.2%；`qinglan-cli wpt css/css-grid`）。没通过的 1019 条：bug 类 79（每条在 `notes.txt` 有一行：基线对齐 38，其余是表格额外高度的分配 4（不是 grid）、百分比 gap 4、grid 项的绘制顺序 5、替换元素百分比高度的循环依赖 2、百分比行高 4、脱离文档流 9、没逐个分析 13）、limit 23（canvas/marquee/iframe 占位框 19，`::first-line`/`::first-letter` 4）、not planned 836（`subgrid`、`masonry`/`grid-lanes`、`aspect-ratio`、多栏……）、后面的步骤 81（2c 7、2d 64、2e 10）。分类器改了两处：grid 不再算"后面的步骤"；`columns:` 不再匹配 `grid-template-columns:`（之前 555 条被当成多栏）。顺带修的引擎问题：`auto-fit` 的折叠按方向分别记、`fr` 余数、自动最小尺寸、拉伸的项受 `min/max-height` 限制（表格不自己夹）。
+
+### 5. 数字（release，插电 `BatteryStatus = 2`，没有别的 cargo/rustc/qpdf 在跑）
+
+- **体积**：`qinglan.exe` 1 984 000 → **2 138 624**（**+154 624**）。**超出 2b 的预算**（2 027 000，即 2b 总共 +100 KB）111 624 字节：grid 的实现（解析、放置、轨道尺寸算法、对齐）比 2b 给 grid 留的 43 KB 大得多。按任务单的要求没有删功能；2c–2e 还剩的体积要重新分配（第 2 层总上限 2 516 582，现在用了 2 138 624，剩 377 958）。
+- **内存**（zhwiki-rec，`qinglan.exe --bench`，5 次新进程，滚到底的私有字节）：47 857 664 / 46 026 752 / 44 736 512 / 44 351 488 / 45 240 320，**最大 47.86 MB**（≤ 50）。
+- **首屏**（5 次中位数）：zhwiki-rec 146.6 毫秒（180.4 / 135.2 / 161.6 / 146.6 / 141.8），gh-ripgrep 167.5（180.1 / 167.5 / 164.1 / 166.7 / 167.7），gh-rust 146.2（146.2 / 168.7 / 136.3 / 156.8 / 136.3），mdn-div 34.4（45.4 / 33.3 / 36.7 / 33.3 / 34.4）；都 ≤ 200。中文维基用 Vector 2022 的 grid，首屏从 113 毫秒变成 146.6（grid 会算项的最小内容宽度，要读全文）；GitHub 页面没有明显变化（花时间的不是 flex/grid 外壳）。

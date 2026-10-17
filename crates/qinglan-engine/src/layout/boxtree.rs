@@ -418,6 +418,7 @@ impl Builder<'_> {
             misc: self.init.misc.clone(),
             gen_: self.init.gen_.clone(),
             flex: self.init.flex.clone(),
+            grid: self.init.grid.clone(),
             custom: p.custom.clone(),
         })
     }
@@ -963,7 +964,7 @@ impl Builder<'_> {
         let role = self.role(id);
         let style = self.boxes.get(id as usize).map(|b| b.style.clone()).unwrap_or_else(|| self.init.clone());
         let any_internal = outs.iter().any(|o| matches!(o, Out::Block(b) if internal(self.role(*b))));
-        let flex = matches!(self.boxes.get(id as usize).and_then(|b| b.fallback), Some(Display::Flex | Display::InlineFlex));
+        let flex = matches!(self.boxes.get(id as usize).and_then(|b| b.fallback), Some(Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid));
         match role {
             Role::Other if flex => self.finish_flex(id, outs, &style),
             Role::Table | Role::Group | Role::Row | Role::ColGroup => {

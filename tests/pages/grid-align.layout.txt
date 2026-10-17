@@ -1,0 +1,30 @@
+viewport 400x300
+block html (0,0 400x290)
+  block body (0,0 400x290)
+    block div#k.g (0,0 100x50) [display:grid]
+      block div#k1 (40,40 20x10)
+    block div#l.g (0,50 100x50) [display:grid]
+      block div#l1 (80,70 20x10)
+    block div#m.g (0,100 100x50) [display:grid]
+      block div#m1 (40,120 20x10)
+    block div#n.g (0,150 100x10) [display:grid]
+      block div#n1 (0,150 20x10)
+      block div#n2 (80,150 20x10)
+    block div#o.g (0,160 100x50) [display:grid]
+      block div#o1 (0,180 100x10)
+    block div#p.g (0,210 100x10) [display:grid]
+      block div#p1 (80,210 20x10)
+      block div#p2 (50,210 30x10)
+    block div#q.g (0,220 100x20) [display:grid]
+      block div#q1 (0,220 30x20)
+        line (0,220 30x10) baseline=228
+          text "aaa" (0,220 30x10)
+        line (0,230 30x10) baseline=238
+          text "bb" (0,230 20x10)
+      block div#q2 (30,220 70x20)
+    block div#r.g (0,240 100x50) [display:grid] [relative]
+      block div#ra (50,240 10x10) [absolute]
+      block div#rb (0,240 10x10) [absolute]
+paint-above div#r.g relative z=0
+paint-above div#ra absolute z=0
+paint-above div#rb absolute z=0

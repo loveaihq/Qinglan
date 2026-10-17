@@ -20,6 +20,7 @@ pub mod boxtree;
 pub mod dump;
 pub mod flex;
 pub mod floats;
+pub mod grid;
 pub(crate) mod generated;
 pub mod image;
 pub mod inline;
@@ -403,6 +404,25 @@ impl Layouter<'_> {
             self.exhausted = true;
         }
         !self.exhausted
+    }
+
+    /// First-screen-first inside a flex or grid container: run `f`, the layout of one item whose border-box top is at
+    /// estimated page y `est`, with a stop line of its own (items laid out side by side must not cut each other off), and
+    /// say whether it was cut.
+    pub(crate) fn item_stop<R>(&mut self, est: LayoutUnit, f: impl FnOnce(&mut Self) -> R) -> (R, bool) {
+        let (was, origin) = (self.stopped, self.origin_y);
+        self.stopped = false;
+        self.origin_y = est;
+        let out = f(self);
+        let hit = self.stopped;
+        self.stopped = was;
+        self.origin_y = origin;
+        (out, hit)
+    }
+
+    /// Would content starting at estimated page y `y` be left out? (Does not set `stopped`.)
+    pub(crate) fn below_stop(&self, y: LayoutUnit) -> bool {
+        self.no_stop == 0 && self.stop_at.is_some_and(|s| y >= s)
     }
 
     /// First-screen-first: should the content starting at estimated page y `y` be left out? Sets

@@ -41,7 +41,7 @@ fn lu(v: i64) -> LU {
 
 /// Where a box sits in free space.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Pos {
+pub(super) enum Pos {
     Start,
     Mid,
     End,
@@ -254,9 +254,7 @@ impl Layouter<'_> {
             self.cb_stack.push(id);
         }
         let pmark = self.pending.len();
-        self.no_stop += 1;
         let content_h = self.flex_inner(id, &g, (content_left, content_top));
-        self.no_stop -= 1;
         self.finish_box(id, &g, content_h, content_top);
         (self.pos, self.touched, self.fs) = saved;
         if positioned {
@@ -270,16 +268,26 @@ impl Layouter<'_> {
 
     /// The border-box height of `id` laid out with a content width of `w` and no definite height around it; the layout
     /// is taken back (it only measures). Remembered by item and width, so a nest of containers measures each level once.
-    fn flex_measure(&mut self, id: BoxId, cb_w: LU, w: LU) -> LU {
+    pub(super) fn flex_measure(&mut self, id: BoxId, cb_w: LU, w: LU, est: Option<LU>) -> LU {
         if let Some(&(mw, h)) = self.measured.get(&id)
             && mw == w
         {
             return h;
         }
         let mark = self.mark();
-        self.no_stop += 1;
-        self.layout_block(id, cb_w, None, Flow { forced_w: Some(w), ignore_h: true, ..Flow::default() });
-        self.no_stop -= 1;
+        let flow = Flow { forced_w: Some(w), ignore_h: true, ..Flow::default() };
+        match est {
+            // First-screen-first: the item is measured up to the stop line only (its height is then a lower bound that
+            // still reaches the line, which is all the caller needs for what lies above it).
+            Some(e) => {
+                self.item_stop(e, |s| s.layout_block(id, cb_w, None, flow));
+            }
+            None => {
+                self.no_stop += 1;
+                self.layout_block(id, cb_w, None, flow);
+                self.no_stop -= 1;
+            }
+        }
         let h = self.out.get(id as usize).map_or(LU::ZERO, |o| o.h);
         self.restore(mark);
         self.measured.insert(id, (w, h));
@@ -297,7 +305,7 @@ impl Layouter<'_> {
     }
 
     /// Is `id` laid out differently when its own height is forced (so that stretching it needs a new layout)?
-    fn height_sensitive(&mut self, id: BoxId) -> bool {
+    pub(super) fn height_sensitive(&mut self, id: BoxId) -> bool {
         let tree = self.tree;
         let bx = tree.get(id);
         if matches!(bx.fallback, Some(Display::Flex | Display::InlineFlex | Display::Table | Display::InlineTable)) {
@@ -336,7 +344,7 @@ impl Layouter<'_> {
     }
 
     /// The facts about one flex item that do not depend on the other items (9.2 steps 3 to 5, 4.5).
-    fn flex_item(&mut self, cid: BoxId, cx: &Ctx) -> Item {
+    fn flex_item(&mut self, cid: BoxId, cx: &Ctx, est: Option<LU>) -> Item {
         let tree = self.tree;
         let cbx = tree.get(cid);
         let st = cbx.style.clone();
@@ -444,7 +452,7 @@ impl Layouter<'_> {
             if ax.col {
                 let h = match ratio {
                     Some((rw, rh)) if cbx.kind == BoxKind::Replaced => lu(r(rh) * r(cross_w) / r(rw).max(1)),
-                    _ => (self.flex_measure(cid, cw, cross_w) - pm).max0(),
+                    _ => (self.flex_measure(cid, cw, cross_w, est) - pm).max0(),
                 };
                 content_max = h;
                 content_min = h;
@@ -592,17 +600,36 @@ impl Layouter<'_> {
         // ---- 9.1 the items; out-of-flow children wait for the static position (4.1)
         let mut items: Vec<Item> = Vec::new();
         let mut oofs: Vec<BoxId> = Vec::new();
+        // First-screen-first (L1 task 17). A column container (not reversed, one line, no definite height) puts its items
+        // one below the other with no free space, so an item that starts below the stop line, and all that follow it, can be
+        // left out: nothing above the line depends on them (the container's minimum height must be within reach). A row
+        // container with one line keeps the stop line inside its items when they start at the top of the line or stretch (a
+        // line cut short must not move them). Every item gets a stop line of its own (`item_stop`).
+        let top = r(self.origin_y) + r(origin.1);
+        let stop_on = self.no_stop == 0 && self.stop_at.is_some();
+        let col_cut = stop_on && col && !wrap && !ax.rev && inner_main.is_none() && max_main.is_none() && self.stop_at.is_some_and(|s| r(s) - top - r(min_main) >= 0);
+        let (mut run, mut hit) = (0i64, false);
         for &c in &bx.children {
             if tree.get(c).oof {
                 oofs.push(c);
             } else if self.exhausted {
                 break;
             } else {
-                let it = self.flex_item(c, &cx);
+                let est = col_cut.then(|| lu(top + run));
+                if est.is_some_and(|e| self.below_stop(e)) {
+                    hit = true;
+                    break;
+                }
+                let it = self.flex_item(c, &cx, est);
+                run += it.outer_hyp() + r(gap_main);
                 items.push(it);
             }
         }
         self.charge(items.len() as u64 * 3);
+        let cut = col_cut || (stop_on && !col && !wrap && items.iter().all(|i| matches!(i.align, AlignKind::Stretch | AlignKind::FlexStart | AlignKind::Start | AlignKind::SelfStart)));
+        if !cut {
+            self.no_stop += 1;
+        }
 
         // ---- 9.3 flex lines
         let avail = inner_main.or(max_main).map_or(i64::MAX / 4, r);
@@ -659,7 +686,11 @@ impl Layouter<'_> {
                     _ => it.ratio.filter(|_| it.cross_auto).map(|(rw, rh)| lu(r(rh) * r(it.lay_main) / r(rw).max(1))),
                 };
                 let fw = it.lay_main;
-                self.lay_flex_item(it, &cx, fw, fh);
+                if cut {
+                    hit |= self.item_stop(lu(top), |s| s.lay_flex_item(it, &cx, fw, fh)).1;
+                } else {
+                    self.lay_flex_item(it, &cx, fw, fh);
+                }
                 let o = self.out.get(it.id as usize).copied().unwrap_or_default();
                 it.cross = o.h;
                 it.baseline = self.first_baseline(it.id);
@@ -719,7 +750,11 @@ impl Layouter<'_> {
                 }
                 let fh = it.stretch.filter(|_| it.cross_auto).or_else(|| it.ratio.filter(|_| it.cross_auto).map(|(rw, rh)| lu(r(rh) * r(it.lay_main) / r(rw).max(1))));
                 let fw = it.lay_main;
-                self.lay_flex_item(it, &cx, fw, fh);
+                if cut {
+                    hit |= self.item_stop(lu(top), |s| s.lay_flex_item(it, &cx, fw, fh)).1;
+                } else {
+                    self.lay_flex_item(it, &cx, fw, fh);
+                }
             }
             self.flex_spent += self.work.saturating_sub(w0);
         } else if !col {
@@ -740,7 +775,11 @@ impl Layouter<'_> {
                 let pc = it.pb(ax.cs, ax.ce);
                 let fw = it.stretch.unwrap_or((it.cross - pc).max0());
                 let fh = if it.def_main || it.content_h != Some(it.target) { Some(it.target) } else { None };
-                self.lay_flex_item(it, &cx, fw, fh);
+                if cut {
+                    hit |= self.item_stop(lu(top + r(it.mpos)), |s| s.lay_flex_item(it, &cx, fw, fh)).1;
+                } else {
+                    self.lay_flex_item(it, &cx, fw, fh);
+                }
             }
         }
 
@@ -788,6 +827,12 @@ impl Layouter<'_> {
             self.pending.push(super::Pending { id: c, owner: id, sx: cl, sy: ct, cb, align: Some(StaticAlign { rw: inner_w, rh: inner_h, ax: ax_x, ay: ax_y }) });
         }
 
+        if !cut {
+            self.no_stop -= 1;
+        } else if hit {
+            self.cut.push(id);
+            self.stopped = true;
+        }
         if col { main_size } else { lu(total_cross).max(LU::ZERO) }
     }
 
