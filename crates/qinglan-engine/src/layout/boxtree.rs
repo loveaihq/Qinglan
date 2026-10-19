@@ -24,7 +24,7 @@ use crate::css::cascade::StyleTree;
 use crate::css::color::Color;
 use crate::css::computed::{BoxStyle, ComputedStyle};
 use crate::css::selector::PseudoElement;
-use crate::css::types::{Content, Dim, Display, Position, TextWrapMode, WhiteSpaceCollapse};
+use crate::css::types::{Content, Dim, Display, Overflow, Position, TextWrapMode, WhiteSpaceCollapse};
 use crate::css::values::Lp;
 use crate::html::atoms::{Atom, a};
 use crate::html::dom::{Document, MAX_NODES, NONE, Namespace, NodeData, NodeId};
@@ -208,6 +208,9 @@ pub struct BoxTree {
     /// Some `::before` / `::after` boxes were left out: the page makes more generated boxes than [`MAX_NODES`] allows
     /// together with its own nodes.
     pub cut: bool,
+    /// The `overflow` the viewport uses, propagated from the root element or the `body` (CSS2 11.1.1, css-overflow-3 3.3):
+    /// `visible` there means `auto` and `clip` means `hidden`. The element it came from lays out as `overflow: visible`.
+    pub viewport_overflow: (Overflow, Overflow),
     dummy: LayoutBox,
 }
 
@@ -330,6 +333,8 @@ struct Builder<'a> {
     generated: usize,
     gen_cap: usize,
     gen_cut: bool,
+    /// The element whose `overflow` went to the viewport (`NONE`: none did).
+    vp_source: NodeId,
     images: Vec<ImageRequest>,
     video: Option<Atom>,
     audio: Option<Atom>,
@@ -358,6 +363,7 @@ pub fn build_box_tree_with(doc: &Document, styles: &StyleTree, env: &BuildEnv<'_
         generated: 0,
         gen_cap: MAX_NODES.saturating_sub(doc.nodes.len()) / 4,
         gen_cut: false,
+        vp_source: NONE,
         images: Vec::new(),
         video: doc.atoms.lookup("video"),
         audio: doc.atoms.lookup("audio"),
@@ -366,6 +372,31 @@ pub fn build_box_tree_with(doc: &Document, styles: &StyleTree, env: &BuildEnv<'_
         progress: doc.atoms.lookup("progress"),
     };
     let root_el = doc.document_element();
+    let mut viewport_overflow = (Overflow::Auto, Overflow::Auto);
+    if root_el != NONE {
+        // CSS2 11.1.1: the root's `overflow` goes to the viewport; when it is `visible` and the root is `html`, the `body`'s does.
+        let visible = |n: NodeId| styles.get(n).is_some_and(|s| s.boxs.overflow_x == Overflow::Visible && s.boxs.overflow_y == Overflow::Visible);
+        let body = || doc.children(root_el).find(|&c| doc.is_html_element(c, a::BODY));
+        let source = if !visible(root_el) {
+            root_el
+        } else if doc.is_html_element(root_el, a::HTML)
+            && let Some(bd) = body()
+            && !visible(bd)
+        {
+            bd
+        } else {
+            NONE
+        };
+        if let Some(s) = styles.get(source).filter(|_| source != NONE) {
+            let map = |o: Overflow| match o {
+                Overflow::Visible => Overflow::Auto,
+                Overflow::Clip => Overflow::Hidden,
+                o => o,
+            };
+            viewport_overflow = (map(s.boxs.overflow_x), map(s.boxs.overflow_y));
+            b.vp_source = source;
+        }
+    }
     let mut outs = Vec::new();
     if root_el != NONE {
         b.gen_node(root_el, &init, 0, &mut outs);
@@ -379,7 +410,7 @@ pub fn build_box_tree_with(doc: &Document, styles: &StyleTree, env: &BuildEnv<'_
         }
     };
     let dummy = LayoutBox::new(BoxKind::Block, NONE, init, true);
-    BoxTree { boxes: b.boxes, root, images: b.images, cut: b.gen_cut, dummy }
+    BoxTree { boxes: b.boxes, root, images: b.images, cut: b.gen_cut, viewport_overflow, dummy }
 }
 
 /// HTML 2.3.4.? "rules for parsing integers" (leading white space, sign, digits; the rest is ignored).
@@ -401,6 +432,16 @@ pub(crate) fn parse_html_int(s: &str) -> Option<i32> {
 
 fn collapse_ws(s: &str) -> String {
     s.split_ascii_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The style of the element whose `overflow` went to the viewport: the box itself does not clip or scroll (CSS2 11.1.1).
+/// Out of line, so that the frame of the recursive `gen_node` stays as small as it was.
+#[inline(never)]
+fn without_overflow(style: &Rc<ComputedStyle>) -> Rc<ComputedStyle> {
+    let mut bs = (*style.boxs).clone();
+    bs.overflow_x = Overflow::Visible;
+    bs.overflow_y = Overflow::Visible;
+    Rc::new(ComputedStyle { boxs: Rc::new(bs), ..(**style).clone() })
 }
 
 impl Builder<'_> {
@@ -748,7 +789,10 @@ impl Builder<'_> {
                 if e.ns != Namespace::Html {
                     return;
                 }
-                let Some(style) = self.styles.get(n).cloned() else { return };
+                let Some(mut style) = self.styles.get(n).cloned() else { return };
+                if n == self.vp_source {
+                    style = without_overflow(&style);
+                }
                 let order = self.next_order;
                 self.next_order = self.next_order.wrapping_add(1);
                 let display = style.boxs.display;

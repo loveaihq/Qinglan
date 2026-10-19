@@ -937,6 +937,7 @@ css/css-flexbox/flexbox-collapsed-item-horiz-001.html
 css/css-flexbox/flexbox-column-row-gap-001.html
 css/css-flexbox/flexbox-column-row-gap-003.html
 css/css-flexbox/flexbox-definite-sizes-001.html
+css/css-flexbox/flexbox-definite-sizes-003.html
 css/css-flexbox/flexbox-definite-sizes-006.html
 css/css-flexbox/flexbox-flex-basis-content-002a.html
 css/css-flexbox/flexbox-flex-basis-content-002b.html
@@ -1236,6 +1237,7 @@ css/css-flexbox/gap-019.html
 css/css-flexbox/gap-020.html
 css/css-flexbox/gap-021.html
 css/css-flexbox/grandchild-span-height.html
+css/css-flexbox/grid-flex-item-002.html
 css/css-flexbox/grid-flex-item-003.html
 css/css-flexbox/grid-flex-item-004.html
 css/css-flexbox/grid-flex-item-006.html
@@ -1556,6 +1558,7 @@ css/css-grid/grid-items/explicitly-sized-grid-item-as-table.html
 css/css-grid/grid-items/grid-inline-items-001.html
 css/css-grid/grid-items/grid-inline-items-002.html
 css/css-grid/grid-items/grid-inline-items-003.html
+css/css-grid/grid-items/grid-inline-items-inline-blocks-001.html
 css/css-grid/grid-items/grid-inline-order-property-auto-placement-001.html
 css/css-grid/grid-items/grid-inline-order-property-auto-placement-002.html
 css/css-grid/grid-items/grid-inline-order-property-auto-placement-003.html
@@ -1607,6 +1610,7 @@ css/css-grid/grid-items/grid-items-calc-paddings-001.html
 css/css-grid/grid-items/grid-items-contribution-negative-margins.html
 css/css-grid/grid-items/grid-items-em-paddings-001.html
 css/css-grid/grid-items/grid-items-fixed-paddings-001.html
+css/css-grid/grid-items/grid-items-inline-blocks-001.html
 css/css-grid/grid-items/grid-items-painted-once-001.html
 css/css-grid/grid-items/grid-items-painting-order-dom-001.html
 css/css-grid/grid-items/grid-items-percentage-margins-and-fixed-paddings-001.html
@@ -1817,6 +1821,14 @@ css/css-grid/implicit-grids/grid-support-grid-auto-columns-rows-001.html
 css/css-grid/implicit-grids/grid-support-grid-auto-columns-rows-002.html
 css/css-grid/layout-algorithm/auto-margins-ignored-during-track-sizing-001.html
 css/css-grid/layout-algorithm/flex-and-intrinsic-sizes-002.html
+css/css-grid/layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-001.html
+css/css-grid/layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-002.html
+css/css-grid/layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-003.html
+css/css-grid/layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-004.html
+css/css-grid/layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-005.html
+css/css-grid/layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-006.html
+css/css-grid/layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-007.html
+css/css-grid/layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-008.html
 css/css-grid/layout-algorithm/grid-auto-track-item-with-border-001.html
 css/css-grid/layout-algorithm/grid-auto-tracks-items-with-borders-001.html
 css/css-grid/layout-algorithm/grid-find-fr-size-restart-algorithm.html

@@ -278,7 +278,14 @@ impl Builder<'_> {
                     continue;
                 }
                 let co = res.box_out(c);
-                if cb.kind == BoxKind::Block {
+                if cb.flex_item {
+                    // A flex or grid item paints atomically like an inline-block (css-flexbox-1 4.3, css-grid-1 9, CSS2 E.2
+                    // step 7): background, floats and content together, in the pass of the inline content, in the
+                    // `order`-modified document order the items are in already.
+                    if inline {
+                        self.paint_box(c, ax + co.x, ay + co.y);
+                    }
+                } else if cb.kind == BoxKind::Block {
                     self.walk(c, ax + co.x, ay + co.y, inline);
                 } else if !inline {
                     // A block-level replaced box is a context of its own, painted whole at its place among the blocks.

@@ -142,6 +142,10 @@ impl Page {
     }
 
     pub fn max_scroll(&self, vp: Viewport) -> f32 {
+        // `overflow: hidden` on the root or the body goes to the viewport: the page cannot be scrolled by the user.
+        if self.layout.as_ref().is_some_and(|l| l.tree.viewport_overflow.1 == qinglan_engine::css::types::Overflow::Hidden) {
+            return 0.0;
+        }
         (self.height() - vp.h).max(0.0)
     }
 

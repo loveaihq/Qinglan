@@ -1142,3 +1142,18 @@ bug 类共 51 条，**没有修完**：每条在 `notes.txt` 里有原因（家�
 ### 新的恶意页面（`crates/qinglan-cli/tests/hostile.rs`，release，每个 ≤ 5 秒、≤ 200 MB）
 
 `grid_dense_200k_items` 0.9 秒 / 89 MB、`grid_dense_wide_spans` 0.8 / 57、`grid_one_column_items_dense` 0.2 / 54、`grid_areas_1000_by_1000_lines` 0.9 / 79、`grid_10000_items_spanning_1000_auto_tracks` 0.4 / 18、`before_and_after_on_100k_elements` 0.6 / 170、`quotes_100k` 0.6 / 170、`floats_100k` 0.7 / 77。debug 版大小缩到 1/10。
+
+## 第 2 层 · 2a/2b 审查修复（2026-10-17，提交 B：`Paint order of flex/grid items; body overflow to the viewport`）
+
+### flex 和 grid 项的绘制顺序（`paint/build.rs`）
+
+- css-flexbox-1 4.3、css-grid-1 9：项"和行内块一模一样地绘制"，只是用 `order` 排过的顺序。以前项当普通块走两趟（先所有块的背景，再所有行内内容），后一个项就盖不住前一个项的文字。
+- 现在 `walk` 里遇到 `flex_item` 的孩子：第一趟（块的背景）跳过，第二趟（行内内容，CSS2 附录 E.2 第 7 步）用 `paint_box` 整个画（背景、它自己的浮动、内容一起，和行内块一样）。放在第二趟而不是第一趟，是因为 flex 容器本身是块级盒，它旁边的浮动（第 4 步）要盖在容器背景上、盖不住项的内容——`flexbox_flex-formatting-interop` 就是这样（第一次试放在第一趟，它退步了）。
+- `z-index` 不为 `auto` 的静态项早就按 `position: relative` 算（2b-1），仍走层叠上下文的列表，不受影响。点击顺序没改。
+- WPT：css-grid 554 → 564，css-flexbox 647 → 649，没有退步（`passing.txt` +12 条）。审查点名的 5 个绘制顺序测试里 2 个过了；`grid-item-text-background-not-interleaved-001` 和 `grid-layout-z-order-a/b` 还差（z-order 两个是静态项带 `z-index`，第一个差点在 (100,60)：参照是黄色，我们是白色，没逐个分析），`notes.txt` 里那几条的原因改了。
+
+### `overflow` 从根元素或 `body` 传给视口（`layout/boxtree.rs`、`qinglan-app/src/page.rs`）
+
+- CSS2 11.1.1、css-overflow-3 3.3：根元素的 `overflow` 给视口；根是 `html` 且它的值是 `visible` 时，用 `body` 的。视口上 `visible` 当 `auto`，`clip` 当 `hidden`；值传出去的那个元素自己按 `overflow: visible` 排版和绘制（不裁剪，也不是 BFC 的根）。
+- 建盒子树时（`build_box_tree_with`）决定来源元素，只对它换一份 `overflow` 为 `visible` 的样式（`vp_source`）；结果记在 `BoxTree::viewport_overflow`。`Page::max_scroll` 在视口纵向是 `hidden` 时返回 0（`body { overflow: hidden }` 的页面在窗口里不能滚）。`auto`/`scroll` 照旧；横向没有滚动条，没变。
+- WPT css-grid 里 6 个点名这件事的测试（`body { overflow: hidden }` 把超出的内容裁在 body 的盒子里）和绘制顺序的一起算在上面 +10 里。新测试 `overflow_of_the_root_or_body_goes_to_the_viewport`（`tests/grid.rs`）。

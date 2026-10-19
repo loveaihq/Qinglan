@@ -138,3 +138,26 @@ fn spanning_items_share_what_the_tracks_lack() {
     assert_eq!(b.w, LayoutUnit::px(200), "the spanning item fills both tracks, which stretch to the container (11.8)");
     assert!(a.w >= LayoutUnit::px(20));
 }
+
+/// CSS2 11.1.1: the `overflow` of the root, or of the `body` when the root's is `visible`, goes to the viewport, and the
+/// element it came from then lays out as `overflow: visible`.
+#[test]
+fn overflow_of_the_root_or_body_goes_to_the_viewport() {
+    use qinglan_engine::css::types::Overflow;
+    let body_box = |r: &LayoutResult| r.tree.get(r.tree.root).children.iter().copied().find(|&c| !r.tree.get(c).anonymous).unwrap();
+    // Nothing set: the viewport scrolls when it needs to (`visible` there is `auto`).
+    let r = lay("<!doctype html><body>x");
+    assert_eq!(r.tree.viewport_overflow, (Overflow::Auto, Overflow::Auto));
+    // `body { overflow: hidden }` goes to the viewport; the body box itself does not clip.
+    let r = lay("<!doctype html><style>body{overflow:hidden;height:20px}</style><body><div style=\"height:100px\">x</div>");
+    assert_eq!(r.tree.viewport_overflow, (Overflow::Hidden, Overflow::Hidden));
+    assert_eq!(r.tree.get(body_box(&r)).style.boxs.overflow_y, Overflow::Visible);
+    assert!(!r.box_out(body_box(&r)).clip);
+    // The root's own value wins over the body's, which then stays as it is.
+    let r = lay("<!doctype html><style>html{overflow:scroll}body{overflow:hidden}</style><body>x");
+    assert_eq!(r.tree.viewport_overflow, (Overflow::Scroll, Overflow::Scroll));
+    assert_eq!(r.tree.get(body_box(&r)).style.boxs.overflow_y, Overflow::Hidden);
+    // `clip` on the viewport is `hidden`.
+    let r = lay("<!doctype html><style>body{overflow:clip}</style><body>x");
+    assert_eq!(r.tree.viewport_overflow, (Overflow::Hidden, Overflow::Hidden));
+}
