@@ -1157,3 +1157,21 @@ bug 类共 51 条，**没有修完**：每条在 `notes.txt` 里有原因（家�
 - CSS2 11.1.1、css-overflow-3 3.3：根元素的 `overflow` 给视口；根是 `html` 且它的值是 `visible` 时，用 `body` 的。视口上 `visible` 当 `auto`，`clip` 当 `hidden`；值传出去的那个元素自己按 `overflow: visible` 排版和绘制（不裁剪，也不是 BFC 的根）。
 - 建盒子树时（`build_box_tree_with`）决定来源元素，只对它换一份 `overflow` 为 `visible` 的样式（`vp_source`）；结果记在 `BoxTree::viewport_overflow`。`Page::max_scroll` 在视口纵向是 `hidden` 时返回 0（`body { overflow: hidden }` 的页面在窗口里不能滚）。`auto`/`scroll` 照旧；横向没有滚动条，没变。
 - WPT css-grid 里 6 个点名这件事的测试（`body { overflow: hidden }` 把超出的内容裁在 body 的盒子里）和绘制顺序的一起算在上面 +10 里。新测试 `overflow_of_the_root_or_body_goes_to_the_viewport`（`tests/grid.rs`）。
+
+## 第 2 层 · 2a/2b 审查修复（2026-10-18，提交 C：只做了 `tests/wpt` 瘦身；首屏和体积两项没做）
+
+### 做了：`tests/wpt` 去掉没人引用的文件
+
+- 办法：从"我们跑的测试"出发（`passing.txt` 和各个 `RESULTS-*.md` 表里的全部测试，3602 个）顺着 `rel=match|mismatch`、`href`、`src`、`url()`、`@import` 找出所有被引用的文件；`README`、`LICENSE.md`、`fonts/`、`notes.txt`、`passing.txt`、`RESULTS-*.md` 一律留着；其余的删掉（521 个：被跳过的测试的支持文件 `css/CSS2/support`、`css/CSS2/reference`、`css/support/*testcommon.js`、没人用的图片和 `.ico`、`css-lists/parsing` 和 `crashtests` 里的东西）。
+- 结果：文件 6356 → 5835；内容大小 9.73 MB → 9.19 MB；`du` 的磁盘占用 27.6 MB → 26.0 MB（NTFS 每个小文件占 4 KB 簇，6000 个小文件的"占用"比内容大得多）。**各目录通过数一个没变**（floats 76/100、floats-clear 172/211、generated-content 188/205、tables 219/250、zindex 29/29、flexbox 649/951、grid 564/1573、lists 80/143、tables 90/140；`wpt --check` 2067/2067）。
+- **没到 20 MB**：剩下的大头是 `css/css-grid/grid-lanes`（masonry，不计划做，通过数 0）：磁盘占用约 7.4 MB、1800 个左右的小文件。删掉它们要改 css-grid 的总数（1573 → 约 940）和 RESULTS，不属于"没人引用的文件"，这一轮没动；要不要删由你定（删了就在 20 MB 以内）。
+
+### 没做：grid 首屏时间、可执行文件体积
+
+- zhwiki-rec 首屏 113 → 147 毫秒（grid 对所有项算最小内容宽度）：没改。想法：`resolve_intrinsic` 里单列项只对内在大小的轨道算；剩下的算（弹性轨道的 `find_fr`、flex 组、自动最小尺寸）才是省不掉的 `contribs`，要先量哪一处调用最多再动，下一轮做。
+- 可执行文件：`qinglan.exe` 2 138 624 → **2 150 400**（+11 776：计量、`Occ` 的字操作、伪元素样式共享、视口 `overflow`、绘制顺序）；2b 的上限 2 027 000 已经超了 123 400，第 2 层总上限 2 516 582 还剩 366 182。链接映射（`/MAP`）和去重没做，下一轮做。
+
+### 数字（release；**条件不合格**：`BatteryStatus = 1`，用电池；量的时候 qingpdf 会话的 cargo/rustc 在跑，进程数 0–3 个，不稳定）
+
+- 首屏（`qinglan.exe --bench … --replay-delay 80 --width 1920 --height 1080`，5 次新进程，中位数）：zhwiki-rec 500.6 毫秒（791.6 / 553.0 / 490.5 / 500.6 / 498.4），gh-ripgrep 510.5（593.6 / 503.3 / 508.9 / 510.5 / 561.0），gh-rust 450.0（481.9 / 452.1 / 450.0 / 421.8 / 436.6）。**这些数字不能和 2b 的 113/170/149 比**（电池供电，CPU 降频，约 4 倍慢），要插电重量；2b 提交（`61e832f`）和这几个提交没有交替跑过。
+- 内存（zhwiki-rec，滚到底的私有字节，5 次）：47 042 560 / 44 564 480 / 43 106 304 / 43 319 296 / 44 269 568，**最大 47.04 MB**（≤ 50，2b 是 47.86）。内存对降频不敏感，这个数可信。
