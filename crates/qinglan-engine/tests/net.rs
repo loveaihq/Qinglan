@@ -330,6 +330,12 @@ fn cancel_drops_results_and_wake_is_called() {
     loader.submit(page_req("https://a.example/2", ResourceKind::Document, None)).unwrap();
     let evs = drain(&mut loader, 1);
     assert_eq!(evs.len(), 1);
+    // A worker sends its result first and wakes the owner after (the other order could wake the owner before
+    // there is anything to collect), so the second wake may land a moment after the result was received.
+    let t0 = std::time::Instant::now();
+    while woke.load(Ordering::SeqCst) < 2 && t0.elapsed() < Duration::from_secs(2) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
     assert!(woke.load(Ordering::SeqCst) >= 2, "the worker wakes the owner");
 }
 
