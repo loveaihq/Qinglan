@@ -41,8 +41,8 @@ keyword_enum!(Position {
     Static = "static", Relative = "relative", Absolute = "absolute", Fixed = "fixed", Sticky = "sticky",
 } default Static);
 
-keyword_enum!(Float { None = "none", Left = "left", Right = "right" } default None);
-keyword_enum!(Clear { None = "none", Left = "left", Right = "right", Both = "both" } default None);
+keyword_enum!(Float { None = "none", Left = "left", Right = "right", InlineStart = "inline-start", InlineEnd = "inline-end" } default None);
+keyword_enum!(Clear { None = "none", Left = "left", Right = "right", Both = "both", InlineStart = "inline-start", InlineEnd = "inline-end" } default None);
 keyword_enum!(BoxSizing { ContentBox = "content-box", BorderBox = "border-box" } default ContentBox);
 keyword_enum!(Overflow { Visible = "visible", Hidden = "hidden", Clip = "clip", Scroll = "scroll", Auto = "auto" } default Visible);
 keyword_enum!(Visibility { Visible = "visible", Hidden = "hidden", Collapse = "collapse" } default Visible);
@@ -62,6 +62,10 @@ keyword_enum!(TextWrapMode { Wrap = "wrap", Nowrap = "nowrap" } default Wrap);
 keyword_enum!(WordBreak { Normal = "normal", BreakAll = "break-all", KeepAll = "keep-all", BreakWord = "break-word" } default Normal);
 keyword_enum!(OverflowWrap { Normal = "normal", Anywhere = "anywhere", BreakWord = "break-word" } default Normal);
 keyword_enum!(Direction { Ltr = "ltr", Rtl = "rtl" } default Ltr);
+keyword_enum!(UnicodeBidi {
+    Normal = "normal", Embed = "embed", Isolate = "isolate", BidiOverride = "bidi-override", IsolateOverride = "isolate-override",
+    Plaintext = "plaintext",
+} default Normal);
 keyword_enum!(FontStyleKind { Normal = "normal", Italic = "italic", Oblique = "oblique" } default Normal);
 keyword_enum!(ListStylePosition { Outside = "outside", Inside = "inside" } default Outside);
 keyword_enum!(BorderCollapse { Separate = "separate", Collapse = "collapse" } default Separate);
@@ -628,6 +632,7 @@ pub enum Value {
     WordBreak(WordBreak),
     OverflowWrap(OverflowWrap),
     Direction(Direction),
+    UnicodeBidi(UnicodeBidi),
     VerticalAlign(VerticalAlign),
     TextDecorationLine(TextDecorationLine),
     TextDecorationStyle(TextDecorationStyle),
@@ -827,9 +832,10 @@ pub enum PropId {
     TextShadow,
     Transform,
     TransformOrigin,
+    UnicodeBidi,
 }
 
-pub const PROP_COUNT: usize = PropId::TransformOrigin as usize + 1;
+pub const PROP_COUNT: usize = PropId::UnicodeBidi as usize + 1;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Group {
@@ -850,6 +856,30 @@ pub enum Group {
 impl PropId {
     pub fn index(self) -> usize {
         self as usize
+    }
+
+    /// The longhand of the opposite side (left for right, top-left for top-right ...), for logical properties in `rtl`.
+    pub const fn mirrored(self) -> PropId {
+        use PropId::*;
+        match self {
+            MarginLeft => MarginRight,
+            MarginRight => MarginLeft,
+            PaddingLeft => PaddingRight,
+            PaddingRight => PaddingLeft,
+            Left => Right,
+            Right => Left,
+            BorderLeftWidth => BorderRightWidth,
+            BorderRightWidth => BorderLeftWidth,
+            BorderLeftStyle => BorderRightStyle,
+            BorderRightStyle => BorderLeftStyle,
+            BorderLeftColor => BorderRightColor,
+            BorderRightColor => BorderLeftColor,
+            BorderTopLeftRadius => BorderTopRightRadius,
+            BorderTopRightRadius => BorderTopLeftRadius,
+            BorderBottomLeftRadius => BorderBottomRightRadius,
+            BorderBottomRightRadius => BorderBottomLeftRadius,
+            p => p,
+        }
     }
 
     pub const fn bit(self) -> u128 {
@@ -878,7 +908,7 @@ impl PropId {
             VerticalAlign | TextDecorationLine | TextDecorationStyle | TextDecorationColor | TextDecorationThickness
             | BackgroundColor | BorderTopLeftRadius | BorderTopRightRadius | BorderBottomRightRadius | BorderBottomLeftRadius
             | BackgroundImage | BackgroundPositionX | BackgroundPositionY | BackgroundSize | BackgroundRepeat | BackgroundOrigin
-            | BackgroundClip | OutlineWidth | OutlineStyle | OutlineColor | OutlineOffset | Opacity | BoxShadow | Transform | TransformOrigin => Group::Misc,
+            | BackgroundClip | OutlineWidth | OutlineStyle | OutlineColor | OutlineOffset | Opacity | BoxShadow | Transform | TransformOrigin | UnicodeBidi => Group::Misc,
         }
     }
 
@@ -1009,6 +1039,7 @@ impl PropId {
             TextShadow => "text-shadow",
             Transform => "transform",
             TransformOrigin => "transform-origin",
+            UnicodeBidi => "unicode-bidi",
         }
     }
 
@@ -1034,7 +1065,7 @@ pub const ALL_PROPS: [PropId; PROP_COUNT] = {
         EmptyCells, CaptionSide, TableLayout, FlexDirection, FlexWrap, Order, FlexGrow, FlexShrink, FlexBasis, JustifyContent,
         AlignItems, AlignSelf, AlignContent, RowGap, ColumnGap, JustifyItems, JustifySelf, GridTemplateColumns, GridTemplateRows,
         GridTemplateAreas, GridAutoColumns, GridAutoRows, GridAutoFlow, GridRowStart, GridColumnStart, GridRowEnd, GridColumnEnd,
-        Opacity, BoxShadow, TextShadow, Transform, TransformOrigin,
+        Opacity, BoxShadow, TextShadow, Transform, TransformOrigin, UnicodeBidi,
     ]
 };
 
@@ -1085,6 +1116,9 @@ pub enum DeclProp {
     Known(PropId),
     /// A custom property (`--x`), its value tokens kept as written.
     Custom(Atom, Rc<Vec<Cv>>),
+    /// A logical property whose left-to-right physical longhand is given; under `direction: rtl` the opposite side is meant
+    /// (css-logical-1 4: `padding-inline-start`, `border-inline-end-color`, `border-start-start-radius` ...).
+    Logical(PropId),
 }
 
 /// The declarations of one rule or style attribute.

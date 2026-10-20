@@ -432,7 +432,11 @@ impl Ctx<'_> {
                 return;
             }
             n += 1;
-            blend_mask(frame, &mask.alpha, mask.width as usize, (x, y), &area, color);
+            if mask.bgra.is_empty() {
+                blend_mask(frame, &mask.alpha, mask.width as usize, (x, y), &area, color);
+            } else {
+                blend_color(frame, &mask.bgra, mask.width as usize, (x, y), &area);
+            }
         });
         self.stats.glyphs += n;
     }
@@ -461,6 +465,22 @@ fn fill(frame: &mut Frame, d: &IRect, px: [u8; 4]) {
         } else {
             for p in row.as_chunks_mut::<4>().0 {
                 over(p, px);
+            }
+        }
+    }
+}
+
+/// Blend a colour glyph (premultiplied BGRA, `mw` pixels per row, its top left corner at `origin`) into `area`: the text colour
+/// plays no part.
+fn blend_color(frame: &mut Frame, bgra: &[u8], mw: usize, origin: (i32, i32), area: &IRect) {
+    let col0 = (area.x0 - origin.0).max(0) as usize;
+    for (y, row) in rows_mut(frame, area) {
+        let my = (y - origin.1).max(0) as usize;
+        let Some(mrow) = bgra.get(my * mw * 4..(my + 1) * mw * 4) else { continue };
+        let Some(src) = mrow.get(col0 * 4..) else { continue };
+        for (p, s) in row.as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
+            if s.get(3).is_some_and(|&a| a != 0) {
+                over(p, *s);
             }
         }
     }

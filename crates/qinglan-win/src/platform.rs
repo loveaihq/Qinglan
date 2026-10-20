@@ -5,7 +5,7 @@
 //! `IDWriteTextAnalyzer`; masks come from `IDWriteGlyphRunAnalysis`. See docs/decisions.md
 //! ("1b-3") for the choices made where the task sheet leaves room.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::time::Instant;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -122,6 +122,9 @@ struct FontEntry {
     cmap: RefCell<FxMap<u32, u16>>,
     /// The `unicode-range` of a web font; it draws nothing outside it.
     ranges: Option<Rc<[(u32, u32)]>>,
+    /// Colour glyphs (COLR layers): -1 once one was drawn, else the number of glyphs tried that had none (after 64 the font is
+    /// taken for a plain one and not asked again).
+    color_state: Cell<i32>,
 }
 
 #[derive(Clone, Copy)]
@@ -214,6 +217,10 @@ struct Inner {
     web_fonts: FxMap<u32, Rc<FontEntry>>,
     next_web_id: u32,
     web_loader: Option<WebFontLoader>,
+    /// Shaping right to left now (set around `shape_uncached`).
+    rtl: bool,
+    /// The emoji font (Segoe UI Emoji): not looked for yet / not installed / its id.
+    emoji: Option<Option<u32>>,
 }
 
 /// A word (or one space) shaped at `PROBE` size; advances and offsets are scaled to the real size when used.
@@ -256,6 +263,8 @@ impl WinPlatform {
             web_fonts: FxMap::default(),
             next_web_id: 0,
             web_loader: None,
+            rtl: false,
+            emoji: None,
         };
         Some(WinPlatform { dw, inner: RefCell::new(inner) })
     }
@@ -512,7 +521,7 @@ impl Inner {
         let m = face.metrics();
         let zero_advance = face.glyph_indices(&[u32::from(b'0')]).and_then(|v| v.first().copied()).filter(|&g| g != 0).and_then(|g| face.design_advance(g)).map(|a| a as f32);
         let id = self.fonts.len() as u32;
-        self.fonts.push(Rc::new(FontEntry { face, font: Some(font), m, zero_advance, cmap: RefCell::new(FxMap::default()), ranges: None }));
+        self.fonts.push(Rc::new(FontEntry { face, font: Some(font), m, zero_advance, cmap: RefCell::new(FxMap::default()), ranges: None, color_state: Cell::new(0) }));
         self.by_face.insert(addr, id);
         Some(id)
     }
@@ -657,6 +666,15 @@ impl Inner {
         f
     }
 
+    /// The font id of Segoe UI Emoji, if installed.
+    fn emoji_font(&mut self, dw: &Factory) -> Option<u32> {
+        if self.emoji.is_none() {
+            let f = self.find_family(dw, "Segoe UI Emoji").and_then(|fam| self.font_from_family(dw, fam, 400, 0));
+            self.emoji = Some(f);
+        }
+        self.emoji.flatten()
+    }
+
     fn resolve_char(&mut self, dw: &Factory, qi: u32, q: &QueryInfo, cp: u32) -> Option<u32> {
         // A hidden web face that has the character makes it invisible; the font that gives it room is the next one.
         let mut hidden = 0u32;
@@ -708,7 +726,17 @@ impl Inner {
         let mut prev = None;
         let t_choose = Instant::now();
         for (bi, c) in text.char_indices() {
-            let f = self.choose_font(dw, qi, &q, c, prev);
+            // A character followed by VARIATION SELECTOR-16 asks for its emoji look: the emoji font draws it, and the
+            // sequence (keycap, ZWJ sequence) is shaped with it (UTS #51 1.4.6).
+            let emoji = if !is_attached(c) && text.get(bi + c.len_utf8()..).is_some_and(|r| r.starts_with('\u{FE0F}')) {
+                self.emoji_font(dw).filter(|&e| self.covers(e, c as u32))
+            } else {
+                None
+            };
+            let f = match emoji {
+                Some(e) => e,
+                None => self.choose_font(dw, qi, &q, c, prev),
+            };
             prev = Some(f);
             let mut buf = [0u16; 2];
             for &u in c.encode_utf16(&mut buf).iter() {
@@ -774,7 +802,7 @@ impl Inner {
             let (cp, len) = decode_unit(seg, i);
             // A mark or variation selector after the character must be shaped together with it.
             let next_attached = seg.get(i + len..).filter(|r| !r.is_empty()).is_some_and(|rest| char::from_u32(decode_unit(rest, 0).0).is_some_and(is_attached));
-            let simple = is_context_free(cp) && !next_attached;
+            let simple = !self.rtl && is_context_free(cp) && !next_attached;
             let hit = if simple { seg.get(i..i + len).and_then(|unit| self.context_free_glyph(dw, q, fid, &entry, cp, unit)) } else { None };
             if let Some((glyph, adv_em)) = hit {
                 if pending < i {
@@ -994,6 +1022,18 @@ impl Inner {
     /// lost, as in Chrome. Runs the platform cannot shape become missing-glyph boxes.
     #[allow(clippy::too_many_arguments)]
     fn shape_words(&mut self, dw: &Factory, q: &QueryInfo, fid: u32, entry: &FontEntry, sub: &[u16], sa: ScriptAnalysis, size: f32, base: usize, map: &[u32], out: &mut Vec<Glyph>) {
+        if self.rtl {
+            // Right to left: the run goes through as a whole (words are not cached; joining and kerning need the context).
+            let t = Instant::now();
+            let sh = dw.shape_dir(sub, &entry.face, size, sa, &q.locale, true);
+            self.add_shape_time(t.elapsed().as_micros() as u64);
+            self.stats.shape_calls += 1;
+            match sh {
+                Some(sh) => emit_run_rtl(out, fid, &sh, base, sub.len(), map, 1.0),
+                None => notdef_run(out, fid, base, base + sub.len(), map, size),
+            }
+            return;
+        }
         let mut i = 0usize;
         while i < sub.len() {
             let j = if sub.get(i) == Some(&0x20) { i + 1 } else { sub.get(i..).and_then(|r| r.iter().position(|&u| u == 0x20)).map_or(sub.len(), |p| i + p) };
@@ -1071,7 +1111,7 @@ fn joins_previous(u: u32) -> bool {
         0x0300..=0x036F | 0x0483..=0x0489 | 0x0591..=0x05C7 | 0x0610..=0x061A | 0x064B..=0x065F | 0x0670
         | 0x06D6..=0x06ED | 0x0900..=0x0903 | 0x093A..=0x094F | 0x0E31 | 0x0E34..=0x0E3A | 0x0E47..=0x0E4E
         | 0x1160..=0x11FF | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x200B..=0x200F | 0x20D0..=0x20FF
-        | 0x3099..=0x309A | 0xA960..=0xA97C | 0xD7B0..=0xD7FF | 0xFE00..=0xFE0F | 0xFE20..=0xFE2F | 0xE0100..=0xE01EF)
+        | 0x3099..=0x309A | 0xA960..=0xA97C | 0xD7B0..=0xD7FF | 0xFE00..=0xFE0F | 0xFE20..=0xFE2F | 0x1F3FB..=0x1F3FF | 0xE0020..=0xE007F | 0xE0100..=0xE01EF)
 }
 
 /// Where to cut `seg[s..limit]` (the run is longer than one `GetGlyphs` call takes): after a space
@@ -1144,6 +1184,25 @@ fn emit_run(out: &mut Vec<Glyph>, fid: u32, sh: &Shaped, start: usize, len: usiz
     }
 }
 
+/// `emit_run` for a right-to-left run. DirectWrite hands the glyphs of such a run over in logical order like those of any
+/// run, to be drawn from the right edge leftwards; the glyphs of one cluster are put into left-to-right drawing order here,
+/// so that a base glyph and its marks (which have no advance) land where DirectWrite would put them.
+fn emit_run_rtl(out: &mut Vec<Glyph>, fid: u32, sh: &Shaped, start: usize, len: usize, map: &[u32], scale: f32) {
+    let from = out.len();
+    emit_run(out, fid, sh, start, len, map, scale);
+    let mut i = from;
+    while let Some(g0) = out.get(i).copied() {
+        let mut j = i + 1;
+        while out.get(j).is_some_and(|g| g.cluster_start == g0.cluster_start && g.cluster_end == g0.cluster_end) {
+            j += 1;
+        }
+        if let Some(run) = out.get_mut(i..j) {
+            run.reverse();
+        }
+        i = j;
+    }
+}
+
 /// One missing-glyph (index 0), 1 em wide box per character of the units `from..to`.
 fn notdef_run(out: &mut Vec<Glyph>, fid: u32, from: usize, to: usize, map: &[u32], size: f32) {
     let mut i = from;
@@ -1156,6 +1215,38 @@ fn notdef_run(out: &mut Vec<Glyph>, fid: u32, from: usize, to: usize, map: &[u32
         let ce = map.get(j).copied().unwrap_or(cs);
         out.push(Glyph { font: FontId(fid), glyph: 0, advance: size, offset_x: 0.0, offset_y: 0.0, cluster_start: cs, cluster_end: ce });
         i = j;
+    }
+}
+
+impl WinPlatform {
+    /// `Platform::shape` and `shape_rtl`: `rtl` shapes right to left (the cache keeps the two apart).
+    fn shape_dir(&self, text: &str, query: &FontQuery<'_>, size_px: f32, rtl: bool) -> Vec<Glyph> {
+        if text.is_empty() {
+            return Vec::new();
+        }
+        let size = if size_px.is_finite() { size_px.clamp(0.01, 4096.0) } else { 16.0 };
+        let size_bits = size.to_bits();
+        let mut inn = self.inner.borrow_mut();
+        let qi = inn.query_index(&self.dw, query);
+        let qk = qi | (u32::from(rtl) << 31);
+        let key = shape_hash(qk, size_bits, text);
+        let hit = match inn.shape_cache.get(&key) {
+            Some(e) if e.qi == qk && e.size_bits == size_bits && *e.text == *text => Some(Rc::clone(&e.glyphs)),
+            _ => None,
+        };
+        if let Some(g) = hit {
+            inn.stats.shape_hits += 1;
+            return g.to_vec();
+        }
+        inn.stats.shape_misses += 1;
+        let t_miss = Instant::now();
+        inn.rtl = rtl;
+        let glyphs = inn.shape_uncached(&self.dw, text, qi, size);
+        inn.rtl = false;
+        inn.stats.us_miss += t_miss.elapsed().as_micros() as u64;
+        let cost = text.len() + glyphs.len() * GLYPH_COST + 96;
+        inn.shape_cache.insert(key, ShapeEntry { qi: qk, size_bits, text: text.into(), glyphs: glyphs.as_slice().into() }, cost);
+        glyphs
     }
 }
 
@@ -1193,29 +1284,26 @@ impl Platform for WinPlatform {
     }
 
     fn shape(&self, text: &str, query: &FontQuery<'_>, size_px: f32) -> Vec<Glyph> {
-        if text.is_empty() {
+        self.shape_dir(text, query, size_px, false)
+    }
+
+    fn shape_rtl(&self, text: &str, query: &FontQuery<'_>, size_px: f32) -> Vec<Glyph> {
+        self.shape_dir(text, query, size_px, true)
+    }
+
+    fn bidi_levels(&self, text: &str, rtl: bool) -> Vec<u8> {
+        let mut units: Vec<u16> = Vec::with_capacity(text.len());
+        let mut first: Vec<usize> = Vec::with_capacity(text.len());
+        for c in text.chars() {
+            first.push(units.len());
+            let mut buf = [0u16; 2];
+            units.extend_from_slice(c.encode_utf16(&mut buf));
+        }
+        let levels = self.dw.analyze_bidi(&units, rtl);
+        if levels.len() != units.len() {
             return Vec::new();
         }
-        let size = if size_px.is_finite() { size_px.clamp(0.01, 4096.0) } else { 16.0 };
-        let size_bits = size.to_bits();
-        let mut inn = self.inner.borrow_mut();
-        let qi = inn.query_index(&self.dw, query);
-        let key = shape_hash(qi, size_bits, text);
-        let hit = match inn.shape_cache.get(&key) {
-            Some(e) if e.qi == qi && e.size_bits == size_bits && *e.text == *text => Some(Rc::clone(&e.glyphs)),
-            _ => None,
-        };
-        if let Some(g) = hit {
-            inn.stats.shape_hits += 1;
-            return g.to_vec();
-        }
-        inn.stats.shape_misses += 1;
-        let t_miss = Instant::now();
-        let glyphs = inn.shape_uncached(&self.dw, text, qi, size);
-        inn.stats.us_miss += t_miss.elapsed().as_micros() as u64;
-        let cost = text.len() + glyphs.len() * GLYPH_COST + 96;
-        inn.shape_cache.insert(key, ShapeEntry { qi, size_bits, text: text.into(), glyphs: glyphs.as_slice().into() }, cost);
-        glyphs
+        first.iter().map(|&i| levels.get(i).copied().unwrap_or(0)).collect()
     }
 
     fn prefetch(&self, chars: &str, words: &[&str], query: &FontQuery<'_>) {
@@ -1275,7 +1363,7 @@ impl Platform for WinPlatform {
         let ranges: Option<Rc<[(u32, u32)]>> = inn.web.get(index).filter(|w| !w.desc.ranges.is_empty()).map(|w| w.desc.ranges.as_slice().into());
         let id = WEB_BASE + inn.next_web_id;
         inn.next_web_id += 1;
-        inn.web_fonts.insert(id, Rc::new(FontEntry { face, font: None, m, zero_advance, cmap: RefCell::new(FxMap::default()), ranges }));
+        inn.web_fonts.insert(id, Rc::new(FontEntry { face, font: None, m, zero_advance, cmap: RefCell::new(FxMap::default()), ranges, color_state: Cell::new(0) }));
         if let Some(w) = inn.web.get_mut(index) {
             w.state = WState::Ready(id);
         }
@@ -1353,14 +1441,25 @@ impl Platform for WinPlatform {
         }
         inn.stats.glyph_misses += 1;
         let entry = inn.entry(font.0)?.clone();
-        let mask = self.dw.rasterize(&entry.face, g, size, f32::from(sub) / 4.0).map(|raw| {
-            // ClearType 3x1 gives one coverage value per colour stripe; the mean is plain grayscale.
-            let alpha: Vec<u8> = raw.rgb.as_chunks::<3>().0.iter().map(|p| (p.iter().map(|&b| u32::from(b)).sum::<u32>() / 3) as u8).collect();
-            GlyphMask { left: raw.left, top: raw.top, width: raw.width, height: raw.height, alpha }
+        // A colour glyph (emoji) is asked for first, unless the font has shown it has none.
+        let st = entry.color_state.get();
+        let colored = if st < 64 {
+            let c = self.dw.rasterize_color(&entry.face, g, size, f32::from(sub) / 4.0);
+            entry.color_state.set(if c.is_some() { -1 } else if st >= 0 { st + 1 } else { st });
+            c.map(|c| GlyphMask { left: c.left, top: c.top, width: c.width, height: c.height, alpha: Vec::new(), bgra: c.bgra })
+        } else {
+            None
+        };
+        let mask = colored.or_else(|| {
+            self.dw.rasterize(&entry.face, g, size, f32::from(sub) / 4.0).map(|raw| {
+                // ClearType 3x1 gives one coverage value per colour stripe; the mean is plain grayscale.
+                let alpha: Vec<u8> = raw.rgb.as_chunks::<3>().0.iter().map(|p| (p.iter().map(|&b| u32::from(b)).sum::<u32>() / 3) as u8).collect();
+                GlyphMask { left: raw.left, top: raw.top, width: raw.width, height: raw.height, alpha, bgra: Vec::new() }
+            })
         });
         match mask {
             Some(m) => {
-                let cost = m.alpha.len() + 64;
+                let cost = m.alpha.len() + m.bgra.len() + 64;
                 let out = Rc::new(m);
                 inn.glyph_cache.insert(key, Some(out.clone()), cost);
                 Some(out)

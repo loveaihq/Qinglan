@@ -90,6 +90,9 @@ pub struct GlyphMask {
     pub width: u32,
     pub height: u32,
     pub alpha: Vec<u8>,
+    /// A colour glyph (an emoji drawn from COLR layers, say): premultiplied BGRA pixels, 4 bytes each, row by row, the layers
+    /// already composed. Then `alpha` is empty and the text colour plays no part. Empty for an ordinary coverage mask.
+    pub bgra: Vec<u8>,
 }
 
 /// What the platform does with text in a web face that cannot be drawn yet.
@@ -143,6 +146,20 @@ pub trait Platform {
     /// Use the installed font `name` for face `index` (`src: local(...)`). False when there is none.
     fn use_local_face(&self, _index: usize, _name: &str) -> bool {
         false
+    }
+
+    /// UAX #9: the resolved embedding level of every character of `text`, one bidi paragraph in which the explicit formatting
+    /// characters (U+202A..U+202E, U+2066..U+2069) are present as characters. `rtl` is the paragraph level (right to left or
+    /// not). Empty when the platform does no bidi analysis: then everything is left to right.
+    fn bidi_levels(&self, _text: &str, _rtl: bool) -> Vec<u8> {
+        Vec::new()
+    }
+
+    /// `shape` for text that runs right to left (an odd bidi level): joining and mark placement follow that direction and
+    /// mirrored characters get their mirror image. The glyphs come in logical order of the clusters, as for `shape`, but the
+    /// glyphs inside one cluster are in left-to-right drawing order. The default shapes as left to right.
+    fn shape_rtl(&self, text: &str, query: &FontQuery<'_>, size_px: f32) -> Vec<Glyph> {
+        self.shape(text, query, size_px)
     }
 
     /// Soft line-break opportunities of a whole paragraph (UAX #14): ascending byte offsets

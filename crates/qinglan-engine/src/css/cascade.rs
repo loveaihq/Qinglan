@@ -1074,25 +1074,35 @@ fn style_for(
 ) -> ComputedStyle {
     let mut declared = Declared::new();
     let mut custom_decls: Vec<(Atom, Rc<Vec<Cv>>)> = Vec::new();
+    let mut rtl: Option<bool> = None;
     for (i, e) in entries.iter().enumerate() {
         for d in &e.block.decls {
             if d.important != e.important {
                 continue;
             }
-            match &d.prop {
-                DeclProp::Known(p) => match &d.value {
-                    Specified::Revert | Specified::RevertLayer => {
-                        let replacement = revert_value(entries, i, *p, d.value == Specified::Revert, e.origin);
-                        match replacement {
-                            Some(v) => declared.set(*p, Cow::Owned(v)),
-                            None => declared.set(*p, Cow::Owned(Specified::Unset)),
-                        }
+            let p = match &d.prop {
+                DeclProp::Known(p) => *p,
+                DeclProp::Logical(p) => {
+                    if *rtl.get_or_insert_with(|| declared_rtl(entries, parent.text.direction == Direction::Rtl)) {
+                        p.mirrored()
+                    } else {
+                        *p
                     }
-                    v => declared.set(*p, Cow::Borrowed(v)),
-                },
+                }
                 DeclProp::Custom(name, toks) => {
                     custom_decls.push((*name, toks.clone()));
+                    continue;
                 }
+            };
+            match &d.value {
+                Specified::Revert | Specified::RevertLayer => {
+                    let replacement = revert_value(entries, i, p, d.value == Specified::Revert, e.origin);
+                    match replacement {
+                        Some(v) => declared.set(p, Cow::Owned(v)),
+                        None => declared.set(p, Cow::Owned(Specified::Unset)),
+                    }
+                }
+                v => declared.set(p, Cow::Borrowed(v)),
             }
         }
     }
@@ -1119,14 +1129,52 @@ fn style_for(
     let (ex, ch) = env.ex_ch(&font, lang);
     let own = LenCtx { font_size: font.size, root_font_size, viewport_w: env.viewport_w, viewport_h: env.viewport_h, ex, ch };
     let _ = is_root;
-    let boxs = compute_box(&parent.boxs, &init.boxs, &declared, &own, is_root);
+    let mut boxs = compute_box(&parent.boxs, &init.boxs, &declared, &own, is_root);
     let border = compute_border(&parent.border, &init.border, &declared, &own);
     let text = compute_text(&parent.text, &declared, &own, lang);
+    {
+        // `float` and `clear` with `inline-start` / `inline-end`: left or right by the direction of the containing block (the parent).
+        use super::types::{Clear, Float};
+        if matches!(boxs.float, Float::InlineStart | Float::InlineEnd) || matches!(boxs.clear, Clear::InlineStart | Clear::InlineEnd) {
+            let rtl = parent.text.direction == Direction::Rtl;
+            let (start, end) = if rtl { (Float::Right, Float::Left) } else { (Float::Left, Float::Right) };
+            let b = Rc::make_mut(&mut boxs);
+            b.float = match b.float {
+                Float::InlineStart => start,
+                Float::InlineEnd => end,
+                f => f,
+            };
+            b.clear = match b.clear {
+                Clear::InlineStart => if rtl { Clear::Right } else { Clear::Left },
+                Clear::InlineEnd => if rtl { Clear::Left } else { Clear::Right },
+                c => c,
+            };
+        }
+    }
     let misc = compute_misc(&parent.misc, &init.misc, &declared, &own);
     let gen_ = compute_gen(&parent.gen_, &init.gen_, &declared);
     let flex = compute_flex(&parent.flex, &init.flex, &declared, &own);
     let grid = compute_grid(&parent.grid, &init.grid, &declared, &own);
     ComputedStyle { boxs, border, font, text, misc, gen_, flex, grid, custom }
+}
+
+/// The element's own `direction` as the cascade will decide it, for the logical properties (they are resolved before the
+/// rest of the cascade is known; `parent_rtl` is what `inherit` and `unset` give).
+fn declared_rtl(entries: &[Entry], parent_rtl: bool) -> bool {
+    let mut rtl = parent_rtl;
+    for e in entries {
+        for d in &e.block.decls {
+            if d.important == e.important && d.prop == DeclProp::Known(PropId::Direction) {
+                match &d.value {
+                    Specified::Value(Value::Direction(x)) => rtl = *x == Direction::Rtl,
+                    Specified::Inherit | Specified::Unset => rtl = parent_rtl,
+                    Specified::Initial => rtl = false,
+                    _ => {}
+                }
+            }
+        }
+    }
+    rtl
 }
 
 /// The value `revert` / `revert-layer` rolls back to for property `p`, looking at `entries[..i]`.

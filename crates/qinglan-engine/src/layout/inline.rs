@@ -21,6 +21,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use super::bidi;
 use super::block::{Flow, border_px, lp_has_percent, pad_px, resolve_margin};
 use super::boxtree::{BoxId, BoxKind, Control, NO_BOX};
 use super::units::LayoutUnit as LU;
@@ -28,8 +29,8 @@ use super::{DecorKind, Decoration, FragKind, Fragment, Layouter, Line, Pending, 
 use crate::css::color::Color;
 use crate::css::computed::{ComputedStyle, LineHeight, slant_of};
 use crate::css::types::{
-    ListStylePosition, OverflowWrap, Position, TabSize, TextAlign, TextDecorationLine, TextDecorationStyle, TextTransform, TextWrapMode, VerticalAlign,
-    WhiteSpaceCollapse, WordBreak,
+    Direction, ListStylePosition, OverflowWrap, Position, TabSize, TextAlign, TextDecorationLine, TextDecorationStyle, TextTransform, TextWrapMode,
+    UnicodeBidi, VerticalAlign, WhiteSpaceCollapse, WordBreak,
 };
 use crate::html::dom::NodeData;
 use crate::platform::FontQuery;
@@ -47,6 +48,8 @@ enum ItemKind {
     Oof,
     /// A float's place in the text.
     Float,
+    /// Bidi formatting characters (`unicode-bidi` of an inline box or the block): no unit, only part of the analysed string.
+    Ctl,
 }
 
 #[derive(Clone, Copy)]
@@ -114,12 +117,14 @@ struct Collapser {
     skip_spaces: bool,
     /// The previous character was a letter or digit (for `text-transform: capitalize`).
     cap_prev: bool,
+    /// An inline box with a `unicode-bidi` that can reorder left-to-right text was seen (the paragraph needs bidi analysis).
+    bidi: bool,
 }
 
 impl Collapser {
     fn reset_line(&mut self) {
-        let cap = self.cap_prev;
-        *self = Collapser { cap_prev: cap, ..Collapser::default() };
+        let (cap, bidi) = (self.cap_prev, self.bidi);
+        *self = Collapser { cap_prev: cap, bidi, ..Collapser::default() };
     }
 
     /// "Any sequence of collapsible spaces and tabs immediately preceding ... a segment break is
@@ -299,7 +304,7 @@ fn joins_previous(c: char) -> bool {
         0x0300..=0x036F | 0x0483..=0x0489 | 0x0591..=0x05C7 | 0x0610..=0x061A | 0x064B..=0x065F | 0x0670
         | 0x06D6..=0x06ED | 0x0900..=0x0903 | 0x093A..=0x094F | 0x0E31 | 0x0E34..=0x0E3A | 0x0E47..=0x0E4E
         | 0x1160..=0x11FF | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x200B..=0x200F | 0x20D0..=0x20FF
-        | 0x3099..=0x309A | 0xA960..=0xA97C | 0xD7B0..=0xD7FF | 0xFE00..=0xFE0F | 0xFE20..=0xFE2F | 0xE0100..=0xE01EF)
+        | 0x3099..=0x309A | 0xA960..=0xA97C | 0xD7B0..=0xD7FF | 0xFE00..=0xFE0F | 0xFE20..=0xFE2F | 0x1F3FB..=0x1F3FF | 0xE0020..=0xE007F | 0xE0100..=0xE01EF)
 }
 
 /// End of the piece of `text` that starts at byte `from` and goes to the platform in one call: the end of the text,
@@ -351,6 +356,8 @@ struct Unit {
     edge_start: bool,
     /// The platform allows a line break before this unit (UAX #14).
     brk: bool,
+    /// The resolved bidi level (UAX #9); 0 in a paragraph without bidi analysis.
+    level: u8,
 }
 
 /// What an atomic inline needs besides its width: min-content width (measuring), height above /
@@ -380,6 +387,7 @@ impl Unit {
             hang_space: false,
             edge_start: false,
             brk: false,
+            level: 0,
         }
     }
 }
@@ -396,6 +404,10 @@ pub(crate) struct Prepared {
     /// Inline box edges used percentages, so the widths depend on the containing block width.
     pct_edges: bool,
     cbw: LU,
+    /// The paragraph went through bidi analysis (some unit may be right to left, or the paragraph is).
+    bidi: bool,
+    /// The paragraph level: 1 for a right-to-left paragraph.
+    base_level: u8,
 }
 
 impl Prepared {
@@ -504,12 +516,28 @@ enum Align {
     Right,
 }
 
-fn align_of(a: TextAlign) -> Align {
-    // `start`/`end` are left/right (layer 1 has no right-to-left layout); `justify` starts at the left.
-    match a {
-        TextAlign::End | TextAlign::Right => Align::Right,
-        TextAlign::Center => Align::Center,
+/// `start` and `end` are the left and right side of a left-to-right paragraph and the opposite in a right-to-left one
+/// (css-text-3 7.1); `justify` starts at the start side.
+fn align_of(a: TextAlign, rtl: bool) -> Align {
+    match (a, rtl) {
+        (TextAlign::Right, _) | (TextAlign::End, false) | (TextAlign::Start | TextAlign::MatchParent | TextAlign::Justify | TextAlign::JustifyAll, true) => Align::Right,
+        (TextAlign::Center, _) => Align::Center,
         _ => Align::Left,
+    }
+}
+
+/// `text-align: match-parent` (css-text-3 7.1): the parent's alignment, with `start` and `end` taken in the parent's direction.
+fn match_parent(tree: &super::boxtree::BoxTree, block: BoxId) -> TextAlign {
+    let parent = tree.get(block).parent;
+    if parent == NO_BOX {
+        return TextAlign::Start;
+    }
+    let p = tree.get(parent);
+    let rtl = p.style.text.direction == Direction::Rtl;
+    match p.style.text.text_align {
+        TextAlign::Start | TextAlign::MatchParent => if rtl { TextAlign::Right } else { TextAlign::Left },
+        TextAlign::End => if rtl { TextAlign::Left } else { TextAlign::Right },
+        a => a,
     }
 }
 
@@ -556,12 +584,17 @@ fn relative_inline_ancestor(tree: &super::boxtree::BoxTree, owner: BoxId, block:
     None
 }
 
+/// A stretch of units of one item that are shown side by side and whose glyphs are one range of the glyph array: one fragment.
 struct Group {
     item: u32,
+    /// The first and the last unit of the group in the order they are shown.
     a: usize,
-    b: usize,
+    z: usize,
     x: LU,
     w: LU,
+    /// The byte range of the item's text the units cover.
+    lo: u32,
+    hi: u32,
 }
 
 /// A box taking part in the vertical alignment of one line.
@@ -578,8 +611,13 @@ struct Ent {
     /// 0: aligned to the baseline, 1: `top`, 2: `bottom`.
     ta: u8,
     under_ta: bool,
+    /// The extent of the box's current piece on the line, and whether that piece holds its start / end edge. A box that
+    /// bidi reordering splits has more pieces; the earlier ones are in `done`, each shown with its own borders.
     first: LU,
     last: LU,
+    cs: bool,
+    ce: bool,
+    done: Vec<(LU, LU, bool, bool)>,
     has_start: bool,
     has_end: bool,
     rel: (LU, LU),
@@ -694,8 +732,10 @@ impl Layouter<'_> {
         let p = |i: usize| bs.padding.get(i).map_or(LU::ZERO, |l| pad_px(l, cbw));
         let b = |i: usize| border_px(bd.width.get(i).copied().unwrap_or(0.0));
         let pct = [1usize, 3].iter().any(|&i| bs.padding.get(i).is_some_and(lp_has_percent) || matches!(bs.margin.get(i), Some(crate::css::types::Dim::Lp(l)) if lp_has_percent(l)));
-        let start = if !bx.split.is_split || bx.split.first { m(3) + b(3) + p(3) } else { LU::ZERO };
-        let end = if !bx.split.is_split || bx.split.last { m(1) + b(1) + p(1) } else { LU::ZERO };
+        // The start edge is the left one in a left-to-right box and the right one in a right-to-left box (CSS2 9.4.2).
+        let (sl, sr) = if bx.style.text.direction == Direction::Rtl { (1, 3) } else { (3, 1) };
+        let start = if !bx.split.is_split || bx.split.first { m(sl) + b(sl) + p(sl) } else { LU::ZERO };
+        let end = if !bx.split.is_split || bx.split.last { m(sr) + b(sr) + p(sr) } else { LU::ZERO };
         (start, end, pct)
     }
 
@@ -726,6 +766,12 @@ impl Layouter<'_> {
             BoxKind::Inline => {
                 let (start, end, p) = self.edge_widths(bid, cbw);
                 *pct |= p;
+                let rtl = b.style.text.direction == Direction::Rtl;
+                let (open, close) = bidi::controls(b.style.misc.unicode_bidi, rtl);
+                if !open.is_empty() {
+                    st.bidi |= bidi::reorders(b.style.misc.unicode_bidi, rtl);
+                    items.push(make_item(ItemKind::Ctl, bid, bid, &b.style, open.to_string()));
+                }
                 if start != LU::ZERO {
                     let mut it = make_item(ItemKind::Start, bid, bid, &b.style, String::new());
                     it.edge = start;
@@ -738,6 +784,9 @@ impl Layouter<'_> {
                     let mut it = make_item(ItemKind::End, bid, bid, &b.style, String::new());
                     it.edge = end;
                     items.push(it);
+                }
+                if !close.is_empty() {
+                    items.push(make_item(ItemKind::Ctl, bid, bid, &b.style, close.to_string()));
                 }
             }
             BoxKind::InlineBlock | BoxKind::Replaced => {
@@ -766,20 +815,45 @@ impl Layouter<'_> {
         let mut items: Vec<Item> = Vec::new();
         let mut st = Collapser::default();
         let mut pct = false;
+        // `unicode-bidi: bidi-override` on the block itself overrides all of its content (css-writing-modes-3 2.2).
+        let block_rtl = bx.style.text.direction == Direction::Rtl;
+        let block_ub = bx.style.misc.unicode_bidi;
+        let block_override = matches!(block_ub, UnicodeBidi::BidiOverride | UnicodeBidi::IsolateOverride);
+        if block_override {
+            st.bidi = true;
+            items.push(make_item(ItemKind::Ctl, block, block, &bx.style, bidi::controls(UnicodeBidi::BidiOverride, block_rtl).0.to_string()));
+        }
         // An inside list marker is the first inline of the item (css-lists-3 3.1).
         if bx.ordinal().is_some()
             && bx.style.text.list_style_position == ListStylePosition::Inside
             && let Some(text) = super::lists::marker_string(bx)
         {
+            // `::marker { unicode-bidi: isolate }` (css-lists-3 3.2): the marker text does not mix with the item's text.
+            let (open, close) = bidi::controls(UnicodeBidi::Isolate, block_rtl);
+            items.push(make_item(ItemKind::Ctl, block, block, &bx.style, open.to_string()));
             let mut it = make_item(ItemKind::Text, block, block, &bx.style, text);
             it.collapsible = false;
             it.wrap = false;
             it.marker = true;
             items.push(it);
+            items.push(make_item(ItemKind::Ctl, block, block, &bx.style, close.to_string()));
         }
         for &c in &bx.children {
             self.collect(c, &mut st, &mut items, &mut pct, cbw);
         }
+        if block_override {
+            items.push(make_item(ItemKind::Ctl, block, block, &bx.style, "\u{202C}".to_string()));
+        }
+        // Bidi analysis only where it can change something: a right-to-left paragraph, a box that reorders, or text that has
+        // right-to-left characters or explicit formatting characters in it (a paragraph of Latin or CJK text skips all of it).
+        let plaintext = block_ub == UnicodeBidi::Plaintext;
+        let need = block_rtl
+            || plaintext
+            || st.bidi
+            || items.iter().any(|i| i.kind == ItemKind::Text && i.text.bytes().any(|b| b >= 0xD6) && i.text.chars().any(crate::textclass::is_bidi_relevant));
+        let para = if need { self.bidi_para(&items, block_rtl, plaintext) } else { None };
+        let item_level = |ii: usize| para.as_ref().and_then(|p| p.item_level.get(ii).copied()).unwrap_or(0);
+        let char_level = |ii: usize| para.as_ref().and_then(|p| p.start.get(ii).and_then(|&s| p.levels.get(s).copied())).unwrap_or(0);
 
         let mut units: Vec<Unit> = Vec::new();
         let mut base: Vec<usize> = Vec::with_capacity(items.len());
@@ -809,11 +883,13 @@ impl Layouter<'_> {
                     let mut u = Unit::new(UnitKind::Forced, ii as u32);
                     u.first = '\n';
                     u.last = '\n';
+                    u.level = item_level(ii);
                     units.push(u);
                 }
                 ItemKind::Atomic => {
                     let mut u = Unit::new(UnitKind::Atomic, ii as u32);
                     u.start = atoms.len() as u32;
+                    u.level = char_level(ii);
                     atoms.push(AtomInfo::default());
                     units.push(u);
                 }
@@ -821,20 +897,28 @@ impl Layouter<'_> {
                     let mut u = Unit::new(UnitKind::Edge, ii as u32);
                     u.adv = item.edge;
                     u.edge_start = item.kind == ItemKind::Start;
+                    u.level = item_level(ii);
                     units.push(u);
                 }
-                ItemKind::Oof => units.push(Unit::new(UnitKind::Oof, ii as u32)),
+                ItemKind::Oof => {
+                    let mut u = Unit::new(UnitKind::Oof, ii as u32);
+                    u.level = item_level(ii);
+                    units.push(u);
+                }
                 ItemKind::Float => {
                     let mut u = Unit::new(UnitKind::Float, ii as u32);
                     u.start = atoms.len() as u32;
+                    u.level = item_level(ii);
                     atoms.push(AtomInfo::default());
                     units.push(u);
                 }
+                ItemKind::Ctl => {}
                 ItemKind::Text => {
                     para_text.push_str(&text);
                     work += text.len() as u64;
                     if !text.is_empty() {
-                        self.shape_item(item, ii as u32, &text, &mut units);
+                        let lv = para.as_ref().and_then(|p| p.start.get(ii).and_then(|&s| p.levels.get(s..)));
+                        self.shape_item(item, ii as u32, &text, &mut units, lv);
                     }
                 }
             }
@@ -860,7 +944,22 @@ impl Layouter<'_> {
                 last = j as u32;
             }
         }
-        Prepared { items, units, atoms, texts, prev_content, pct_edges: pct, cbw }
+        Prepared { items, units, atoms, texts, prev_content, pct_edges: pct, cbw, bidi: para.is_some(), base_level: para.as_ref().map_or(0, |p| p.base) }
+    }
+
+    /// The bidi levels of the paragraph made of `items` (see `bidi::analyze`).
+    fn bidi_para(&self, items: &[Item], rtl: bool, plaintext: bool) -> Option<bidi::Para> {
+        let parts: Vec<bidi::Part<'_>> = items
+            .iter()
+            .map(|i| match i.kind {
+                ItemKind::Text => bidi::Part::Text(&i.text),
+                ItemKind::Ctl => bidi::Part::Ctl(&i.text),
+                ItemKind::Atomic => bidi::Part::Object,
+                ItemKind::Forced => bidi::Part::Break,
+                _ => bidi::Part::Nothing,
+            })
+            .collect();
+        bidi::analyze(self.platform, &parts, rtl, plaintext)
     }
 
     /// Before layout: tell the platform which non-ASCII characters each style is going to shape, so
@@ -934,7 +1033,7 @@ impl Layouter<'_> {
     /// about `SHAPE_CHUNK` bytes (cut where nothing can join across, see `shape_cut`), so that the platform's temporary
     /// arrays and the pieces' glyph arrays are the size of a piece, not of a megabyte of text; the arrays that keep the
     /// result are reserved once.
-    fn shape_item(&mut self, item: &Item, ii: u32, text: &str, units: &mut Vec<Unit>) {
+    fn shape_item(&mut self, item: &Item, ii: u32, text: &str, units: &mut Vec<Unit>, levels: Option<&[u8]>) {
         if text.len() > SHAPE_CHUNK {
             // A little more than one glyph per character (ligature-free text can still come out at 1.01).
             let n = text.chars().count();
@@ -942,21 +1041,40 @@ impl Layouter<'_> {
             units.reserve(n);
         }
         let mut tab_size: Option<LU> = None;
-        let mut a = 0usize;
+        let (mut a, mut ci) = (0usize, 0usize);
         while a < text.len() {
             let b = shape_cut(text, a);
-            self.shape_piece(item, ii, text, (a, b), &mut tab_size, units);
+            match levels {
+                None => self.shape_piece(item, ii, text, (a, b), 0, &mut tab_size, units),
+                // A piece is shaped in one direction: it is cut where the level changes.
+                Some(l) => {
+                    let mut run = (a, l.get(ci).copied().unwrap_or(0));
+                    for (n, (off, _)) in text.get(a..b).unwrap_or("").char_indices().enumerate() {
+                        let lvl = l.get(ci + n).copied().unwrap_or(0);
+                        if lvl != run.1 {
+                            self.shape_piece(item, ii, text, (run.0, a + off), run.1, &mut tab_size, units);
+                            run = (a + off, lvl);
+                        }
+                    }
+                    self.shape_piece(item, ii, text, (run.0, b), run.1, &mut tab_size, units);
+                }
+            }
+            ci += text.get(a..b).map_or(0, |t| t.chars().count());
             a = b;
         }
     }
 
-    /// Shape `text[range]` and append its glyphs and units; offsets in both are relative to the whole item text.
-    fn shape_piece(&mut self, item: &Item, ii: u32, text: &str, range: (usize, usize), tab_size: &mut Option<LU>, units: &mut Vec<Unit>) {
+    /// Shape `text[range]` and append its glyphs and units; offsets in both are relative to the whole item text. At an odd bidi
+    /// `level` the piece is shaped right to left and its glyph clusters are stored last to first, so that they are in drawing
+    /// order when the units are shown in reverse (the units themselves stay in logical order).
+    #[allow(clippy::too_many_arguments)]
+    fn shape_piece(&mut self, item: &Item, ii: u32, text: &str, range: (usize, usize), level: u8, tab_size: &mut Option<LU>, units: &mut Vec<Unit>) {
         let Some(piece) = text.get(range.0..range.1) else { return };
         let rf = self.font_for(&item.style);
         let f = &item.style.font;
         let q = FontQuery { families: &f.family, weight: f.weight, slant: slant_of(f.style), lang: item.style.text.lang.as_deref() };
-        let mut glyphs = self.platform.shape(piece, &q, rf.size);
+        let rtl = level % 2 == 1;
+        let mut glyphs = if rtl { self.platform.shape_rtl(piece, &q, rf.size) } else { self.platform.shape(piece, &q, rf.size) };
         if range.0 > 0 {
             let off = range.0 as u32;
             for g in &mut glyphs {
@@ -981,8 +1099,34 @@ impl Layouter<'_> {
             }
         }
         let gbase = self.glyphs.len() as u32;
-        self.glyphs.extend(glyphs.iter().map(super::PlacedGlyph::from));
-        let mut i = 0usize;
+        // Where each cluster's glyphs start in the array (right to left: the clusters are stored back to front).
+        let mut stored: Vec<u32> = Vec::new();
+        if rtl {
+            let mut bounds: Vec<(usize, usize)> = Vec::new();
+            let mut i = 0usize;
+            while let Some(g0) = glyphs.get(i) {
+                let mut j = i + 1;
+                while glyphs.get(j).is_some_and(|g| g.cluster_start == g0.cluster_start && g.cluster_end == g0.cluster_end) {
+                    j += 1;
+                }
+                bounds.push((i, j));
+                i = j;
+            }
+            stored = vec![0; bounds.len()];
+            let mut pos = 0u32;
+            for (c, &(i, j)) in bounds.iter().enumerate().rev() {
+                if let Some(s) = stored.get_mut(c) {
+                    *s = pos;
+                }
+                if let Some(part) = glyphs.get(i..j) {
+                    self.glyphs.extend(part.iter().map(super::PlacedGlyph::from));
+                }
+                pos += (j - i) as u32;
+            }
+        } else {
+            self.glyphs.extend(glyphs.iter().map(super::PlacedGlyph::from));
+        }
+        let (mut i, mut cn) = (0usize, 0usize);
         while let Some(g0) = glyphs.get(i) {
             let (cs, ce) = (g0.cluster_start, g0.cluster_end);
             let mut adv = g0.advance;
@@ -1016,7 +1160,14 @@ impl Layouter<'_> {
             u.start = cs;
             u.end = ce;
             u.adv = width;
-            u.glyphs = (gbase + i as u32, gbase + j as u32);
+            u.level = level;
+            u.glyphs = if rtl {
+                let p = gbase + stored.get(cn).copied().unwrap_or(0);
+                (p, p + (j - i) as u32)
+            } else {
+                (gbase + i as u32, gbase + j as u32)
+            };
+            cn += 1;
             u.first = first;
             u.last = last;
             u.collapsible_space = item.collapsible && single_space;
@@ -1204,8 +1355,11 @@ impl Layouter<'_> {
         let strut_font = self.font_for(&bx.style);
         let strut_asc = strut_font.asc + strut_font.lead_top;
         let strut_desc = strut_font.desc + strut_font.lead_bottom;
-        let text_align = bx.style.text.text_align;
-        let align = align_of(text_align);
+        let text_align = if bx.style.text.text_align == TextAlign::MatchParent { match_parent(tree, block) } else { bx.style.text.text_align };
+        let rtl = prep.base_level == 1;
+        let align = align_of(text_align, rtl);
+        let mut order: Vec<usize> = Vec::new();
+        let mut lvls: Vec<u8> = Vec::new();
         let indent = LU::from_f32(bx.style.text.text_indent.resolve(content_w.to_f32()));
         let first_line = self.lines.len() as u32;
         let cb_for_oof = |this: &Self, fixed: bool| if fixed { this.fixed_cb() } else { this.cb_stack.last().copied() };
@@ -1437,29 +1591,76 @@ impl Layouter<'_> {
                     free = LU::ZERO;
                 }
             }
-            let offset = match align {
-                Align::Left => LU::ZERO,
-                Align::Center if free > LU::ZERO => free.half(),
-                Align::Right if free > LU::ZERO => free,
-                _ => LU::ZERO,
+            let offset = if rtl {
+                // Right to left: the text starts at the right edge (less the indent), hanging spaces hang at the left, and a line
+                // that is too long overflows to the left (css-text-3 7.1).
+                if free <= LU::ZERO {
+                    free
+                } else {
+                    match align {
+                        Align::Left => LU::ZERO,
+                        Align::Center => free.half() - hang,
+                        Align::Right => free - hang,
+                    }
+                }
+            } else {
+                match align {
+                    Align::Left => LU::ZERO,
+                    Align::Center if free > LU::ZERO => free.half(),
+                    Align::Right if free > LU::ZERO => free,
+                    _ => LU::ZERO,
+                }
             };
 
-            // Positions of the groups (consecutive units of one item).
-            let mut gx = line_indent;
-            for k in s..e {
-                let Some(u) = prep.units.get(k) else { break };
-                let w = widths.get(k - s).copied().unwrap_or(LU::ZERO);
-                match groups.last_mut() {
-                    Some(g) if g.item == u.item => {
-                        g.b = k + 1;
-                        g.w += w;
+            // The order the units are shown in (UAX #9 L1, L2); the order they are in for a line without right-to-left content.
+            order.clear();
+            if prep.bidi {
+                let line = prep.units.get(s..e).unwrap_or(&[]);
+                lvls.clear();
+                lvls.extend(line.iter().map(|u| u.level));
+                // L1: tabs, white space before a tab and white space at the end of the line take the paragraph level.
+                let mut trailing = true;
+                for (i, u) in line.iter().enumerate().rev() {
+                    match u.kind {
+                        UnitKind::Tab => {
+                            trailing = true;
+                            if let Some(l) = lvls.get_mut(i) {
+                                *l = prep.base_level;
+                            }
+                        }
+                        UnitKind::Normal if trailing && (u.hang_space || is_space_like(u.first)) => {
+                            if let Some(l) = lvls.get_mut(i) {
+                                *l = prep.base_level;
+                            }
+                        }
+                        UnitKind::Edge | UnitKind::Oof | UnitKind::Float => {}
+                        _ => trailing = false,
                     }
-                    _ => groups.push(Group { item: u.item, a: k, b: k + 1, x: gx, w }),
+                }
+                if lvls.iter().any(|&l| l != 0) {
+                    bidi::reorder(&lvls, &mut order);
+                }
+            }
+
+            // Positions of the groups (consecutive units of one item, side by side and with their glyphs in one range).
+            let mut gx = if rtl { LU::ZERO } else { line_indent };
+            for i in 0..e - s {
+                let ki = order.get(i).copied().unwrap_or(i);
+                let Some(u) = prep.units.get(s + ki) else { break };
+                let w = widths.get(ki).copied().unwrap_or(LU::ZERO);
+                match groups.last_mut() {
+                    Some(g) if g.item == u.item && prep.units.get(g.z).is_some_and(|p| p.glyphs.1 == u.glyphs.0) => {
+                        g.z = s + ki;
+                        g.w += w;
+                        g.lo = g.lo.min(u.start);
+                        g.hi = g.hi.max(u.end);
+                    }
+                    _ => groups.push(Group { item: u.item, a: s + ki, z: s + ki, x: gx, w, lo: u.start, hi: u.end }),
                 }
                 gx += w;
             }
             if forced && let Some(fu) = prep.units.get(end) {
-                groups.push(Group { item: fu.item, a: end, b: end + 1, x: gx, w: LU::ZERO });
+                groups.push(Group { item: fu.item, a: end, z: end, x: gx, w: LU::ZERO, lo: 0, hi: 0 });
             }
 
             // Vertical alignment (CSS2 10.8.1): the boxes on this line and their offsets.
@@ -1508,6 +1709,9 @@ impl Layouter<'_> {
                             under_ta: parent.and_then(|p| ents.get(p)).is_some_and(|p| p.ta != 0 || p.under_ta),
                             first: g.x,
                             last: g.x + g.w,
+                            cs: false,
+                            ce: false,
+                            done: Vec::new(),
                             has_start: false,
                             has_end: false,
                             rel,
@@ -1519,8 +1723,14 @@ impl Layouter<'_> {
                         ents.len() - 1
                     };
                     if let Some(en) = ents.get_mut(idx) {
-                        en.first = en.first.min(g.x);
-                        en.last = en.last.max(g.x + g.w);
+                        if g.x > en.last {
+                            // Not next to the earlier part (reordering put something else between): a piece of its own.
+                            en.done.push((en.first, en.last, en.cs, en.ce));
+                            (en.first, en.last, en.cs, en.ce) = (g.x, g.x + g.w, false, false);
+                        } else {
+                            en.first = en.first.min(g.x);
+                            en.last = en.last.max(g.x + g.w);
+                        }
                     }
                     parent = Some(idx);
                 }
@@ -1529,8 +1739,10 @@ impl Layouter<'_> {
                         if let Some(en) = parent.and_then(|p| ents.get_mut(p)) {
                             if it.kind == ItemKind::Start {
                                 en.has_start = true;
+                                en.cs = true;
                             } else {
                                 en.has_end = true;
+                                en.ce = true;
                             }
                         }
                     }
@@ -1556,6 +1768,9 @@ impl Layouter<'_> {
                             under_ta: false,
                             first: g.x,
                             last: g.x + g.w,
+                            cs: false,
+                            ce: false,
+                            done: Vec::new(),
                             has_start: false,
                             has_end: false,
                             rel: (prel.0 + at.rel.0, prel.1 + at.rel.1),
@@ -1630,16 +1845,20 @@ impl Layouter<'_> {
                 let m = |i: usize| cbx.style.boxs.margin.get(i).and_then(|d| resolve_margin(d, content_w)).unwrap_or(LU::ZERO);
                 let p = |i: usize| cbx.style.boxs.padding.get(i).map_or(LU::ZERO, |l| pad_px(l, content_w));
                 let b = |i: usize| border_px(cbx.style.border.width.get(i).copied().unwrap_or(0.0));
-                let x0 = en.first + if en.has_start { m(3) } else { LU::ZERO };
-                let x1 = en.last - if en.has_end { m(1) } else { LU::ZERO };
+                let rtl_box = cbx.style.text.direction == Direction::Rtl;
+                for (pf, pl, cs, ce) in en.done.iter().copied().chain(std::iter::once((en.first, en.last, en.cs, en.ce))) {
+                // The start edge is on the right in a right-to-left box.
+                let (lh, rh) = if rtl_box { (ce, cs) } else { (cs, ce) };
+                let x0 = pf + if lh { m(3) } else { LU::ZERO };
+                let x1 = pl - if rh { m(1) } else { LU::ZERO };
                 let content_top = base_y - en.off - rf.asc;
                 let (pt, pb, bt, bb) = (p(0), p(2), b(0), b(2));
                 if positioned {
                     // Padding box of this piece (CSS2 10.1 item 4): the border only sits at the ends of the element.
                     let piece = PadRect {
-                        l: ox + x0 + en.rel.0 + if en.has_start { b(3) } else { LU::ZERO },
+                        l: ox + x0 + en.rel.0 + if lh { b(3) } else { LU::ZERO },
                         t: content_top - pt + en.rel.1,
-                        r: ox + x1 + en.rel.0 - if en.has_end { b(1) } else { LU::ZERO },
+                        r: ox + x1 + en.rel.0 - if rh { b(1) } else { LU::ZERO },
                         b: content_top + rf.asc + rf.desc + pb + en.rel.1,
                     };
                     spans.entry(en.id).and_modify(|e| e.1 = piece).or_insert((piece, piece));
@@ -1649,12 +1868,13 @@ impl Layouter<'_> {
                 }
                 self.fragments.push(Fragment {
                     box_id: en.id,
-                    kind: FragKind::InlineBox { first: en.has_start, last: en.has_end },
+                    kind: FragKind::InlineBox { first: lh, last: rh },
                     x: ox + x0 + en.rel.0,
                     y: content_top - pt - bt + en.rel.1,
                     w: (x1 - x0).max0(),
                     h: rf.asc + rf.desc + pt + pb + bt + bb,
                 });
+                }
             }
             for g in &groups {
                 let (Some(it), Some(ua)) = (prep.items.get(g.item as usize), prep.units.get(g.a)) else { continue };
@@ -1669,20 +1889,20 @@ impl Layouter<'_> {
                 };
                 match it.kind {
                     ItemKind::Text => {
-                        let Some(ub) = g.b.checked_sub(1).and_then(|k| prep.units.get(k)) else { continue };
+                        let Some(ub) = prep.units.get(g.z) else { continue };
                         let rf = self.font_for(&it.style);
                         let baseline_y = base_y - off + rel.1;
                         let fx = ox + g.x + rel.0;
                         let tid = text_base + g.item;
                         let glyphs = (ua.glyphs.0, ub.glyphs.1);
                         let kind = if it.marker {
-                            FragKind::Marker { text: tid, start: ua.start, end: ub.end, glyphs, asc: rf.asc }
+                            FragKind::Marker { text: tid, start: g.lo, end: g.hi, glyphs, asc: rf.asc }
                         } else {
                             let d0 = self.decorations.len() as u32;
                             for sp in &it.decor {
                                 self.push_decoration(sp, &rf, fx, baseline_y, g.w);
                             }
-                            FragKind::Text { text: tid, start: ua.start, end: ub.end, glyphs, decor: (d0, self.decorations.len() as u32), asc: rf.asc }
+                            FragKind::Text { text: tid, start: g.lo, end: g.hi, glyphs, decor: (d0, self.decorations.len() as u32), asc: rf.asc }
                         };
                         self.fragments.push(Fragment { box_id: it.box_id, kind, x: fx, y: baseline_y - rf.asc, w: g.w, h: rf.asc + rf.desc });
                     }
@@ -1717,7 +1937,7 @@ impl Layouter<'_> {
                             None => self.pending.push(pend),
                         }
                     }
-                    ItemKind::Start | ItemKind::End | ItemKind::Float => {}
+                    ItemKind::Start | ItemKind::End | ItemKind::Float | ItemKind::Ctl => {}
                 }
             }
             self.lines.push(Line {

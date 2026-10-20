@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<!--
+  direction: rtl in block layout (step 2d-2a). Glyphs are 10px wide (font 10px), the body has no margin; p and div are 100px wide.
+  p1 text-align:start in rtl is the right edge: "aaa" (30 wide) at x = 70.   p2 end is the left edge: x = 0.
+  p3 text-align:left: x = 0.   p4 text-align:right: x = 70.
+  p5 text-indent 20px is taken from the start (right) edge: the line ends at 100 - 20 = 80, "eee" at x = 50.
+  d1 padding-inline-start 30px is the right padding in rtl: the content box stays at 0..100, "fff" at x = 70, the box is 130 wide.
+  o: both margins set and over-constrained in rtl: the left margin is dropped: a 50px block with margin 0 10px is at x = 100 - 10 - 50 = 40.
+  fl: float: inline-start is the right side in rtl: the 20px float is at x = 80 and "hhh" is right aligned in the 80px left of it: x = 50.
+  ul: the list of an rtl list has its padding on the right (padding-inline-start 40px), the outside marker is just right of the item
+      (the item is 160 wide in a 200px box: marker at x = 160), and the item text is right aligned: "g" at x = 150.
+  viewport: 400x300
+  check: text "aaa" :: (70,0 30x10)
+  check: text "bbb" :: (0,10 30x10)
+  check: text "ccc" :: (0,20 30x10)
+  check: text "ddd" :: (70,30 30x10)
+  check: text "eee" :: (50,40 30x10)
+  check: block div#d1 :: (0,50 130x10)
+  check: text "fff" :: (70,50 30x10)
+  check: block div#o :: (40,60 50x10)
+  check: block div#fl :: (80,70 20x10)
+  check: text "hhh" :: (50,70 30x10)
+  check: block li :: (0,80 160x10)
+  check: text "g" :: (150,80 10x10)
+-->
+<html><head><style>
+body { margin: 0; font: 10px/10px sans-serif }
+p { margin: 0; width: 100px }
+</style></head><body>
+<p dir=rtl style="text-align:start">aaa</p>
+<p dir=rtl style="text-align:end">bbb</p>
+<p dir=rtl style="text-align:left">ccc</p>
+<p dir=rtl style="text-align:right">ddd</p>
+<p dir=rtl style="text-indent:20px">eee</p>
+<div id=d1 dir=rtl style="width:100px;padding-inline-start:30px">fff</div>
+<div dir=rtl style="width:100px"><div id=o style="width:50px;margin:0 10px">o</div></div>
+<div dir=rtl style="width:100px"><div id=fl style="float:inline-start;width:20px;height:10px"></div>hhh</div>
+<div style="width:200px"><ul dir=rtl style="margin:0"><li>g</li></ul></div>
+</body></html>

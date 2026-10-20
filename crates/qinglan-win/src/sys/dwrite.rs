@@ -74,6 +74,30 @@ struct FactoryVtbl {
     create_glyph_run_analysis: unsafe extern "system" fn(P, *const GlyphRun, f32, *const c_void, u32, u32, f32, f32, Out<GlyphRunAnalysisVtbl>) -> HRESULT, // 23
     _pad3: [usize; 2],                                                                               // 24, 25
     get_system_font_fallback: unsafe extern "system" fn(P, Out<FallbackVtbl>) -> HRESULT,            // 26
+    _pad4: usize,                                                                                    // 27 CreateFontFallbackBuilder
+    /// 28 `IDWriteFactory2::TranslateColorGlyphRun(originX, originY, glyphRun, description, measuringMode, transform, paletteIndex, layers)`.
+    translate_color_glyph_run: unsafe extern "system" fn(P, f32, f32, *const GlyphRun, *const c_void, u32, *const c_void, u32, Out<ColorEnumVtbl>) -> HRESULT,
+}
+
+/// `IDWriteColorGlyphRunEnumerator`: 3 MoveNext, 4 GetCurrentRun.
+#[repr(C)]
+struct ColorEnumVtbl {
+    base: UnknownVtbl,
+    move_next: unsafe extern "system" fn(P, *mut BOOL) -> HRESULT,
+    get_current_run: unsafe extern "system" fn(P, *mut *const ColorGlyphRun) -> HRESULT,
+}
+
+/// `DWRITE_COLOR_GLYPH_RUN`: one layer of a colour glyph.
+#[repr(C)]
+struct ColorGlyphRun {
+    run: GlyphRun,
+    description: P,
+    origin_x: f32,
+    origin_y: f32,
+    /// `DWRITE_COLOR_F`: red, green, blue, alpha.
+    color: [f32; 4],
+    /// 0xFFFF: the layer takes the text colour.
+    palette: u16,
 }
 
 /// `IDWriteFactory5` (dwrite_3.h): 44 CreateInMemoryFontFileLoader (IDWriteFactory3 adds 31 to 39, Factory4 40 to 43).
@@ -151,7 +175,8 @@ struct StringsVtbl {
 struct AnalyzerVtbl {
     base: UnknownVtbl,
     analyze_script: unsafe extern "system" fn(P, P, u32, u32, P) -> HRESULT,           // 3
-    _pad1: [usize; 2],                                                                 // 4 AnalyzeBidi, 5 AnalyzeNumberSubstitution
+    analyze_bidi: unsafe extern "system" fn(P, P, u32, u32, P) -> HRESULT,             // 4
+    _pad1: usize,                                                                      // 5 AnalyzeNumberSubstitution
     analyze_line_breakpoints: unsafe extern "system" fn(P, P, u32, u32, P) -> HRESULT, // 6
     get_glyphs: unsafe extern "system" fn(
         P,
@@ -339,6 +364,16 @@ pub struct Shaped {
     pub advances: Vec<f32>,
     /// (advanceOffset, ascenderOffset): right and up are positive.
     pub offsets: Vec<(f32, f32)>,
+}
+
+/// A colour glyph with its layers composed.
+pub struct RawColor {
+    pub left: i32,
+    pub top: i32,
+    pub width: u32,
+    pub height: u32,
+    /// Premultiplied BGRA.
+    pub bgra: Vec<u8>,
 }
 
 /// A glyph rendered with ClearType 3x1 coverage (three bytes per pixel: R, G, B).
@@ -537,6 +572,8 @@ struct Source {
     len: u32,
     /// NUL-terminated.
     locale: *const u16,
+    /// `DWRITE_READING_DIRECTION`: 0 left to right, 1 right to left.
+    dir: u32,
 }
 
 unsafe extern "system" fn static_add_ref(_this: P) -> u32 {
@@ -592,8 +629,9 @@ unsafe extern "system" fn source_text_before(this: P, pos: u32, text: *mut *cons
     S_OK
 }
 
-unsafe extern "system" fn source_direction(_this: P) -> u32 {
-    0 // DWRITE_READING_DIRECTION_LEFT_TO_RIGHT
+unsafe extern "system" fn source_direction(this: P) -> u32 {
+    // SAFETY: `this` is the `Source` we passed to DirectWrite, alive for the call.
+    unsafe { (*(this as *const Source)).dir }
 }
 
 unsafe extern "system" fn source_locale(this: P, pos: u32, len: *mut u32, locale: *mut *const u16) -> HRESULT {
@@ -628,7 +666,7 @@ static SOURCE_VTBL: SourceVtbl = SourceVtbl {
 impl Source {
     /// `locale` must be NUL-terminated and outlive the value.
     fn new(text: &[u16], locale: &[u16]) -> Source {
-        Source { vtbl: &SOURCE_VTBL, text: text.as_ptr(), len: text.len() as u32, locale: locale.as_ptr() }
+        Source { vtbl: &SOURCE_VTBL, text: text.as_ptr(), len: text.len() as u32, locale: locale.as_ptr(), dir: 0 }
     }
 }
 
@@ -648,6 +686,8 @@ struct Sink {
     runs: Vec<(u32, u32, ScriptAnalysis)>,
     /// One `DWRITE_LINE_BREAKPOINT` byte per UTF-16 unit.
     breaks: Vec<u8>,
+    /// The resolved bidi level of each UTF-16 unit (`AnalyzeBidi`).
+    levels: Vec<u8>,
 }
 
 unsafe extern "system" fn sink_qi(this: P, iid: *const Guid, out: *mut P) -> HRESULT {
@@ -690,7 +730,16 @@ unsafe extern "system" fn sink_breaks(this: P, pos: u32, len: u32, bp: *const u8
     S_OK
 }
 
-unsafe extern "system" fn sink_bidi(_this: P, _pos: u32, _len: u32, _explicit: u8, _resolved: u8) -> HRESULT {
+unsafe extern "system" fn sink_bidi(this: P, pos: u32, len: u32, _explicit: u8, resolved: u8) -> HRESULT {
+    // SAFETY: `this` is the `Sink` we passed in and nothing else uses it during the call.
+    unsafe {
+        let s = &mut *(this as *mut Sink);
+        for i in 0..len as usize {
+            if let Some(dst) = s.levels.get_mut(pos as usize + i) {
+                *dst = resolved;
+            }
+        }
+    }
     S_OK
 }
 
@@ -708,7 +757,7 @@ static SINK_VTBL: SinkVtbl = SinkVtbl {
 
 impl Sink {
     fn new(text_len: usize, want_breaks: bool) -> Sink {
-        Sink { vtbl: &SINK_VTBL, runs: Vec::new(), breaks: if want_breaks { vec![0; text_len] } else { Vec::new() } }
+        Sink { vtbl: &SINK_VTBL, runs: Vec::new(), breaks: if want_breaks { vec![0; text_len] } else { Vec::new() }, levels: Vec::new() }
     }
 }
 
@@ -994,8 +1043,29 @@ impl Factory {
         if hr_ok(hr) { sink.breaks } else { Vec::new() }
     }
 
-    /// Shape one run of one script with one font. `locale` is NUL-terminated.
+    /// The resolved bidi level (UAX #9) of every UTF-16 unit of `text`, one paragraph (`AnalyzeBidi`); `rtl` is the paragraph
+    /// direction. Empty on failure.
+    pub fn analyze_bidi(&self, text: &[u16], rtl: bool) -> Vec<u8> {
+        if text.is_empty() {
+            return Vec::new();
+        }
+        let locale = [0u16];
+        let mut src = Source::new(text, &locale);
+        src.dir = u32::from(rtl);
+        let mut sink = Sink::new(0, false);
+        sink.levels = vec![0; text.len()];
+        // SAFETY: as for `analyze_script`.
+        let hr = unsafe { vcall!(self.analyzer, analyze_bidi, (&raw mut src).cast(), 0, text.len() as u32, (&raw mut sink).cast()) };
+        if hr_ok(hr) { sink.levels } else { Vec::new() }
+    }
+
+    /// Shape one run of one script with one font, left to right. `locale` is NUL-terminated.
     pub fn shape(&self, text: &[u16], face: &Face, size: f32, sa: ScriptAnalysis, locale: &[u16]) -> Option<Shaped> {
+        self.shape_dir(text, face, size, sa, locale, false)
+    }
+
+    /// `shape` in either direction: `rtl` is DirectWrite's `isRightToLeft` (joining, mark placement and mirroring).
+    pub fn shape_dir(&self, text: &[u16], face: &Face, size: f32, sa: ScriptAnalysis, locale: &[u16], rtl: bool) -> Option<Shaped> {
         let n = text.len();
         if n == 0 || n > (1 << 20) || locale.last() != Some(&0) {
             return None;
@@ -1017,7 +1087,7 @@ impl Factory {
                     n as u32,
                     face.raw.raw(),
                     0,
-                    0,
+                    BOOL::from(rtl),
                     &sa,
                     locale.as_ptr(),
                     null_mut(),
@@ -1062,7 +1132,7 @@ impl Factory {
                     face.raw.raw(),
                     size,
                     0,
-                    0,
+                    BOOL::from(rtl),
                     &sa,
                     locale.as_ptr(),
                     null(),
@@ -1114,5 +1184,132 @@ impl Factory {
             return None;
         }
         Some(RawMask { left: rect.left, top: rect.top, width: w as u32, height: h as u32, rgb })
+    }
+
+    /// Render a colour glyph (COLR/CPAL layers; Segoe UI Emoji on Windows 10 and 11) as premultiplied BGRA with the layers
+    /// composed, the pen at `origin_x` on the baseline. `None` when the glyph has no colour layers or draws nothing.
+    pub fn rasterize_color(&self, face: &Face, glyph: u16, size: f32, origin_x: f32) -> Option<RawColor> {
+        if !(size > 0.0 && size <= 1024.0) {
+            return None;
+        }
+        let run = GlyphRun { font_face: face.raw.raw(), font_em_size: size, glyph_count: 1, glyph_indices: &glyph, glyph_advances: null(), glyph_offsets: null(), is_sideways: 0, bidi_level: 0 };
+        let mut en: *mut Raw<ColorEnumVtbl> = null_mut();
+        // SAFETY: `run` and its glyph index are valid for the call; no description, no transform; measuring mode 0 is NATURAL,
+        // palette 0. DWRITE_E_NOCOLOR (the glyph has no layers) is a failure code and leaves `en` null.
+        let hr = unsafe { vcall!(self.factory, translate_color_glyph_run, origin_x, 0.0, &run, null(), 0, null(), 0, &mut en) };
+        if !hr_ok(hr) {
+            return None;
+        }
+        // SAFETY: owned reference on success.
+        let layers = unsafe { ComPtr::from_raw(en) }?;
+        struct Layer {
+            rect: Rect,
+            cov: Vec<u8>,
+            color: [f32; 4],
+        }
+        let mut found: Vec<Layer> = Vec::new();
+        for _ in 0..64 {
+            let mut has: BOOL = 0;
+            // SAFETY: live enumerator, valid out pointer.
+            let hr = unsafe { vcall!(layers, move_next, &mut has) };
+            if !hr_ok(hr) || has == 0 {
+                break;
+            }
+            let mut cur: *const ColorGlyphRun = null();
+            // SAFETY: live enumerator; on success `cur` points to a run the enumerator owns until the next `MoveNext`.
+            let hr = unsafe { vcall!(layers, get_current_run, &mut cur) };
+            if !hr_ok(hr) || cur.is_null() {
+                break;
+            }
+            // SAFETY: `cur` is non-null and valid as just said; the reference does not outlive this iteration.
+            let cr = unsafe { &*cur };
+            let mut out: *mut Raw<GlyphRunAnalysisVtbl> = null_mut();
+            // SAFETY: the layer's run is valid until the next `MoveNext`; rendering mode 5 is NATURAL_SYMMETRIC, measuring mode 0 NATURAL.
+            let hr = unsafe { vcall!(self.factory, create_glyph_run_analysis, &cr.run, 1.0, null(), 5, 0, cr.origin_x, cr.origin_y, &mut out) };
+            if !hr_ok(hr) {
+                continue;
+            }
+            // SAFETY: owned reference on success.
+            let Some(analysis) = (unsafe { ComPtr::from_raw(out) }) else { continue };
+            let mut rect = Rect::default();
+            // SAFETY: live analysis; texture type 1 is DWRITE_TEXTURE_CLEARTYPE_3x1.
+            let hr = unsafe { vcall!(analysis, get_alpha_texture_bounds, 1, &mut rect) };
+            let (w, h) = (i64::from(rect.right) - i64::from(rect.left), i64::from(rect.bottom) - i64::from(rect.top));
+            if !hr_ok(hr) || w <= 0 || h <= 0 || w > 2048 || h > 2048 {
+                continue;
+            }
+            let mut rgb = vec![0u8; (w * h * 3) as usize];
+            // SAFETY: `rgb` holds exactly 3 bytes for each pixel of `rect`, the size passed.
+            let hr = unsafe { vcall!(analysis, create_alpha_texture, 1, &rect, rgb.as_mut_ptr(), rgb.len() as u32) };
+            if !hr_ok(hr) {
+                continue;
+            }
+            let cov: Vec<u8> = rgb.as_chunks::<3>().0.iter().map(|p| (p.iter().map(|&b| u32::from(b)).sum::<u32>() / 3) as u8).collect();
+            // A layer without a colour of its own (0xFFFF) is drawn in black, the text colour is not known here.
+            let color = if cr.palette == 0xFFFF { [0.0, 0.0, 0.0, 1.0] } else { cr.color };
+            found.push(Layer { rect, cov, color });
+        }
+        let (l, t) = (found.iter().map(|y| y.rect.left).min()?, found.iter().map(|y| y.rect.top).min()?);
+        let (r, b) = (found.iter().map(|y| y.rect.right).max()?, found.iter().map(|y| y.rect.bottom).max()?);
+        let (w, h) = (i64::from(r) - i64::from(l), i64::from(b) - i64::from(t));
+        if w <= 0 || h <= 0 || w > 2048 || h > 2048 {
+            return None;
+        }
+        let (w, h) = (w as usize, h as usize);
+        // Source-over of the layers in order, premultiplied, in floats.
+        let mut acc = vec![0f32; w * h * 4];
+        for y in &found {
+            let lw = (y.rect.right - y.rect.left) as usize;
+            for (i, &c) in y.cov.iter().enumerate() {
+                if c == 0 {
+                    continue;
+                }
+                let (px, py) = ((y.rect.left - l) as usize + i % lw, (y.rect.top - t) as usize + i / lw);
+                let sa = f32::from(c) / 255.0 * y.color[3];
+                let inv = 1.0 - sa;
+                if let Some(d) = acc.as_chunks_mut::<4>().0.get_mut(py * w + px) {
+                    *d = [y.color[0] * sa + d[0] * inv, y.color[1] * sa + d[1] * inv, y.color[2] * sa + d[2] * inv, sa + d[3] * inv];
+                }
+            }
+        }
+        let bgra: Vec<u8> = acc.as_chunks::<4>().0.iter().flat_map(|p| [p[2], p[1], p[0], p[3]]).map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect();
+        Some(RawColor { left: l, top: t, width: w as u32, height: h as u32, bgra })
+    }
+}
+
+#[cfg(test)]
+mod probe {
+    use super::*;
+
+    fn face(dw: &Factory, name: &str) -> Face {
+        let i = dw.collection().find_family(name).expect("family");
+        let fam = dw.collection().family(i).expect("family");
+        let f = fam.first_matching_font(400, 0).expect("font");
+        dw.create_face(&f).expect("face")
+    }
+
+    #[test]
+    fn rtl_shapes() {
+        let dw = Factory::new().expect("factory");
+        let locale = to_wide_nul("en-US");
+        for (fname, text) in [("Segoe UI", "\u{5D0}\u{5D1}\u{5D2}"), ("Segoe UI", "\u{633}\u{644}\u{627}\u{645}"), ("Segoe UI", "(a)<b>")] {
+            let f = face(&dw, fname);
+            let u: Vec<u16> = text.encode_utf16().collect();
+            let sa = dw.analyze_script(&u, &locale)[0].2;
+            for rtl in [false, true] {
+                let sh = dw.shape_dir(&u, &f, 20.0, sa, &locale, rtl).expect("shape");
+                println!("{fname} {text} rtl={rtl}: glyphs={:?} clusters={:?} adv={:?} off={:?}", sh.glyphs, sh.cluster_map, sh.advances, sh.offsets);
+            }
+        }
+        let t: Vec<u16> = "ab \u{2067}\u{5D0}\u{5D1}\u{5D2}\u{2069} cd \u{202E}xyz\u{202C} 12".encode_utf16().collect();
+        println!("bidi ltr {:?}", dw.analyze_bidi(&t, false));
+        println!("bidi rtl {:?}", dw.analyze_bidi(&t, true));
+        let f = face(&dw, "Segoe UI Emoji");
+        let gi = f.glyph_indices(&[0x1F600]).expect("indices")[0];
+        let rc = dw.rasterize_color(&f, gi, 32.0, 0.0);
+        println!("color {:?}", rc.map(|c| (c.left, c.top, c.width, c.height, c.bgra.chunks(4).filter(|p| p[3] > 0).count())));
+        let g2 = face(&dw, "Segoe UI");
+        let gi2 = g2.glyph_indices(&[0x41]).expect("indices")[0];
+        println!("color A {:?}", dw.rasterize_color(&g2, gi2, 32.0, 0.0).is_some());
     }
 }

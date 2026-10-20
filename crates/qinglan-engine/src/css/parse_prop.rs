@@ -85,7 +85,7 @@ pub fn longhands_of(name: &str) -> Option<Vec<PropId>> {
         "place-items" => vec![AlignItems, JustifyItems],
         "place-self" => vec![AlignSelf, JustifySelf],
         "place-content" => vec![AlignContent, JustifyContent],
-        "all" => ALL_PROPS.iter().copied().filter(|p| *p != Direction).collect(),
+        "all" => ALL_PROPS.iter().copied().filter(|p| *p != Direction && *p != UnicodeBidi).collect(),
         // Logical properties map to the physical ones (horizontal-tb, ltr only).
         "margin-block" => vec![MarginTop, MarginBottom],
         "margin-inline" => vec![MarginLeft, MarginRight],
@@ -1114,23 +1114,13 @@ fn parse_longhand(prop: PropId, cvs: &[Cv], items: &[&Cv], env: &ParseEnv) -> Op
         Display => parse_display(items),
         Position => kw(one_ref?, super::types::Position::from_keyword).map(Value::Position),
         Float => {
+            // `inline-start` and `inline-end` become left and right once the direction is known (the cascade).
             let id = one_ref?.ident()?.to_ascii_lowercase();
-            // Logical values map to the physical ones in ltr.
-            let f = match id.as_str() {
-                "inline-start" => super::types::Float::Left,
-                "inline-end" => super::types::Float::Right,
-                other => super::types::Float::from_keyword(other)?,
-            };
-            Some(Value::Float(f))
+            Some(Value::Float(super::types::Float::from_keyword(&id)?))
         }
         Clear => {
             let id = one_ref?.ident()?.to_ascii_lowercase();
-            let c = match id.as_str() {
-                "inline-start" => super::types::Clear::Left,
-                "inline-end" => super::types::Clear::Right,
-                other => super::types::Clear::from_keyword(other)?,
-            };
-            Some(Value::Clear(c))
+            Some(Value::Clear(super::types::Clear::from_keyword(&id)?))
         }
         BoxSizing => kw(one_ref?, super::types::BoxSizing::from_keyword).map(Value::BoxSizing),
         ZIndex => {
@@ -1217,6 +1207,7 @@ fn parse_longhand(prop: PropId, cvs: &[Cv], items: &[&Cv], env: &ParseEnv) -> Op
         WordBreak => kw(one_ref?, super::types::WordBreak::from_keyword).map(Value::WordBreak),
         OverflowWrap => kw(one_ref?, super::types::OverflowWrap::from_keyword).map(Value::OverflowWrap),
         Direction => kw(one_ref?, super::types::Direction::from_keyword).map(Value::Direction),
+        UnicodeBidi => kw(one_ref?, super::types::UnicodeBidi::from_keyword).map(Value::UnicodeBidi),
         Visibility => kw(one_ref?, super::types::Visibility::from_keyword).map(Value::Visibility),
         Cursor => parse_cursor(cvs),
         ListStyleType => parse_list_style_type(one_ref?),

@@ -1400,21 +1400,57 @@ fn lang_matches(lang: &str, range: &str) -> bool {
     l == r || (l.starts_with(&r) && l.as_bytes().get(r.len()) == Some(&b'-'))
 }
 
-/// `true` if the element's directionality is rtl (nearest `dir` attribute; default ltr).
+/// `true` if the element's directionality is rtl (HTML 3.2.6.1: the `dir` attribute; `auto` and `<bdi>` without a valid
+/// value take it from the first strong character of their text; otherwise the parent's; ltr at the root).
 fn direction_of(doc: &Document, el: NodeId) -> bool {
     let mut cur = el;
     while cur != NONE {
-        if let Some(e) = doc.element(cur)
-            && let Some(a) = e.attrs.iter().find(|a| a.ns == Namespace::None && doc.atoms.get(a.name) == "dir")
-        {
-            if doc.value(a).eq_ignore_ascii_case("rtl") {
-                return true;
-            }
-            if doc.value(a).eq_ignore_ascii_case("ltr") {
-                return false;
+        if let Some(e) = doc.element(cur) {
+            let dir = e.attrs.iter().find(|a| a.ns == Namespace::None && doc.atoms.get(a.name) == "dir").map(|a| doc.value(a));
+            match dir {
+                Some(v) if v.eq_ignore_ascii_case("rtl") => return true,
+                Some(v) if v.eq_ignore_ascii_case("ltr") => return false,
+                Some(v) if v.eq_ignore_ascii_case("auto") => return auto_rtl(doc, cur),
+                _ if doc.atoms.get(e.name) == "bdi" => return auto_rtl(doc, cur),
+                _ => {}
             }
         }
         cur = doc.parent(cur);
+    }
+    false
+}
+
+/// HTML 3.2.6.1 "auto directionality": the first strong character in the text below `el` (in tree order; `bdi`, `script`,
+/// `style`, `textarea` and elements with a `dir` of their own are skipped) decides; no strong character means ltr.
+fn auto_rtl(doc: &Document, el: NodeId) -> bool {
+    let (mut cur, mut steps) = (doc.first_child(el), 0u32);
+    while cur != NONE && steps < 20_000 {
+        steps += 1;
+        let mut descend = false;
+        match doc.node(cur).map(|n| &n.data) {
+            Some(NodeData::Text(t)) => {
+                if let Some(r) = t.chars().find_map(crate::textclass::strong_rtl) {
+                    return r;
+                }
+            }
+            Some(NodeData::Element(e)) => {
+                let name = doc.atoms.get(e.name);
+                let own_dir = e.attrs.iter().any(|a| a.ns == Namespace::None && doc.atoms.get(a.name) == "dir" && ["ltr", "rtl", "auto"].iter().any(|k| doc.value(a).eq_ignore_ascii_case(k)));
+                descend = !own_dir && !matches!(name, "bdi" | "script" | "style" | "textarea");
+            }
+            _ => {}
+        }
+        if descend && doc.first_child(cur) != NONE {
+            cur = doc.first_child(cur);
+            continue;
+        }
+        while cur != NONE && cur != el && doc.next_sibling(cur) == NONE {
+            cur = doc.parent(cur);
+        }
+        if cur == NONE || cur == el {
+            break;
+        }
+        cur = doc.next_sibling(cur);
     }
     false
 }

@@ -15,6 +15,7 @@
 //! `srcset`, lists, relative / absolute / fixed positioning with paint-order data, the canvas
 //! background, form controls and placeholder boxes, and a per-page work budget.
 
+pub mod bidi;
 pub mod block;
 pub mod boxtree;
 pub mod dump;

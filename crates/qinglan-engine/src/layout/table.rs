@@ -414,13 +414,17 @@ impl Layouter<'_> {
         let vw = ncols + 1;
         let mut e = Edges { h: vec![Edge::NONE; (nrows + 1) * ncols], v: vec![Edge::NONE; nrows * vw] };
         let ts = &tree.get(tid).style;
+        // Column 0 is the first column of the row: on the right for `direction: rtl`, so the vertical edge at the start of a
+        // row is the right border there (`sl`, `sr`: the side of the left and right edge of the first and the last column).
+        let rtl = ts.text.direction == Direction::Rtl;
+        let (sl, sr) = if rtl { (1, 3) } else { (3, 1) };
         for c in 0..ncols {
             put(&mut e.h, c, Edge::of(ts, 0, 0));
             put(&mut e.h, nrows * ncols + c, Edge::of(ts, 2, 0));
         }
         for r in 0..nrows {
-            put(&mut e.v, r * vw, Edge::of(ts, 3, 0));
-            put(&mut e.v, r * vw + ncols, Edge::of(ts, 1, 0));
+            put(&mut e.v, r * vw, Edge::of(ts, sl, 0));
+            put(&mut e.v, r * vw + ncols, Edge::of(ts, sr, 0));
         }
         for (r, &rid) in g.rows.iter().enumerate() {
             let rb = tree.get(rid);
@@ -437,8 +441,8 @@ impl Layouter<'_> {
                         put(&mut e.h, (r + 1) * ncols + c, Edge::of(st, 2, src));
                     }
                 }
-                put(&mut e.v, r * vw, Edge::of(st, 3, src));
-                put(&mut e.v, r * vw + ncols, Edge::of(st, 1, src));
+                put(&mut e.v, r * vw, Edge::of(st, sl, src));
+                put(&mut e.v, r * vw + ncols, Edge::of(st, sr, src));
             }
         }
         for cell in &g.cells {
@@ -448,22 +452,24 @@ impl Layouter<'_> {
                 put(&mut e.h, (cell.r + cell.rs) * ncols + c, Edge::of(st, 2, 4));
             }
             for r in cell.r..cell.r + cell.rs {
-                put(&mut e.v, r * vw + cell.c, Edge::of(st, 3, 4));
-                put(&mut e.v, r * vw + cell.c + cell.cs, Edge::of(st, 1, 4));
+                put(&mut e.v, r * vw + cell.c, Edge::of(st, sl, 4));
+                put(&mut e.v, r * vw + cell.c + cell.cs, Edge::of(st, sr, 4));
             }
         }
         for cell in &mut g.cells {
             let (cols, rows) = (cell.c..cell.c + cell.cs, cell.r..cell.r + cell.rs);
             let top = widest(&e.h, cols.clone().map(|c| cell.r * ncols + c));
             let bottom = widest(&e.h, cols.map(|c| (cell.r + cell.rs) * ncols + c));
-            let left = widest(&e.v, rows.clone().map(|r| r * vw + cell.c));
-            let right = widest(&e.v, rows.map(|r| r * vw + cell.c + cell.cs));
+            let first = widest(&e.v, rows.clone().map(|r| r * vw + cell.c));
+            let after = widest(&e.v, rows.map(|r| r * vw + cell.c + cell.cs));
+            let (left, right) = if rtl { (after, first) } else { (first, after) };
             cell.bor = [lu(hi(top)), lu(lo(right)), lu(lo(bottom)), lu(hi(left))];
         }
         let top = widest(&e.h, 0..ncols);
         let bottom = widest(&e.h, nrows * ncols..(nrows + 1) * ncols);
-        let left = widest(&e.v, (0..nrows).map(|r| r * vw));
-        let right = widest(&e.v, (0..nrows).map(|r| r * vw + ncols));
+        let first = widest(&e.v, (0..nrows).map(|r| r * vw));
+        let after = widest(&e.v, (0..nrows).map(|r| r * vw + ncols));
+        let (left, right) = if rtl { (after, first) } else { (first, after) };
         g.tbor = [lu(lo(top)), lu(hi(right)), lu(hi(bottom)), lu(lo(left))];
         g.edges = Some(e);
     }
@@ -651,9 +657,9 @@ impl Layouter<'_> {
         let tw = gw + ex;
         let (sp0, sp1) = (g.sp[0], g.sp[1]);
         let lead_x = if ncols > 0 { sp0 } else { LU::ZERO };
-        // A table with `direction: rtl` lays its columns out from the right (CSS2 17.5.3; separated borders only: the
-        // collapsed edges are not mirrored yet). `cx` is cumulated in painting order; `span` is the x range of columns.
-        let rtl = !g.collapse && style.text.direction == Direction::Rtl;
+        // A table with `direction: rtl` lays its columns out from the right (CSS2 17.5.3), collapsed borders included.
+        // `cx` is cumulated in painting order; `span` is the x range of columns.
+        let rtl = style.text.direction == Direction::Rtl;
         let mut cx = vec![lead_x];
         let mut x = lead_x;
         for i in 0..colw.len() {
@@ -835,13 +841,16 @@ impl Layouter<'_> {
         let mut segs: Vec<Seg> = Vec::new();
         if let Some(e) = &g.edges {
             let vw = ncols + 1;
-            let (xs, ys) = (|c: usize| gx + at(&cx, c), |r: usize| gy + at(&ry, r));
+            // `xs(b)`: the x of the boundary after `b` columns in painting order; the logical column of a place is `lc`.
+            let (xs, ys) = (|b: usize| gx + at(&cx, b), |r: usize| gy + at(&ry, r));
+            let lc = |p: usize| if rtl { ncols - p } else { p };
             let hw = |r: usize, c: usize| if c < ncols { e.h.get(r * ncols + c).map_or(0, |d| d.w) } else { 0 };
             let live = |d: &Edge| d.w > 0 && !d.hidden && d.color.a > 0;
             for r in 0..=nrows {
-                for c in 0..ncols {
+                for p in 0..ncols {
+                    let c = lc(p + 1).min(ncols.saturating_sub(1)) * usize::from(rtl) + p * usize::from(!rtl);
                     let Some(d) = e.h.get(r * ncols + c).filter(|d| live(d)) else { continue };
-                    let (x0, x1) = (xs(c), xs(c + 1));
+                    let (x0, x1) = (xs(p), xs(p + 1));
                     let (sy, sh) = (ys(r) - lu(lo(d.w)), lu(d.w));
                     match segs.last_mut() {
                         Some(l) if l.1 == sy && l.3 == sh && l.4 == d.color && l.0 + l.2 == x0 => l.2 = x1 - l.0,
@@ -849,13 +858,14 @@ impl Layouter<'_> {
                     }
                 }
             }
-            for c in 0..=ncols {
+            for p in 0..=ncols {
+                let c = lc(p);
                 for r in 0..nrows {
                     let Some(d) = e.v.get(r * vw + c).filter(|d| live(d)) else { continue };
                     let top = lo(hw(r, c.wrapping_sub(1)).max(hw(r, c)));
                     let bot = hi(hw(r + 1, c.wrapping_sub(1)).max(hw(r + 1, c)));
                     let (y0, y1) = (ys(r) - lu(top), ys(r + 1) + lu(bot));
-                    let sx = xs(c) - lu(lo(d.w));
+                    let sx = xs(p) - lu(lo(d.w));
                     match segs.last_mut() {
                         Some(l) if l.0 == sx && l.2 == lu(d.w) && l.4 == d.color && l.1 <= y1 && y0 <= l.1 + l.3 => {
                             let end = (l.1 + l.3).max(y1);
@@ -883,7 +893,7 @@ impl Layouter<'_> {
             o.lines = (0, 0);
             o.marker = 0;
         }
-        let ml = if flow.forced_w.is_some() { marg[3].unwrap_or(LU::ZERO) } else { solve_width(cb_w, Some(gw), marg[3], marg[1], ex, LU::ZERO, None).1 };
+        let ml = if flow.forced_w.is_some() { marg[3].unwrap_or(LU::ZERO) } else { solve_width(cb_w, Some(gw), marg[3], marg[1], ex, LU::ZERO, None, self.tree.get(self.tree.get(id).parent).style.text.direction == Direction::Rtl).1 };
         (ml, marg[0].unwrap_or(LU::ZERO), marg[2].unwrap_or(LU::ZERO))
     }
 }

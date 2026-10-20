@@ -96,3 +96,26 @@ pub fn is_east_asian_wide_non_hangul(c: char) -> bool {
             | 0x20000..=0x3FFFD
     )
 }
+
+/// The character is, or may be, bidirectional-relevant (UAX #9): a right-to-left script or presentation form, or an explicit
+/// formatting character. A paragraph without one (and a left-to-right base direction) needs no bidi analysis at all.
+pub fn is_bidi_relevant(c: char) -> bool {
+    matches!(c as u32,
+        0x0590..=0x08FF | 0x200E | 0x200F | 0x202A..=0x202E | 0x2066..=0x2069 | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF)
+}
+
+/// The strong direction of a character for "first strong" decisions (`dir=auto`, `unicode-bidi: plaintext`; UAX #9 P2):
+/// `Some(true)` for R and AL letters, `Some(false)` for L, `None` for everything else (digits, marks, neutrals).
+pub fn strong_rtl(c: char) -> Option<bool> {
+    let u = c as u32;
+    match u {
+        0x200F => Some(true),
+        0x200E => Some(false),
+        0x05BE | 0x05C0 | 0x05C3 | 0x05C6 | 0x05D0..=0x05FF | 0x0608 | 0x060B | 0x060D | 0x061B..=0x064A | 0x066D..=0x066F | 0x0671..=0x06D5
+        | 0x06E5 | 0x06E6 | 0x06EE | 0x06EF | 0x06FA..=0x0710 | 0x0712..=0x072F | 0x074D..=0x07A5 | 0x07B1 | 0x07C0..=0x07EA | 0x07F4..=0x07FA
+        | 0x0800..=0x0815 | 0x081A | 0x0824 | 0x0828 | 0x0830..=0x083E | 0x0840..=0x0858 | 0x085E | 0x0860..=0x08B4 | 0x08B6..=0x08C7
+        | 0xFB1D | 0xFB1F..=0xFB28 | 0xFB2A..=0xFB4F | 0xFB50..=0xFD3D | 0xFD50..=0xFDFC | 0xFE70..=0xFEFC | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF => Some(true),
+        _ if u < 0x80 => c.is_ascii_alphabetic().then_some(false),
+        _ => c.is_alphabetic().then_some(false),
+    }
+}

@@ -56,8 +56,11 @@ br[clear=right i] { clear: right; }
 br[clear=all i], br[clear=both i] { clear: both; }
 
 /* 15.3.5 Bidirectional text */
-[dir=ltr i] { direction: ltr; }
-[dir=rtl i] { direction: rtl; }
+[dir]:dir(ltr), bdi:dir(ltr), input[type=tel i]:dir(ltr) { direction: ltr; }
+[dir]:dir(rtl), bdi:dir(rtl) { direction: rtl; }
+bdi, output, [dir=ltr i], [dir=rtl i], [dir=auto i] { unicode-bidi: isolate; }
+bdo, bdo[dir] { unicode-bidi: isolate-override; }
+input[dir=auto i]:is([type=search i], [type=tel i], [type=url i], [type=email i]), textarea[dir=auto i], pre[dir=auto i] { unicode-bidi: plaintext; }
 
 /* 15.3.6 Sections and headings */
 article, aside, h1, h2, h3, h4, h5, h6, hgroup, nav, section { display: block; }
@@ -74,8 +77,8 @@ dir, dd, dl, dt, menu, ol, ul { display: block; }
 li { display: list-item; text-align: match-parent; }
 dir, dl, menu, ol, ul { margin-top: 1em; margin-bottom: 1em; }
 :is(dir, dl, menu, ol, ul) :is(dir, dl, menu, ol, ul) { margin-top: 0; margin-bottom: 0; }
-dd { margin-left: 40px; }
-dir, menu, ol, ul { padding-left: 40px; }
+dd { margin-inline-start: 40px; }
+dir, menu, ol, ul { padding-inline-start: 40px; }
 ol { list-style-type: decimal; }
 dir, menu, ul { list-style-type: disc; }
 :is(dir, menu, ol, ul) :is(dir, menu, ul) { list-style-type: circle; }

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<!--
+  Bidirectional text (step 2d-2a, UAX #9 with the test platform's small resolver). Every glyph is 10px wide (font 10px),
+  the body has no margin. Capital Hebrew letters are written as the letters themselves (right to left, one cluster each).
+  a: dir=rtl, width 100, "abc אבג": levels a b c = 2, space = 1, א ב ג = 1. L2 reverses the level-2 run and then everything:
+     visual left to right is [space ג ב א] [a b c]. The line is 70 wide and start-aligned = right-aligned, so it starts at x = 30.
+     The Hebrew fragment " אבג" is 40 wide (30..70), "abc" is 30 wide (70..100).
+  b: bidi-override with direction rtl on the block: pqr is shown as r q p, one fragment 30 wide at the right end of 200: x = 170.
+  c: an rtl span (isolate) in an ltr line: "ab " 0..30, the span "cd אב": c d = 2, space = 1, א ב = 1; visual [ב א space] [c d]:
+     " אב" 30..60, "cd" 60..80, then " ef" 80..110.
+  d: dir=auto, the first strong letter is Hebrew, so the block is rtl: "אבג xyz": visual [x y z] then [space ג ב א]:
+     "xyz" at 30..60 (the line is 70 wide, right aligned), "אבג " 60..100.
+  e: dir=rtl, a span with padding 0 10px: the start edge (right padding) comes first in logical order and so ends up on the right.
+     Edge 10 + text 20 + edge 10 = 40 wide, right aligned: starts at 60; the text is at 70.
+  f: <bdi> in an ltr line: isolate, auto direction rtl: "a " 0..20, "אב" 20..40 (shown ב א), " b" 40..60.
+  viewport: 400x300
+  check: block div#a :: (0,0 100x10)
+  check: text " אבג" :: (30,0 40x10)
+  check: text "abc" :: (70,0 30x10)
+  check: text "pqr" :: (170,10 30x10)
+  check: text "ab " :: (0,20 30x10)
+  check: text " אב" :: (30,20 30x10)
+  check: text "cd" :: (60,20 20x10)
+  check: text " ef" :: (80,20 30x10)
+  check: text "xyz" :: (30,30 30x10)
+  check: text "אבג " :: (60,30 40x10)
+  check: text "אב" :: (70,40 20x10)
+  check: text "a " :: (0,50 20x10)
+-->
+<html><head><style>
+body { margin: 0; font: 10px/10px sans-serif }
+div { width: 100px }
+</style></head><body>
+<div id=a dir=rtl>abc אבג</div>
+<div id=b style="width:200px;unicode-bidi:bidi-override;direction:rtl">pqr</div>
+<div id=c style="width:200px">ab <span dir=rtl>cd אב</span> ef</div>
+<div id=d dir=auto>אבג xyz</div>
+<div id=e dir=rtl><span style="padding:0 10px;background:red">אב</span></div>
+<div id=f>a <bdi>אב</bdi> b</div>
+</body></html>

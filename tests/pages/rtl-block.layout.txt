@@ -1,0 +1,35 @@
+viewport 400x300
+block html (0,0 400x90)
+  block body (0,0 400x90)
+    block p (0,0 100x10)
+      line (0,0 100x10) baseline=8
+        text "aaa" (70,0 30x10)
+    block p (0,10 100x10)
+      line (0,10 100x10) baseline=18
+        text "bbb" (0,10 30x10)
+    block p (0,20 100x10)
+      line (0,20 100x10) baseline=28
+        text "ccc" (0,20 30x10)
+    block p (0,30 100x10)
+      line (0,30 100x10) baseline=38
+        text "ddd" (70,30 30x10)
+    block p (0,40 100x10)
+      line (0,40 100x10) baseline=48
+        text "eee" (50,40 30x10)
+    block div#d1 (0,50 130x10)
+      line (0,50 100x10) baseline=58
+        text "fff" (70,50 30x10)
+    block div (0,60 100x10)
+      block div#o (40,60 50x10)
+        line (40,60 50x10) baseline=68
+          text "o" (80,60 10x10)
+    block div (0,70 100x10)
+      line (0,70 80x10) baseline=78
+        text "hhh" (50,70 30x10)
+      block div#fl (80,70 20x10) [float:right]
+    block div (0,80 200x10)
+      block ul (0,80 200x10)
+        block li (0,80 160x10)
+          marker " •" (160,80 20x10)
+          line (0,80 160x10) baseline=88
+            text "g" (150,80 10x10)

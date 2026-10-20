@@ -210,12 +210,20 @@ pub fn parse_declaration_block(cvs: Vec<Cv>, ctx: &mut SheetCtx<'_>) -> Rc<DeclB
             continue;
         }
         let Some(parsed) = parse_declaration(&d.name, &d.value, &env, ctx.var_id) else { continue };
+        let logical = d.name.len() > 12 && flips_with_direction(&d.name);
         for (prop, value) in parsed {
-            decls.push(Declaration { prop: DeclProp::Known(prop), value, important: d.important });
+            decls.push(Declaration { prop: if logical { DeclProp::Logical(prop) } else { DeclProp::Known(prop) }, value, important: d.important });
         }
     }
     *ctx.block_id += 1;
     Rc::new(DeclBlock { decls, id: *ctx.block_id })
+}
+
+/// Logical properties whose physical side depends on `direction` (css-logical-1 4): the mapping made at parse time is for
+/// left-to-right text, the cascade swaps the sides for `rtl`.
+fn flips_with_direction(name: &str) -> bool {
+    let has = |s: &str| name.as_bytes().windows(s.len()).any(|w| w.eq_ignore_ascii_case(s.as_bytes()));
+    has("inline-start") || has("inline-end") || ((has("border-start-") || has("border-end-")) && name.len() > 7 && name[name.len() - 7..].eq_ignore_ascii_case("-radius"))
 }
 
 /// The `style` attribute of an element.

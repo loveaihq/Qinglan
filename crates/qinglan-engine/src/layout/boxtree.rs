@@ -512,7 +512,14 @@ impl Builder<'_> {
             border: self.init.border.clone(),
             font: p.font.clone(),
             text: p.text.clone(),
-            misc: self.init.misc.clone(),
+            // An anonymous block inside a `unicode-bidi: plaintext` block is a bidi paragraph of the same kind (css-writing-modes-3 2.4).
+            misc: if p.misc.unicode_bidi == crate::css::types::UnicodeBidi::Plaintext {
+                let mut m = (*self.init.misc).clone();
+                m.unicode_bidi = crate::css::types::UnicodeBidi::Plaintext;
+                Rc::new(m)
+            } else {
+                self.init.misc.clone()
+            },
             gen_: self.init.gen_.clone(),
             flex: self.init.flex.clone(),
             grid: self.init.grid.clone(),

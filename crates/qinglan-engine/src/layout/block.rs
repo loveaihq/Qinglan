@@ -124,7 +124,8 @@ fn establishes_bfc(bx: &LayoutBox, bs: &BoxStyle) -> bool {
 }
 
 /// CSS2 10.3.3 and 10.4: content width and the two horizontal margins.
-pub(crate) fn solve_width(cb: LU, w: Option<LU>, ml: Option<LU>, mr: Option<LU>, extra: LU, min: LU, max: Option<LU>) -> (LU, LU, LU) {
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn solve_width(cb: LU, w: Option<LU>, ml: Option<LU>, mr: Option<LU>, extra: LU, min: LU, max: Option<LU>, rtl: bool) -> (LU, LU, LU) {
     let inner = |w: Option<LU>| -> (LU, LU, LU) {
         match w {
             None => {
@@ -140,14 +141,20 @@ pub(crate) fn solve_width(cb: LU, w: Option<LU>, ml: Option<LU>, mr: Option<LU>,
                             let l = rest.half();
                             (w, l, rest - l)
                         } else {
-                            // Over-constrained: auto margins count as 0, margin-right takes the rest.
-                            (w, LU::ZERO, rest)
+                            // Over-constrained: auto margins count as 0, the margin at the end takes the rest.
+                            if rtl { (w, rest, LU::ZERO) } else { (w, LU::ZERO, rest) }
                         }
                     }
                     (None, Some(r)) => (w, cb - used - r, r),
                     (Some(l), None) => (w, l, cb - used - l),
-                    // Over-constrained (ltr): margin-right is ignored and recomputed.
-                    (Some(l), Some(_)) => (w, l, cb - used - l),
+                    // Over-constrained: the margin at the end (right for ltr, left for rtl) is ignored and recomputed.
+                    (Some(l), Some(r)) => {
+                        if rtl {
+                            (w, cb - used - r, r)
+                        } else {
+                            (w, l, cb - used - l)
+                        }
+                    }
                 }
             }
         }
@@ -460,12 +467,14 @@ impl Layouter<'_> {
             Some(v) => Some(v),
             None => resolve_dim(&bs.max_width, Some(cb_w)).map(to_cw),
         };
+        // The direction of the containing block decides which margin is dropped when they are over-constrained (10.3.3).
+        let cb_rtl = bx.parent != super::boxtree::NO_BOX && self.tree.get(bx.parent).style.text.direction == crate::css::types::Direction::Rtl;
         let (content_w, ml, _mr) = if let Some(fw) = flow.forced_w {
             (fw, marg[3].unwrap_or(LU::ZERO), marg[1].unwrap_or(LU::ZERO))
         } else if let Some((rw, _)) = repl {
-            solve_width(cb_w, Some(rw), marg[3], marg[1], h_extra, LU::ZERO, None)
+            solve_width(cb_w, Some(rw), marg[3], marg[1], h_extra, LU::ZERO, None, cb_rtl)
         } else {
-            solve_width(cb_w, spec_w, marg[3], marg[1], h_extra, min_w, max_w)
+            solve_width(cb_w, spec_w, marg[3], marg[1], h_extra, min_w, max_w, cb_rtl)
         };
 
         // Height: a percentage needs a definite containing block height, otherwise it is `auto`
@@ -556,7 +565,24 @@ impl Layouter<'_> {
     /// plus its suffix, shaped in the item's font.
     pub(super) fn marker_shape(&mut self, id: BoxId) -> Option<(String, Vec<crate::platform::Glyph>, LU)> {
         let bx = self.tree.get(id);
-        let text = super::lists::marker_string(bx)?;
+        let mut text = super::lists::marker_string(bx)?;
+        if bx.style.text.direction == crate::css::types::Direction::Rtl {
+            // The marker of a right-to-left item reads right to left: its words (runs of letters and digits) keep their order,
+            // the rest is turned around, so that "1. " is shown as " .1" (UAX #9 would do the same).
+            let mut words: Vec<String> = Vec::new();
+            let mut prev_word = false;
+            for c in text.chars() {
+                if c.is_alphanumeric() && prev_word {
+                    if let Some(w) = words.last_mut() {
+                        w.push(c);
+                    }
+                } else {
+                    words.push(c.to_string());
+                }
+                prev_word = c.is_alphanumeric();
+            }
+            text = words.into_iter().rev().collect();
+        }
         let rf = self.font_for(&bx.style);
         let f = &bx.style.font;
         let q = FontQuery { families: &f.family, weight: f.weight, slant: slant_of(f.style), lang: bx.style.text.lang.as_deref() };
@@ -584,7 +610,8 @@ impl Layouter<'_> {
         self.markers.push(Fragment {
             box_id: id,
             kind: FragKind::Marker { text: tid, start: 0, end: len, glyphs: (gbase, self.glyphs.len() as u32), asc: rf.asc },
-            x: -width,
+            // Just outside the border box: on the left, or on the right for a right-to-left item.
+            x: if bx.style.text.direction == crate::css::types::Direction::Rtl { self.out.get(id as usize).map_or(LU::ZERO, |o| o.w) } else { -width },
             y: baseline - rf.asc,
             w: width,
             h: rf.asc + rf.desc,
