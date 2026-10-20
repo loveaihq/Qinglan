@@ -56,3 +56,4 @@
 | gnu-gpl3 | https://www.gnu.org/licenses/gpl-3.0.html | 长文本（许可证） | 2026-10-16 | HTTP 200 |
 | arwiki | https://ar.wikipedia.org/wiki/%D8%A7%D9%84%D9%82%D8%A7%D9%87%D8%B1%D8%A9 | 阿拉伯文维基长条目（从右往左，2d-2a） | 2026-10-20 | HTTP 200 |
 | emoji-wiki | https://en.wikipedia.org/wiki/Emoji | 带彩色 emoji 的页面（英文维基 Emoji 条目，2d-2a） | 2026-10-20 | HTTP 200 |
+| vert-tategaki | https://tategaki.github.io/ | 竖排（日文，writing-mode: vertical-rl，2d-2b） | 2026-10-21 | HTTP 200 |
