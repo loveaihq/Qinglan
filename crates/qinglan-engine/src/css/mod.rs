@@ -16,6 +16,7 @@ pub mod media;
 mod parse_grid;
 pub mod parse_prop;
 pub mod presentational;
+pub mod scan;
 pub mod selector;
 pub mod stylesheet;
 pub mod syntax;
@@ -29,7 +30,7 @@ use std::time::{Duration, Instant};
 use cascade::{ImportResolver, Origin, RuleSet, StyleInput, StyleTree, compute_styles};
 use computed::Env;
 use media::{MediaEnv, MediaQueryList};
-use stylesheet::{ImportRule, SheetCtx, Stylesheet, parse_style_attribute, parse_stylesheet, parse_stylesheet_cvs};
+use stylesheet::{ImportRule, SheetCtx, Stylesheet, parse_scanned, parse_style_attribute, parse_stylesheet};
 use types::DeclBlock;
 
 use crate::html::atoms::{FxHashMap, Interner, a};
@@ -87,7 +88,9 @@ pub struct StyleOutput {
 pub struct StyleTimings {
     /// `ResourceLoader` calls for linked sheets.
     pub load_sheets: Duration,
-    /// Tokenizing and parsing the style sheets (built-in one included).
+    /// Reading the rules of the author style sheets (preludes tokenized, blocks skipped), on several threads when there is a lot of text.
+    pub scan_sheets: Duration,
+    /// Turning the rules into selectors and declarations, tokenizing the blocks of those that can match (built-in style sheet included).
     pub parse_sheets: Duration,
     /// Media queries, `@layer`, selector bucketing: `RuleSet::add_sheet`.
     pub index_rules: Duration,
@@ -314,17 +317,16 @@ pub fn style_document_with(
         urls.push(url);
     }
     clock.reset();
-    let tokenized = {
+    let scanned = {
         let slices: Vec<&str> = texts.iter().map(String::as_str).collect();
-        syntax::parse_cvs_many(&slices)
+        scan::scan_sheets(&slices, scan::Filter { env: Some(&media_env), facts: Some(&doc_facts), quirks })
     };
-    drop(texts);
-    clock.lap(&mut timings.parse_sheets);
-    for (url, cvs) in urls.into_iter().zip(tokenized) {
+    clock.lap(&mut timings.scan_sheets);
+    for (url, scan) in urls.into_iter().zip(scanned) {
         let sheet_base = url.clone().or_else(|| base.clone()).map(Rc::new);
         let sheet = {
             let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks, var_id: &mut var_id, block_id: &mut block_id, facts: Some(&doc_facts), env: Some(&media_env), base: sheet_base };
-            parse_stylesheet_cvs(cvs, &mut ctx)
+            parse_scanned(scan, &mut ctx)
         };
         clock.lap(&mut timings.parse_sheets);
         let chain = vec![url.or_else(|| base.clone()).unwrap_or_else(|| Url::parse("about:blank", None).unwrap_or_else(|_| empty_url()))];
@@ -344,6 +346,7 @@ pub fn style_document_with(
         // `@import`ed sheets are loaded and parsed inside `add_sheet`; their time lands here, with the indexing.
         clock.lap(&mut timings.index_rules);
     }
+    drop(texts);
 
     // `style` attributes (memoized by text).
     clock.reset();

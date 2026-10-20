@@ -10,13 +10,12 @@ use std::rc::Rc;
 use super::media::{MediaQueryList, Tri};
 use super::parse_prop::{ParseEnv, parse_declaration};
 use super::selector::{ParseCtx, Selector, parse_selector_list};
-use super::syntax::{BlockKind, Cv, MAX_CONDITION_NESTING, RawRule, nests_deeper_than, parse_cvs, parse_declaration_list, parse_rule_list, split_commas, trim_ws};
-use super::tokenizer::Token;
+use super::scan::{Filter, LazyBlock, LazyRule, MAX_RULE_NESTING, ScannedSheet, scan_normalized, scan_range};
+use super::syntax::{BlockKind, Cv, MAX_CONDITION_NESTING, component_values_at, nests_deeper_than, parse_cvs, parse_declaration_list, split_commas, trim_ws};
+use super::tokenizer::{Token, normalize, tokenize_normalized};
 use super::types::{DeclBlock, DeclProp, Declaration, PropId};
 use crate::html::atoms::Interner;
 
-/// Nesting limit for `@media` / `@supports` / `@layer` blocks.
-const MAX_RULE_NESTING: usize = 32;
 /// A selector with more compounds than this is dropped.
 const MAX_COMPOUNDS: usize = 128;
 
@@ -34,6 +33,13 @@ pub struct SheetCtx<'a> {
     pub env: Option<&'a super::media::MediaEnv>,
     /// The address of the sheet (the document for `<style>` and `style=`): `url()` values are made absolute against it.
     pub base: Option<Rc<crate::url::Url>>,
+}
+
+impl<'a> SheetCtx<'a> {
+    /// What the rules read from a sheet are dropped by while they are read.
+    fn filter(&self) -> Filter<'_> {
+        Filter { env: self.env, facts: self.facts, quirks: self.quirks }
+    }
 }
 
 pub struct StyleRule {
@@ -65,16 +71,26 @@ pub struct Stylesheet {
 }
 
 pub fn parse_stylesheet(text: &str, ctx: &mut SheetCtx<'_>) -> Stylesheet {
-    parse_stylesheet_cvs(parse_cvs(text), ctx)
+    let text = normalize(text);
+    let rules = scan_normalized(&text, ctx.filter());
+    Stylesheet { rules: convert_rules(rules, &text, ctx, true, 0) }
 }
 
-/// [`parse_stylesheet`] for text that was already tokenized (see [`super::syntax::parse_cvs_many`]).
-pub fn parse_stylesheet_cvs(cvs: Vec<Cv>, ctx: &mut SheetCtx<'_>) -> Stylesheet {
-    let raw = parse_rule_list(cvs, true);
-    Stylesheet { rules: convert_rules(raw, ctx, true, 0) }
+/// [`parse_stylesheet`] for a sheet that was already scanned (see [`super::scan::scan_sheets`]).
+pub fn parse_scanned(sheet: ScannedSheet<'_>, ctx: &mut SheetCtx<'_>) -> Stylesheet {
+    Stylesheet { rules: convert_rules(sheet.rules, &sheet.text, ctx, true, 0) }
 }
 
-fn convert_rules(raw: Vec<RawRule>, ctx: &mut SheetCtx<'_>, top_level: bool, depth: usize) -> Vec<Rule> {
+/// The rules in the block of an `@media`, `@supports` or `@layer` (read already, except where the scan had no use for them).
+fn inner_rules(block: LazyBlock, text: &str, ctx: &SheetCtx<'_>, depth: usize) -> Vec<LazyRule> {
+    match block {
+        LazyBlock::Rules(v) => v,
+        LazyBlock::Text(a, b) => scan_range(text, a..b, false, depth + 1, ctx.filter()),
+        LazyBlock::None => Vec::new(),
+    }
+}
+
+fn convert_rules(raw: Vec<LazyRule>, text: &str, ctx: &mut SheetCtx<'_>, top_level: bool, depth: usize) -> Vec<Rule> {
     let mut out = Vec::new();
     // @import is only valid before everything but @charset and @layer statements.
     let mut imports_allowed = top_level;
@@ -82,24 +98,24 @@ fn convert_rules(raw: Vec<RawRule>, ctx: &mut SheetCtx<'_>, top_level: bool, dep
         match r.at_name.as_deref() {
             None => {
                 imports_allowed = false;
-                if let Some(rule) = style_rule(r, ctx) {
+                if let Some(rule) = style_rule(r, text, depth, ctx) {
                     out.push(Rule::Style(rule));
                 }
             }
             Some("charset") => {}
             Some("import") => {
-                if imports_allowed && r.block.is_none() && let Some(i) = parse_import(&r.prelude, ctx) {
+                if imports_allowed && matches!(r.block, LazyBlock::None) && let Some(i) = parse_import(&r.prelude, ctx) {
                     out.push(Rule::Import(i));
                 }
             }
             Some("layer") => match r.block {
-                None => {
+                LazyBlock::None => {
                     let names = parse_layer_names(&r.prelude);
                     if let Some(n) = names {
                         out.push(Rule::LayerStatement(n));
                     }
                 }
-                Some(body) => {
+                body => {
                     if depth >= MAX_RULE_NESTING {
                         continue;
                     }
@@ -111,32 +127,30 @@ fn convert_rules(raw: Vec<RawRule>, ctx: &mut SheetCtx<'_>, top_level: bool, dep
                             _ => continue,
                         }
                     };
-                    let inner = convert_rules(parse_rule_list(body, false), ctx, false, depth + 1);
+                    let inner = convert_rules(inner_rules(body, text, ctx, depth), text, ctx, false, depth + 1);
                     imports_allowed = false;
                     out.push(Rule::Layer(name, inner));
                 }
             },
             Some("media") => {
                 imports_allowed = false;
-                let Some(body) = r.block else { continue };
-                if depth >= MAX_RULE_NESTING {
+                if matches!(r.block, LazyBlock::None) || depth >= MAX_RULE_NESTING {
                     continue;
                 }
                 let q = MediaQueryList::parse(&r.prelude);
                 if ctx.env.is_some_and(|env| !q.matches(env)) {
                     continue;
                 }
-                let inner = convert_rules(parse_rule_list(body, false), ctx, false, depth + 1);
+                let inner = convert_rules(inner_rules(r.block, text, ctx, depth), text, ctx, false, depth + 1);
                 out.push(Rule::Media(q, inner));
             }
             Some("supports") => {
                 imports_allowed = false;
-                let Some(body) = r.block else { continue };
-                if depth >= MAX_RULE_NESTING {
+                if matches!(r.block, LazyBlock::None) || depth >= MAX_RULE_NESTING {
                     continue;
                 }
                 if eval_supports(&r.prelude, ctx) == Tri::True {
-                    out.extend(convert_rules(parse_rule_list(body, false), ctx, false, depth + 1));
+                    out.extend(convert_rules(inner_rules(r.block, text, ctx, depth), text, ctx, false, depth + 1));
                 }
             }
             Some(_) => {
@@ -148,8 +162,8 @@ fn convert_rules(raw: Vec<RawRule>, ctx: &mut SheetCtx<'_>, top_level: bool, dep
     out
 }
 
-fn style_rule(r: RawRule, ctx: &mut SheetCtx<'_>) -> Option<StyleRule> {
-    let body = r.block?;
+fn style_rule(r: LazyRule, text: &str, depth: usize, ctx: &mut SheetCtx<'_>) -> Option<StyleRule> {
+    let LazyBlock::Text(from, to) = r.block else { return None };
     let selectors = {
         let mut pc = ParseCtx { atoms: ctx.atoms, quirks: ctx.quirks, depth: 0 };
         parse_selector_list(&r.prelude, &mut pc, false, true)?
@@ -162,6 +176,8 @@ fn style_rule(r: RawRule, ctx: &mut SheetCtx<'_>) -> Option<StyleRule> {
     if selectors.is_empty() {
         return None;
     }
+    // Only now is the block tokenized.
+    let body = component_values_at(tokenize_normalized(text.get(from..to)?), depth + 1);
     let block = parse_declaration_block(body, ctx);
     if block.decls.is_empty() {
         return None;

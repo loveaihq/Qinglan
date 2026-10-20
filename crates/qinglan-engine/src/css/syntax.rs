@@ -41,7 +41,7 @@ impl Cv {
 }
 
 /// Maximum nesting of blocks and functions; deeper input is flattened (hostile input guard).
-const MAX_NESTING: usize = 512;
+pub(super) const MAX_NESTING: usize = 512;
 
 /// Maximum nesting of `@media` and `@supports` conditions (parentheses and functions, including
 /// `selector()` in `@supports`); deeper conditions are invalid (media query: `not all`; supports: false).
@@ -56,16 +56,31 @@ pub fn nests_deeper_than(cvs: &[Cv], limit: usize) -> bool {
     })
 }
 
-/// Build the component value tree for a token list.
-pub fn component_values(tokens: Vec<Token>) -> Vec<Cv> {
-    // Iterative construction with an explicit stack.
-    enum Open {
-        Func(String),
-        Block(BlockKind),
+enum Open {
+    Func(String),
+    Block(BlockKind),
+}
+
+/// Builds the component value tree token by token (css-syntax-3 5.4.7), with an explicit stack.
+#[derive(Default)]
+pub(super) struct CvBuilder {
+    stack: Vec<(Open, Vec<Cv>)>,
+    cur: Vec<Cv>,
+    /// How many blocks the values being built are already inside of (they count for the nesting limit).
+    offset: usize,
+}
+
+impl CvBuilder {
+    pub(super) fn at_depth(offset: usize) -> CvBuilder {
+        CvBuilder { stack: Vec::new(), cur: Vec::new(), offset }
     }
-    let mut stack: Vec<(Open, Vec<Cv>)> = Vec::new();
-    let mut cur: Vec<Cv> = Vec::new();
-    for t in tokens {
+
+    /// Is a function or block open (the value being built is not complete yet)?
+    pub(super) fn is_open(&self) -> bool {
+        !self.stack.is_empty()
+    }
+
+    pub(super) fn feed(&mut self, t: Token) {
         let opener = match &t {
             Token::Function(n) => Some(Open::Func(n.clone())),
             Token::OpenParen => Some(Open::Block(BlockKind::Paren)),
@@ -74,93 +89,67 @@ pub fn component_values(tokens: Vec<Token>) -> Vec<Cv> {
             _ => None,
         };
         if let Some(o) = opener {
-            if stack.len() < MAX_NESTING {
-                stack.push((o, std::mem::take(&mut cur)));
+            if self.offset + self.stack.len() < MAX_NESTING {
+                self.stack.push((o, std::mem::take(&mut self.cur)));
             }
-            continue;
+            return;
         }
-        let closes = match &t {
-            Token::CloseParen => Some(false),
-            Token::CloseSquare | Token::CloseCurly => Some(true),
-            _ => None,
-        };
-        if let Some(_square_or_curly) = closes {
+        if matches!(t, Token::CloseParen | Token::CloseSquare | Token::CloseCurly) {
             // A closing token ends the innermost open construct if it is of the matching kind.
             let matches_top = matches!(
-                (stack.last().map(|(o, _)| o), &t),
+                (self.stack.last().map(|(o, _)| o), &t),
                 (Some(Open::Func(_)), Token::CloseParen)
                     | (Some(Open::Block(BlockKind::Paren)), Token::CloseParen)
                     | (Some(Open::Block(BlockKind::Square)), Token::CloseSquare)
                     | (Some(Open::Block(BlockKind::Curly)), Token::CloseCurly)
             );
             if matches_top {
-                if let Some((o, parent)) = stack.pop() {
-                    let items = std::mem::replace(&mut cur, parent);
-                    cur.push(match o {
+                if let Some((o, parent)) = self.stack.pop() {
+                    let items = std::mem::replace(&mut self.cur, parent);
+                    self.cur.push(match o {
                         Open::Func(n) => Cv::Func(n, items),
                         Open::Block(k) => Cv::Block(k, items),
                     });
                 }
             } else {
                 // Stray closer: kept as a token so that callers can see it (it makes declarations invalid).
-                cur.push(Cv::Tok(t));
+                self.cur.push(Cv::Tok(t));
             }
-            continue;
+            return;
         }
-        cur.push(Cv::Tok(t));
+        self.cur.push(Cv::Tok(t));
     }
-    // EOF closes everything.
-    while let Some((o, parent)) = stack.pop() {
-        let items = std::mem::replace(&mut cur, parent);
-        cur.push(match o {
-            Open::Func(n) => Cv::Func(n, items),
-            Open::Block(k) => Cv::Block(k, items),
-        });
+
+    /// The end of the input closes everything that is open.
+    pub(super) fn finish(mut self) -> Vec<Cv> {
+        while let Some((o, parent)) = self.stack.pop() {
+            let items = std::mem::replace(&mut self.cur, parent);
+            self.cur.push(match o {
+                Open::Func(n) => Cv::Func(n, items),
+                Open::Block(k) => Cv::Block(k, items),
+            });
+        }
+        self.cur
     }
-    cur
+}
+
+/// Build the component value tree for a token list.
+pub fn component_values(tokens: Vec<Token>) -> Vec<Cv> {
+    component_values_at(tokens, 0)
+}
+
+/// [`component_values`] for the contents of `depth` blocks (the nesting limit counts them).
+pub fn component_values_at(tokens: Vec<Token>, depth: usize) -> Vec<Cv> {
+    let mut b = CvBuilder::at_depth(depth);
+    for t in tokens {
+        b.feed(t);
+    }
+    b.finish()
 }
 
 /// Parse text into component values.
 pub fn parse_cvs(text: &str) -> Vec<Cv> {
     component_values(tokenize(text))
-}
-
-/// Below this many bytes of style sheet text in all, tokenizing on several threads costs more than it saves.
-const PARALLEL_MIN_BYTES: usize = 256 * 1024;
-/// At most this many worker threads for [`parse_cvs_many`].
-const PARALLEL_MAX_THREADS: usize = 4;
-/// Stack of a worker: the main thread has 8 MB and the parser may recurse as deep as the nesting limits allow.
-const WORKER_STACK: usize = 8 << 20;
-
-/// [`parse_cvs`] for several texts, in order. Large sets of sheets are tokenized on up to four threads (the
-/// biggest first): a page with 3 MB of CSS spends a third of its style time here, and the texts are independent.
-/// The result is the same as calling `parse_cvs` on each.
-pub fn parse_cvs_many(texts: &[&str]) -> Vec<Vec<Cv>> {
-    let total: usize = texts.iter().map(|t| t.len()).sum();
-    let threads = std::thread::available_parallelism().map_or(1, usize::from).min(PARALLEL_MAX_THREADS).min(texts.len());
-    if threads < 2 || total < PARALLEL_MIN_BYTES {
-        return texts.iter().map(|t| parse_cvs(t)).collect();
-    }
-    let mut order: Vec<usize> = (0..texts.len()).collect();
-    crate::sorting::sort_by_u64_key(&mut order, |&i| !(texts.get(i).map_or(0, |t| t.len()) as u64));
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let slots: Vec<std::sync::Mutex<Option<Vec<Cv>>>> = texts.iter().map(|_| std::sync::Mutex::new(None)).collect();
-    let work = || {
-        while let Some(&i) = order.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
-            let (Some(text), Some(slot)) = (texts.get(i), slots.get(i)) else { break };
-            let parsed = parse_cvs(text);
-            *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(parsed);
-        }
-    };
-    std::thread::scope(|s| {
-        for _ in 1..threads {
-            // A worker that cannot start just leaves its share to the others (and to this thread).
-            let _ = std::thread::Builder::new().stack_size(WORKER_STACK).spawn_scoped(s, work);
-        }
-        work();
-    });
-    // A text whose worker panicked is parsed again here: the panic then happens on the caller's thread, as without threads.
-    slots.into_iter().zip(texts).map(|(m, t)| m.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner).unwrap_or_else(|| parse_cvs(t))).collect()
 }
 
 /// A generic rule: an at-rule or a qualified rule.

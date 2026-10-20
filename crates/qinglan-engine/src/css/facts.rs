@@ -61,6 +61,16 @@ impl DocFacts {
         f
     }
 
+    /// Does no element have this class (compared as written, so not in quirks mode)?
+    pub(super) fn lacks_class(&self, name: &str) -> bool {
+        !self.classes.contains(&hash(name, false))
+    }
+
+    /// Does no element have this id (compared as written, so not in quirks mode)?
+    pub(super) fn lacks_id(&self, name: &str) -> bool {
+        !self.ids.contains(&hash(name, false))
+    }
+
     /// Can `sel` match some element of the document? `false` only when it certainly cannot. Ids and classes are
     /// compared case-insensitively in quirks mode: not judged there.
     pub fn possible(&self, sel: &Selector, atoms: &Interner, quirks: bool) -> bool {
@@ -85,8 +95,7 @@ mod tests {
     use super::*;
     use crate::css::media::MediaEnv;
     use crate::css::stylesheet::{Rule, SheetCtx, Stylesheet, parse_stylesheet};
-    use crate::css::syntax::{parse_cvs, parse_cvs_many, serialize_cvs};
-    use crate::html::treebuilder::parse_document;
+        use crate::html::treebuilder::parse_document;
 
     const SHEET: &str = ".a{color:red} .zz{color:blue} [data-mode=dark]{color:blue} [data-mode=auto]{color:green} #x{color:red} #nope{color:red} \
         .zz,.b{color:red} :is(.zz){color:red} section{color:red} div .zz{color:red} div .a{color:red} [lang]{color:red} [data-mode^=da]{color:red} \
@@ -138,17 +147,5 @@ mod tests {
         let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks: true, var_id: &mut v, block_id: &mut b, facts: Some(&facts), env: None, base: None };
         let s = parse_stylesheet(".a{color:red} .zz{color:red}", &mut ctx);
         assert_eq!(count(&s.rules).0, 2, ".a matches class A in quirks mode");
-    }
-
-    #[test]
-    fn tokenizing_several_sheets_on_threads_gives_the_same_values_in_the_same_order() {
-        let texts: Vec<String> = (0..9).map(|i| format!("a{i}{{color:red;margin:{i}px}}\n").repeat(3000 + i * 500)).collect();
-        let slices: Vec<&str> = texts.iter().map(String::as_str).collect();
-        assert!(slices.iter().map(|t| t.len()).sum::<usize>() > 256 * 1024, "big enough to use threads");
-        let many = parse_cvs_many(&slices);
-        assert_eq!(many.len(), 9);
-        for (m, t) in many.iter().zip(&slices) {
-            assert_eq!(serialize_cvs(m), serialize_cvs(&parse_cvs(t)));
-        }
     }
 }

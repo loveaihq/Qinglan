@@ -28,9 +28,15 @@ pub enum Token {
     CloseCurly,
 }
 
-struct Lexer {
-    chars: Vec<char>,
+/// The tokenizer works on the bytes of the text (UTF-8). Every byte of a non-ASCII character is a name character
+/// (css-syntax-3 4.2 "ident-start code point"), so only the places that build text need to care about characters.
+pub(super) struct Lexer<'a> {
+    src: &'a str,
+    b: &'a [u8],
     pos: usize,
+    /// Skimming: tokens are found exactly as in normal mode (so their boundaries are the same) but their text is not
+    /// kept, which makes it allocation free. Used to find the end of a block that is only tokenized if it is needed.
+    pub(super) skim: bool,
 }
 
 fn is_name_start(c: char) -> bool {
@@ -53,9 +59,34 @@ fn is_non_printable(c: char) -> bool {
     matches!(c, '\0'..='\u{8}' | '\u{B}' | '\u{E}'..='\u{1F}' | '\u{7F}')
 }
 
-impl Lexer {
+fn text_of(v: Vec<u8>) -> String {
+    String::from_utf8(v).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+}
+
+fn push_char(v: &mut Vec<u8>, c: char) {
+    let mut buf = [0u8; 4];
+    v.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+}
+
+impl<'a> Lexer<'a> {
+    /// `text` must be preprocessed already (see [`normalize`]).
+    pub(super) fn new(text: &'a str) -> Lexer<'a> {
+        Lexer { src: text, b: text.as_bytes(), pos: 0, skim: false }
+    }
+
+    /// The byte offset in the text of what was consumed so far.
+    pub(super) fn pos(&self) -> usize {
+        self.pos
+    }
+
+    /// Go back (or on) to an offset that `pos` gave.
+    pub(super) fn set_pos(&mut self, pos: usize) {
+        self.pos = pos;
+    }
+
+    /// The code point at `pos + off`; any byte of a non-ASCII character reads as U+0080 (they are all alike here).
     fn at(&self, off: usize) -> Option<char> {
-        self.chars.get(self.pos + off).copied()
+        self.b.get(self.pos + off).map(|&x| if x < 0x80 { x as char } else { '\u{80}' })
     }
 
     /// "Check if two code points are a valid escape" starting at offset `off`.
@@ -131,8 +162,10 @@ impl Lexer {
                     char::from_u32(v).unwrap_or('\u{FFFD}')
                 }
             }
-            Some(c) => {
-                self.pos += 1;
+            Some(_) => {
+                // Any other code point is itself; a non-ASCII one is several bytes (`pos` is on a boundary here).
+                let c = self.src.get(self.pos..).and_then(|r| r.chars().next()).unwrap_or('\u{FFFD}');
+                self.pos += c.len_utf8();
                 c
             }
         }
@@ -143,25 +176,31 @@ impl Lexer {
         // Fast path: a run of name characters, no escape: one exactly sized string.
         let start = self.pos;
         let mut end = start;
-        while self.chars.get(end).is_some_and(|&c| is_name(c)) {
+        while self.b.get(end).is_some_and(|&x| is_name(if x < 0x80 { x as char } else { '\u{80}' })) {
             end += 1;
         }
-        if self.chars.get(end) != Some(&'\\') {
+        if self.b.get(end) != Some(&b'\\') {
             self.pos = end;
-            return self.chars.get(start..end).unwrap_or(&[]).iter().collect();
+            if self.skim {
+                return String::new();
+            }
+            return String::from_utf8_lossy(self.b.get(start..end).unwrap_or(&[])).into_owned();
         }
-        let mut s = String::with_capacity(16);
+        let mut s: Vec<u8> = Vec::with_capacity(16);
         loop {
             match self.at(0) {
                 Some(c) if is_name(c) => {
-                    s.push(c);
+                    if let Some(&x) = self.b.get(self.pos) {
+                        s.push(x);
+                    }
                     self.pos += 1;
                 }
                 Some('\\') if self.valid_escape_at(0) => {
                     self.pos += 1;
-                    s.push(self.consume_escape());
+                    let c = self.consume_escape();
+                    push_char(&mut s, c);
                 }
-                _ => return s,
+                _ => return text_of(s),
             }
         }
     }
@@ -243,13 +282,13 @@ impl Lexer {
     }
 
     fn consume_string(&mut self, ending: char) -> Token {
-        let mut s = String::new();
+        let mut s: Vec<u8> = Vec::new();
         loop {
             match self.at(0) {
-                None => return Token::Str(s),
+                None => return Token::Str(text_of(s)),
                 Some(c) if c == ending => {
                     self.pos += 1;
-                    return Token::Str(s);
+                    return Token::Str(text_of(s));
                 }
                 Some('\n') => return Token::BadStr, // not consumed
                 Some('\\') => {
@@ -257,11 +296,20 @@ impl Lexer {
                     match self.at(0) {
                         None => {}
                         Some('\n') => self.pos += 1,
-                        Some(_) => s.push(self.consume_escape()),
+                        Some(_) => {
+                            let c = self.consume_escape();
+                            if !self.skim {
+                                push_char(&mut s, c);
+                            }
+                        }
                     }
                 }
-                Some(c) => {
-                    s.push(c);
+                Some(_) => {
+                    if !self.skim
+                        && let Some(&x) = self.b.get(self.pos)
+                    {
+                        s.push(x);
+                    }
                     self.pos += 1;
                 }
             }
@@ -290,23 +338,23 @@ impl Lexer {
         while self.at(0).is_some_and(is_ws) {
             self.pos += 1;
         }
-        let mut s = String::new();
+        let mut s: Vec<u8> = Vec::new();
         loop {
             match self.at(0) {
-                None => return Token::Url(s),
+                None => return Token::Url(text_of(s)),
                 Some(')') => {
                     self.pos += 1;
-                    return Token::Url(s);
+                    return Token::Url(text_of(s));
                 }
                 Some(c) if is_ws(c) => {
                     while self.at(0).is_some_and(is_ws) {
                         self.pos += 1;
                     }
                     return match self.at(0) {
-                        None => Token::Url(s),
+                        None => Token::Url(text_of(s)),
                         Some(')') => {
                             self.pos += 1;
-                            Token::Url(s)
+                            Token::Url(text_of(s))
                         }
                         _ => {
                             self.consume_bad_url_remnants();
@@ -325,14 +373,21 @@ impl Lexer {
                 Some('\\') => {
                     if self.valid_escape_at(0) {
                         self.pos += 1;
-                        s.push(self.consume_escape());
+                        let c = self.consume_escape();
+                        if !self.skim {
+                            push_char(&mut s, c);
+                        }
                     } else {
                         self.consume_bad_url_remnants();
                         return Token::BadUrl;
                     }
                 }
-                Some(c) => {
-                    s.push(c);
+                Some(_) => {
+                    if !self.skim
+                        && let Some(&x) = self.b.get(self.pos)
+                    {
+                        s.push(x);
+                    }
                     self.pos += 1;
                 }
             }
@@ -341,10 +396,13 @@ impl Lexer {
 
     /// "Consume an ident-like token".
     fn consume_ident_like(&mut self) -> Token {
+        let start = self.pos;
         let name = self.consume_name();
         if self.at(0) == Some('(') {
+            // Skimming leaves a name without escapes empty (a name is never empty otherwise); the text is still there.
+            let is_url = if name.is_empty() { self.b.get(start..self.pos).is_some_and(|n| n.eq_ignore_ascii_case(b"url")) } else { name.eq_ignore_ascii_case("url") };
             self.pos += 1;
-            if name.eq_ignore_ascii_case("url") {
+            if is_url {
                 // If the next one or two non-whitespace characters are quotes, it is a function token.
                 let mut off = 0;
                 while self.at(off).is_some_and(is_ws) {
@@ -360,7 +418,7 @@ impl Lexer {
         Token::Ident(name)
     }
 
-    fn next_token(&mut self) -> Option<Token> {
+    pub(super) fn next_token(&mut self) -> Option<Token> {
         self.consume_comments();
         let c = self.at(0)?;
         let t = match c {
@@ -485,10 +543,13 @@ impl Lexer {
     }
 }
 
-/// Tokenize a style sheet or a declaration list. Input preprocessing (css-syntax-3 3.3): CR, FF and
-/// CRLF become LF, NUL becomes U+FFFD.
-pub fn tokenize(input: &str) -> Vec<Token> {
-    let mut chars: Vec<char> = Vec::with_capacity(input.len());
+/// Input preprocessing (css-syntax-3 3.3): CR, FF and CRLF become LF, NUL becomes U+FFFD. Text without them is
+/// used as it is.
+pub fn normalize(input: &str) -> std::borrow::Cow<'_, str> {
+    if !input.bytes().any(|b| matches!(b, b'\r' | 0x0c | 0)) {
+        return std::borrow::Cow::Borrowed(input);
+    }
+    let mut out = String::with_capacity(input.len());
     let mut it = input.chars().peekable();
     while let Some(c) = it.next() {
         match c {
@@ -496,15 +557,25 @@ pub fn tokenize(input: &str) -> Vec<Token> {
                 if it.peek() == Some(&'\n') {
                     it.next();
                 }
-                chars.push('\n');
+                out.push('\n');
             }
-            '\x0c' => chars.push('\n'),
-            '\0' => chars.push('\u{FFFD}'),
-            c => chars.push(c),
+            '\x0c' => out.push('\n'),
+            '\0' => out.push('\u{FFFD}'),
+            c => out.push(c),
         }
     }
-    let mut lx = Lexer { chars, pos: 0 };
-    let mut out = Vec::with_capacity(input.len() / 6 + 16);
+    std::borrow::Cow::Owned(out)
+}
+
+/// Tokenize a style sheet or a declaration list.
+pub fn tokenize(input: &str) -> Vec<Token> {
+    tokenize_normalized(&normalize(input))
+}
+
+/// [`tokenize`] for text that [`normalize`] has been applied to.
+pub fn tokenize_normalized(text: &str) -> Vec<Token> {
+    let mut lx = Lexer::new(text);
+    let mut out = Vec::with_capacity(text.len() / 6 + 16);
     while let Some(t) = lx.next_token() {
         out.push(t);
     }
@@ -545,5 +616,33 @@ mod tests {
         assert_eq!(tokenize("+5"), vec![Token::Number { value: 5.0, is_int: true, signed: true }]);
         assert_eq!(tokenize("2n+1").len(), 2);
         assert_eq!(tokenize("<!-- -->"), vec![Token::Cdo, Token::Whitespace, Token::Cdc]);
+    }
+
+    #[test]
+    fn non_ascii_text_and_input_preprocessing() {
+        assert_eq!(tokenize(".类名é{}")[1], Token::Ident("类名é".into()));
+        assert_eq!(tokenize("'日本\\語x'"), vec![Token::Str("日本語x".into())]);
+        assert_eq!(tokenize("\\é"), vec![Token::Ident("é".into())]);
+        assert_eq!(tokenize("url(\\é.png)"), vec![Token::Url("é.png".into())]);
+        assert_eq!(
+            tokenize("a\r\nb\rc\x0cd"),
+            vec![Token::Ident("a".into()), Token::Whitespace, Token::Ident("b".into()), Token::Whitespace, Token::Ident("c".into()), Token::Whitespace, Token::Ident("d".into())]
+        );
+        assert_eq!(tokenize("a\0b"), vec![Token::Ident("a\u{FFFD}b".into())]);
+    }
+
+    #[test]
+    fn skimming_finds_the_same_token_boundaries() {
+        let text = "a{b:url( x\\)y ) \\75rl(\"z\") 'q\\'}' é\\{ /* } */ 1.5e3px 0x}\\}} [a=\"}\"] url(\"}\" c{d}} u\\rl(}) end";
+        let mut full = Lexer::new(text);
+        let mut skim = Lexer::new(text);
+        skim.skim = true;
+        loop {
+            let (a, b) = (full.next_token(), skim.next_token());
+            assert_eq!(a.is_some(), b.is_some());
+            assert_eq!(full.pos(), skim.pos());
+            let (Some(a), Some(b)) = (a, b) else { break };
+            assert_eq!(std::mem::discriminant(&a), std::mem::discriminant(&b));
+        }
     }
 }
