@@ -357,3 +357,80 @@ fn a_transformed_table_and_float_are_painted_once_through_the_transform() {
     let f = paint("<div style='float:left;margin-left:30px;width:10px;height:10px;background:black;transform:translateX(20px)'></div>", 80, 20);
     expect(&f, &[(55, 5, b), (35, 5, WHITE)]);
 }
+
+#[test]
+fn groups_nested_past_the_layer_limit_are_drawn_without_their_own_opacity() {
+    // Eight nested groups of opacity .9 around a red box. The first six get a layer (.9^6 = .53 of red over white); the last two have
+    // no layer left and are drawn straight: the red is there, not missing.
+    let mut html = String::new();
+    for _ in 0..8 {
+        html.push_str("<div style='width:30px;height:30px;opacity:.9'>");
+    }
+    html.push_str(&format!("<div style='{BOX}background:red'></div>"));
+    html.push_str(&"</div>".repeat(8));
+    let f = paint(&html, 40, 40);
+    near(&f, 5, 5, [118, 118, 255, 255], 8);
+    expect(&f, &[(35, 35, WHITE)]);
+    // Seventy nested ones are over the recursion limit and are not drawn; the page still comes out (and quickly).
+    let mut deep = String::new();
+    for _ in 0..70 {
+        deep.push_str("<div style='opacity:.9'>");
+    }
+    deep.push_str(&format!("<div style='{BOX}background:red'></div>"));
+    deep.push_str(&"</div>".repeat(70));
+    let f = paint(&deep, 40, 40);
+    assert_eq!(f.data.len(), 40 * 40 * 4);
+}
+
+#[test]
+fn nested_groups_past_the_layer_limit_keep_their_scale_and_drop_a_turn() {
+    // The seventh group scales by 2 about its top left (a shift and a scale need no layer); the eighth turns, which a flat drawing cannot.
+    let mut html = String::new();
+    for _ in 0..6 {
+        html.push_str("<div style='width:60px;height:60px;opacity:.9'>");
+    }
+    html.push_str("<div style='width:30px;height:30px;transform-origin:0 0;transform:scale(2)'><div style='width:10px;height:10px;transform:rotate(90deg);background:red'></div></div>");
+    html.push_str(&"</div>".repeat(6));
+    let f = paint(&html, 70, 70);
+    // Red 10x10 doubled to 20x20, seen through six layers of .9 (the turn is dropped: the box stays at the top left).
+    near(&f, 15, 15, [118, 118, 255, 255], 8);
+    expect(&f, &[(25, 25, WHITE)]);
+}
+
+#[test]
+fn a_huge_skewed_element_is_drawn_in_bands_not_dropped() {
+    // skewX(89.5deg) about the top left corner: the part of the element that lands in the 100x100 window is a strip of
+    // 11.5k x 100 pixels, more than one layer may hold (about 520k pixels), so it is drawn in bands of rows.
+    let f = paint("<div style='position:absolute;left:-12000px;top:0;width:12100px;height:100px;background:lime;transform-origin:0 0;transform:skewX(89.5deg)'></div>", 100, 100);
+    expect(&f, &[(50, 50, LIME), (3, 3, LIME), (97, 97, LIME), (50, 99, LIME), (2, 98, LIME)]);
+    // With opacity: the same, mixed once.
+    let f = paint("<div style='position:absolute;left:-12000px;top:0;width:12100px;height:100px;background:lime;opacity:.5;transform-origin:0 0;transform:skewX(89.5deg)'></div>", 100, 100);
+    near(&f, 50, 50, [127, 255, 127, 255], 2);
+    near(&f, 50, 99, [127, 255, 127, 255], 2);
+}
+
+#[test]
+fn a_blurred_text_shadow_is_kept_while_scrolling_and_equals_a_fresh_one() {
+    let body = "<p style='margin:200px 0 0 5px;font:10px/10px sans-serif;color:black;text-shadow:3px 2px 4px blue'>XXXXXX</p><div style='height:400px'></div>";
+    // The mask cache is per thread: one thread draws three frames (the later ones from the cache), another only the last.
+    let frames = |scrolls: Vec<f32>| {
+        std::thread::spawn(move || {
+            let page = lay(body, 100, 100);
+            scrolls.iter().map(|&s| draw(&page, 100, 100, s)).collect::<Vec<_>>()
+        })
+        .join()
+        .unwrap()
+    };
+    let warm = frames(vec![150.0, 160.0, 170.0]);
+    let fresh = frames(vec![170.0]);
+    assert_eq!(warm[2].data, fresh[0].data);
+    // It is the same picture ten rows higher, and the shadow is there at all (blue in the green channel).
+    for y in 0..60u32 {
+        for x in 0..100u32 {
+            assert_eq!(at(&warm[1], x, y + 10), at(&warm[2], x, y), "({x},{y})");
+        }
+    }
+    assert!(mass(&warm[2]) > 10.0);
+    let blue = (0..100u32).any(|x| (0..100u32).any(|y| i32::from(at(&warm[2], x, y)[0]) > i32::from(at(&warm[2], x, y)[2]) + 40));
+    assert!(blue, "a blue shadow");
+}

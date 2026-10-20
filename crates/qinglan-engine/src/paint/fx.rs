@@ -27,10 +27,27 @@ const MAX_KEPT_PX: usize = 1 << 20;
 const MAX_KEPT_BYTES: usize = 6 << 20;
 /// A shadow whose mask would be bigger than this many pixels is not drawn.
 const MAX_MASK_PX: i64 = 1 << 22;
-/// Groups nested deeper than this are not drawn.
+/// Groups nested deeper than this are not given a layer: they are drawn straight into the frame (without their opacity;
+/// a transform other than scale and shift is dropped), so that content never goes missing.
 const MAX_DEPTH: u8 = 6;
+/// Groups nested deeper than this are not drawn at all (the drawing recurses once per level).
+const MAX_NESTED: u8 = 64;
 
 type MaskCache = (FxHashMap<u64, Rc<Vec<u8>>>, usize);
+
+/// The linear part of a group's transform, as `Ctx::group` splits it, for [`Ctx::rotated`].
+#[derive(Clone, Copy)]
+struct Lin {
+    ra: f64,
+    rb: f64,
+    rc: f64,
+    rd: f64,
+    det: f64,
+    tx: f64,
+    ty: f64,
+    dpr: f64,
+    alpha: u32,
+}
 
 thread_local! {
     /// Blurred shadow coverage by (shape, radii, sigma): scrolling moves a shadow by whole pixels, so it is the same mask.
@@ -276,11 +293,84 @@ impl Ctx<'_> {
         }
     }
 
+    /// The blurred coverage of the glyphs of a whole text run, kept from frame to frame: scrolling moves a run by whole
+    /// pixels, so the same glyphs at the same fraction of a pixel blur to the same mask. The mask is returned with the
+    /// device position of its corner in the frame; `None`: the run is too big to keep (or has no glyphs to show).
+    fn run_mask(&self, run: &TextRun, sigma: f32, pad: i32) -> Option<(Rc<Vec<u8>>, i32, i32)> {
+        let glyphs = self.list.glyphs.get(run.glyphs.0 as usize..run.glyphs.1 as usize)?;
+        let pen = run.x.to_f32() * self.dpr as f32 - self.sx as f32;
+        let (ox, oy) = (pen.floor() as i32, super::raster::dev(run.baseline, self.dpr) - self.sy);
+        let mut hs = FxHasher::default();
+        hs.write_u8(1);
+        hs.write_u32(run.size.to_bits());
+        hs.write_u64(self.dpr.to_bits());
+        hs.write_u32(sigma.to_bits());
+        hs.write_u32(((pen - pen.floor()) * 1024.0) as u32);
+        for g in glyphs {
+            for v in [u32::from(g.font), u32::from(g.glyph), g.advance.to_bits(), g.dx.to_bits(), g.dy.to_bits()] {
+                hs.write_u32(v);
+            }
+        }
+        let m = with_cache(hs.finish(), || {
+            let all = IRect { x0: i32::MIN / 4, y0: i32::MIN / 4, x1: i32::MAX / 4, y1: i32::MAX / 4 };
+            let mut u = IRect { x0: i32::MAX, y0: i32::MAX, x1: i32::MIN, y1: i32::MIN };
+            self.glyphs_of(run, &all, &mut |x, y, m| {
+                if m.width > 0 {
+                    u = IRect { x0: u.x0.min(x), y0: u.y0.min(y), x1: u.x1.max(x + m.width as i32), y1: u.y1.max(y + m.height as i32) };
+                }
+            });
+            let u = IRect { x0: u.x0.saturating_sub(pad), y0: u.y0.saturating_sub(pad), x1: u.x1.saturating_add(pad), y1: u.y1.saturating_add(pad) };
+            let (w, h) = (i64::from(u.x1) - i64::from(u.x0), i64::from(u.y1) - i64::from(u.y0));
+            if u.is_empty() || w * h > MAX_KEPT_PX as i64 {
+                return None;
+            }
+            let (w, h) = (w as i32, h as i32);
+            let mut buf = vec![0u8; w as usize * h as usize];
+            self.glyphs_of(run, &all, &mut |x, y, m| accumulate(&mut buf, w, h, (x - u.x0, y - u.y0), m));
+            blur_mask(&mut buf, w as usize, h as usize, sigma);
+            // The corner and the size in front of the pixels.
+            let mut out = Vec::with_capacity(16 + buf.len());
+            for v in [u.x0 - ox, u.y0 - oy, w, h] {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+            out.extend_from_slice(&buf);
+            Some(out)
+        })?;
+        let field = |i: usize| m.get(i * 4..i * 4 + 4).and_then(|b| b.try_into().ok()).map_or(0, i32::from_le_bytes);
+        let (x, y) = (ox + field(0), oy + field(1));
+        Some((m, x, y))
+    }
+
+    /// Blend `color` over the frame through the coverage `buf` (`u` is its rectangle), inside `clip`.
+    fn blend_mask(&mut self, frame: &mut Frame, buf: &[u8], u: &IRect, color: crate::css::color::Color, clip: &IRect) {
+        let w = (u.x1 - u.x0) as usize;
+        let color = premul(color);
+        let area = u.intersect(clip);
+        self.stats.items += 1;
+        let stride = frame.width as usize * 4;
+        for y in area.y0.max(0)..area.y1.min(frame.height as i32) {
+            let Some(row) = frame.data.get_mut(y as usize * stride..(y as usize + 1) * stride) else { continue };
+            for x in area.x0.max(0)..area.x1.min(frame.width as i32) {
+                let a = u32::from(buf.get((y - u.y0) as usize * w + (x - u.x0) as usize).copied().unwrap_or(0));
+                if let Some(px) = row.get_mut(x as usize * 4..x as usize * 4 + 4) {
+                    blend(px, color, a);
+                }
+            }
+        }
+    }
+
     /// A text run with a blurred shadow: the glyph coverage is blurred as a whole (css-text-decor-3 4.1).
     #[inline(never)]
     pub(super) fn text_blur(&mut self, frame: &mut Frame, run: &TextRun, clip: &IRect) {
         let sigma = run.blur * self.dpr as f32 / 2.0;
         let pad = reach(sigma);
+        if let Some((m, x, y)) = self.run_mask(run, sigma, pad) {
+            let field = |i: usize| m.get(i * 4..i * 4 + 4).and_then(|b| b.try_into().ok()).map_or(0, i32::from_le_bytes);
+            let u = IRect { x0: x, y0: y, x1: x + field(2), y1: y + field(3) };
+            self.blend_mask(frame, m.get(16..).unwrap_or(&[]), &u, run.color, clip);
+            return;
+        }
+        // Too big to keep: only what reaches into the clip is blurred, every frame.
         let wide = IRect { x0: clip.x0 - pad, y0: clip.y0 - pad, x1: clip.x1 + pad, y1: clip.y1 + pad };
         let mut u = IRect { x0: i32::MAX, y0: i32::MAX, x1: i32::MIN, y1: i32::MIN };
         self.glyphs_of(run, &wide, &mut |x, y, m| {
@@ -294,43 +384,18 @@ impl Ctx<'_> {
             return;
         }
         let mut buf = vec![0u8; w as usize * h as usize];
-        self.glyphs_of(run, &wide, &mut |x, y, m| {
-            for (r, line) in m.alpha.chunks_exact((m.width as usize).max(1)).enumerate() {
-                let py = y + r as i32 - u.y0;
-                if py < 0 || py >= h {
-                    continue;
-                }
-                for (c, &a) in line.iter().enumerate() {
-                    let px = x + c as i32 - u.x0;
-                    if px >= 0 && px < w {
-                        let d = &mut buf[py as usize * w as usize + px as usize];
-                        *d = d.saturating_add(a);
-                    }
-                }
-            }
-        });
+        self.glyphs_of(run, &wide, &mut |x, y, m| accumulate(&mut buf, w, h, (x - u.x0, y - u.y0), m));
         blur_mask(&mut buf, w as usize, h as usize, sigma);
-        let color = premul(run.color);
-        let area = u.intersect(clip);
-        self.stats.items += 1;
-        for y in area.y0..area.y1 {
-            let stride = frame.width as usize * 4;
-            let Some(row) = frame.data.get_mut(y as usize * stride..(y as usize + 1) * stride) else { continue };
-            for x in area.x0..area.x1 {
-                let a = u32::from(buf[(y - u.y0) as usize * w as usize + (x - u.x0) as usize]);
-                if let Some(px) = row.get_mut(x as usize * 4..x as usize * 4 + 4) {
-                    blend(px, color, a);
-                }
-            }
-        }
+        self.blend_mask(frame, &buf, &u, run.color, clip);
     }
 
     /// A group (see [`Group`]): `r` is its transformed extent in device pixels, `clip` the area it may draw in.
     #[inline(never)]
     pub(super) fn group(&mut self, frame: &mut Frame, g: &Group, r: &IRect, clip: &IRect) {
-        if self.depth >= MAX_DEPTH {
+        if self.depth >= MAX_NESTED {
             return;
         }
+        let flat = self.depth >= MAX_DEPTH;
         let xf = &g.xf;
         let (a, b, c, d) = (f64::from(xf.a), f64::from(xf.b), f64::from(xf.c), f64::from(xf.d));
         let k = a.hypot(b).max(c.hypot(d)).clamp(0.125, 8.0);
@@ -346,7 +411,17 @@ impl Ctx<'_> {
             (tx, ty) = (tx.round(), ty.round());
         }
         let dpr = self.dpr * k;
-        let alpha = u32::from(g.opacity);
+        let alpha = if flat { 255 } else { u32::from(g.opacity) };
+        if flat && !same {
+            // No layer is left to turn or skew the drawing in: the content is drawn where it was laid out.
+            let mut child = self.child(self.dpr, self.sx, self.sy, *clip);
+            for it in &g.items {
+                child.item(frame, it);
+            }
+            let st = child.stats;
+            self.merge(st);
+            return;
+        }
         if same {
             let off = (tx as i32, ty as i32);
             let area = r.intersect(clip);
@@ -394,6 +469,24 @@ impl Ctx<'_> {
         if dest.is_empty() {
             return;
         }
+        // When that part is more than a layer may hold (a big element turned a little), the destination is done in
+        // bands of rows, each with a layer of its own: the same pixels, drawn once per band.
+        let lin = Lin { ra, rb, rc, rd, det, tx, ty, dpr, alpha };
+        let (mut y, mut step) = (dest.y0, dest.y1 - dest.y0);
+        while y < dest.y1 {
+            let band = IRect { y0: y, y1: (y + step).min(dest.y1), ..dest };
+            if self.rotated(frame, g, &lin, &band) || step <= 1 {
+                y = band.y1;
+            } else {
+                step = (step + 1) / 2;
+            }
+        }
+    }
+
+    /// The rows `dest` of the frame shown by the group `g` through the turn, skew or flip `l`. `false`: the layer it
+    /// needs is over the limit and nothing was drawn.
+    fn rotated(&mut self, frame: &mut Frame, g: &Group, l: &Lin, dest: &IRect) -> bool {
+        let Lin { ra, rb, rc, rd, det, tx, ty, dpr, alpha } = *l;
         // Frame pixel (x, y) shows the layer-space point R^-1 * ((x, y) - t).
         let inv = |x: f64, y: f64| ((rd * (x - tx) - rc * (y - ty)) / det, (-rb * (x - tx) + ra * (y - ty)) / det);
         let corners = [(dest.x0, dest.y0), (dest.x1, dest.y0), (dest.x0, dest.y1), (dest.x1, dest.y1)].map(|(x, y)| inv(f64::from(x), f64::from(y)));
@@ -404,9 +497,12 @@ impl Ctx<'_> {
         let own = device_rect(&g.local, dpr);
         let lay = IRect { x0: qx0.floor().max(f64::from(own.x0) - 1.0) as i32, y0: qy0.floor().max(f64::from(own.y0) - 1.0) as i32, x1: qx1.ceil().min(f64::from(own.x1) + 1.0) as i32, y1: qy1.ceil().min(f64::from(own.y1) + 1.0) as i32 };
         let (w, h) = (lay.x1 - lay.x0, lay.y1 - lay.y0);
+        if lay.is_empty() {
+            return true;
+        }
         let cap = i64::from(frame.width).max(512) * i64::from(frame.height).max(512) * 2;
-        if lay.is_empty() || i64::from(w) * i64::from(h) > cap {
-            return;
+        if i64::from(w) * i64::from(h) > cap {
+            return false;
         }
         let mut layer = Frame::new(w as u32, h as u32);
         let mut child = self.child(dpr, lay.x0, lay.y0, IRect { x0: 0, y0: 0, x1: w, y1: h });
@@ -414,7 +510,7 @@ impl Ctx<'_> {
             child.item(&mut layer, it);
         }
         let st = child.stats;
-                self.merge(st);
+        self.merge(st);
         let px_at = |x: i32, y: i32| -> [u32; 4] {
             if x < 0 || y < 0 || x >= w || y >= h {
                 return [0; 4];
@@ -451,6 +547,7 @@ impl Ctx<'_> {
                 }
             }
         }
+        true
     }
 
     /// A context for the items of a group: `dpr` device pixels per CSS px, the page at `(-sx, -sy)`, drawing inside `bounds`.
@@ -462,6 +559,23 @@ impl Ctx<'_> {
         self.stats.items += st.items;
         self.stats.glyphs += st.glyphs;
         self.stats.images += st.images;
+    }
+}
+
+/// Add the coverage of a glyph, whose corner is at `at` in the `w` x `h` buffer, to it.
+fn accumulate(buf: &mut [u8], w: i32, h: i32, at: (i32, i32), m: &GlyphMask) {
+    for (r, line) in m.alpha.chunks_exact((m.width as usize).max(1)).enumerate() {
+        let py = at.1 + r as i32;
+        if py < 0 || py >= h {
+            continue;
+        }
+        for (c, &a) in line.iter().enumerate() {
+            let px = at.0 + c as i32;
+            if px >= 0 && px < w {
+                let d = &mut buf[py as usize * w as usize + px as usize];
+                *d = d.saturating_add(a);
+            }
+        }
     }
 }
 
