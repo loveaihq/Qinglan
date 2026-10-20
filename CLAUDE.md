@@ -38,6 +38,7 @@
 ## 完成的标准
 
 - 跑测试，贴出真实输出，不接受"应该能通过"。报告里提到的每项检查，报告前都要重新跑一遍。
+- 每一步收尾都要跑：`cargo test --workspace --no-fail-fast`、`cargo clippy --workspace --all-targets`、`qinglan-cli wpt --check`，**以及 release 版的恶意网页测试 `cargo test --release -p qinglan-cli --test hostile`**（耗时和内存上限只在 release 版里检查，平常的 debug 测试看不到它们退步；2d-2a 就这样让 `bad_utf8` 从 105 MB 涨到 154 MB 而没人发现）。
 - 性能和内存在插电时量，用电池时的数字不算。
 - 规范没写清、或者自己做了选择的地方，在 `docs/decisions.md` 里记下选了什么、为什么。
 - 每一步收尾做一次独立审查（清单式），审查意见和处理结果一起报告。
