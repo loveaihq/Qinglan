@@ -1292,18 +1292,23 @@ impl Platform for WinPlatform {
     }
 
     fn bidi_levels(&self, text: &str, rtl: bool) -> Vec<u8> {
-        let mut units: Vec<u16> = Vec::with_capacity(text.len());
-        let mut first: Vec<usize> = Vec::with_capacity(text.len());
-        for c in text.chars() {
-            first.push(units.len());
-            let mut buf = [0u16; 2];
-            units.extend_from_slice(c.encode_utf16(&mut buf));
-        }
+        // Exact sizes: a page of 4 MB of text must not cost a word per byte here.
+        let mut units: Vec<u16> = Vec::with_capacity(text.chars().map(char::len_utf16).sum());
+        units.extend(text.encode_utf16());
         let levels = self.dw.analyze_bidi(&units, rtl);
-        if levels.len() != units.len() {
+        drop(units);
+        // One level per character: the level of its first UTF-16 unit.
+        let mut out = Vec::with_capacity(text.chars().count());
+        let mut i = 0usize;
+        for c in text.chars() {
+            let Some(&l) = levels.get(i) else { return Vec::new() };
+            out.push(l);
+            i += c.len_utf16();
+        }
+        if i != levels.len() {
             return Vec::new();
         }
-        first.iter().map(|&i| levels.get(i).copied().unwrap_or(0)).collect()
+        out
     }
 
     fn prefetch(&self, chars: &str, words: &[&str], query: &FontQuery<'_>) {

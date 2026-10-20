@@ -92,18 +92,22 @@ pub(super) fn first_strong(s: &str) -> Option<bool> {
 
 /// Resolve the levels of the paragraph whose items are `parts`. `rtl` is the block's `direction`; with `plaintext` the first
 /// strong character decides instead. `None`: the platform does no analysis (or answered with the wrong count).
-pub(super) fn analyze(platform: &dyn Platform, parts: &[Part<'_>], rtl: bool, plaintext: bool) -> Option<Para> {
-    let mut s = String::new();
-    let mut start = Vec::with_capacity(parts.len());
-    let mut n = 0usize;
-    for p in parts {
-        start.push(n);
-        let t = match p {
+pub(super) fn analyze<'a>(platform: &dyn Platform, parts: &[Part<'a>], rtl: bool, plaintext: bool) -> Option<Para> {
+    let text_of = |p: &Part<'a>| -> &'a str {
+        match p {
             Part::Text(t) | Part::Ctl(t) => t,
             Part::Object => "\u{FFFC}",
             Part::Break => "\u{2028}",
             Part::Nothing => "",
-        };
+        }
+    };
+    // Sized once: a paragraph can be megabytes of text, and a String that grows by doubling peaks at twice that.
+    let mut s = String::with_capacity(parts.iter().map(|p| text_of(p).len()).sum());
+    let mut start = Vec::with_capacity(parts.len());
+    let mut n = 0usize;
+    for p in parts {
+        start.push(n);
+        let t = text_of(p);
         s.push_str(t);
         n += t.chars().count();
     }
