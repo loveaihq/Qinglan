@@ -4,6 +4,7 @@
 pub mod css;
 pub mod encoding;
 pub mod fmath;
+pub mod fonts;
 pub mod html;
 pub mod interact;
 pub mod layout;
