@@ -225,7 +225,7 @@ impl Layouter<'_> {
         let base = if bfc { (LU::ZERO, LU::ZERO) } else { (self.pos.0 + g.ml, self.pos.1) };
         self.pos = base;
 
-        let positioned = bx.style.boxs.position != Position::Static;
+        let positioned = super::makes_cb(&bx.style);
         if positioned {
             self.cb_stack.push(id);
         }

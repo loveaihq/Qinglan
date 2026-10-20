@@ -5,6 +5,7 @@
 
 - `css/CSS2/floats`、`css/CSS2/floats-clear`、`css/CSS2/generated-content`、`css/css-lists`、`css/CSS2/tables`、`css/CSS2/zindex`、`css/css-tables`、`css/css-flexbox`（2b-1）、`css/css-grid`（2b-2，2659 个文件）：被测的测试（后三个只拷了有 `rel=match|mismatch`、没有 `<script>` 的页面和它们引用的参考页、图片、样式表；testharness 和只能人看的页面没拷，所以比 WPT 里的文件数少很多）
 - `css/css-backgrounds`、`css/css-images`（2c-1）：只拷了有 `rel=match|mismatch`、没有 `<script>`、也没有 2c-2、2d、2e 和"不做"清单里的特性（阴影、不透明度、变形、字体、书写方向、SVG、表单控件、`mix-blend-mode`、`border-image`、`image-set()`……）的页面和它们引用的文件；筛出来 212 个（背景）和 126 个（图片）。
+- `css/css-transforms`（2D，146 个）、`css/css-color` 里名字带 `opacity` 的（12 个）、`css/css-text-decor/text-shadow`（19 个，去掉了 `onload` 改样式的 1 个）、`css/css-backgrounds` 里名字带 `shadow` 的（25 个，加进上面那一批）（2c-2）：筛法同上，另外去掉 3D（`perspective`、`preserve-3d`、`rotateX/Y`、`matrix3d`……）、单独的 `translate:`/`rotate:`/`scale:` 属性、`filter`、`mask`、动画。
 - `css/CSS2/support`、`css/CSS2/reference`、`css/reference`、`css/support`、`css/CSS2/positioning/absolute-non-replaced-width-017-ref.xht`：测试引用的图片、参考页、样式表
 - `fonts/Ahem.ttf`、`fonts/ahem.css`：Ahem 字体（测试平台里每个字 1em 见方，就是它的样子，所以这一步不加载它）
 

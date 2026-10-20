@@ -5,7 +5,8 @@
 use crate::css::types::Position;
 use crate::html::atoms::{FxHashMap, a};
 use crate::html::dom::{DOCUMENT, Document, NONE, NodeId};
-use crate::layout::{BoxId, BoxKind, FragKind, Fragment, LayoutResult, NO_BOX, Positioned};
+use crate::layout::{BoxId, BoxKind, FragKind, Fragment, LayoutResult, NO_BOX, Positioned, has_transform};
+use crate::vector::{Pt, Transform};
 use crate::url::percent_decode;
 
 /// Longest document title kept (characters).
@@ -23,6 +24,10 @@ pub struct PageIndex {
     /// Where each stacking context's own flow content (and each `z-index: auto` positioned box) comes in the paint
     /// order (CSS2 appendix E.2): a larger number is painted later, so it is on top.
     ranks: FxHashMap<BoxId, u32>,
+    /// The inverse of the transform a box is painted through (the transforms of its ancestors and its own, css-transforms-1),
+    /// by box: an index into `inverse`, or `u32::MAX`. Empty on a page without transforms.
+    xf_of: Vec<u32>,
+    inverse: Vec<Transform>,
 }
 
 /// Number the paint order of the stacking context `ctx` and what it contains.
@@ -56,6 +61,7 @@ struct FragRect {
     w: f32,
     h: f32,
     fixed: bool,
+    block: BoxId,
 }
 
 impl PageIndex {
@@ -65,6 +71,11 @@ impl PageIndex {
         let mut fixed = vec![false; n];
         let mut done = vec![false; n];
         let mut chain: Vec<usize> = Vec::new();
+        let any_xf = layout.tree.boxes.iter().any(|b| has_transform(&b.style));
+        let mut xf_of: Vec<u32> = if any_xf { vec![u32::MAX; n] } else { Vec::new() };
+        // The forward transform of each transformed box, the one of its parents included, for the next one down.
+        let mut forward: Vec<Transform> = Vec::new();
+        let mut inverse: Vec<Transform> = Vec::new();
         for start in 0..n {
             if done.get(start) != Some(&false) {
                 continue;
@@ -88,6 +99,22 @@ impl PageIndex {
                 let o = layout.box_out(i as BoxId);
                 base = (base.0 + o.x.to_f32(), base.1 + o.y.to_f32());
                 base_fixed |= layout.tree.get(i as BoxId).style.boxs.position == Position::Fixed;
+                if any_xf {
+                    let p = layout.tree.layout_parent(i as BoxId);
+                    let up = xf_of.get(p as usize).copied().unwrap_or(u32::MAX);
+                    let mut mine = up;
+                    if let Some(fx) = layout.tree.get(i as BoxId).style.misc.fx.as_deref().filter(|f| !f.xform.is_empty()) {
+                        let o = layout.box_out(i as BoxId);
+                        let own = Transform::translate(base.0, base.1).compose(&fx.matrix(o.w.to_f32(), o.h.to_f32())).compose(&Transform::translate(-base.0, -base.1));
+                        let total = forward.get(up as usize).map_or(own, |t| t.compose(&own));
+                        forward.push(total);
+                        inverse.push(total.inverse());
+                        mine = (forward.len() - 1) as u32;
+                    }
+                    if let Some(slot) = xf_of.get_mut(i) {
+                        *slot = mine;
+                    }
+                }
                 if let (Some(slot), Some(f), Some(d)) = (origin.get_mut(i), fixed.get_mut(i), done.get_mut(i)) {
                     *slot = base;
                     *f = base_fixed;
@@ -98,7 +125,7 @@ impl PageIndex {
         let text_blocks = (0..n as BoxId).filter(|&b| layout.box_out(b).lines.1 > layout.box_out(b).lines.0).collect();
         let mut ranks = FxHashMap::default();
         rank_context(layout, layout.tree.root, &mut 0, &mut ranks, 0);
-        PageIndex { origin, fixed, text_blocks, ranks }
+        PageIndex { origin, fixed, text_blocks, ranks, xf_of, inverse }
     }
 
     /// The paint rank of the box a fragment belongs to: that of the nearest ancestor with one.
@@ -126,7 +153,7 @@ impl PageIndex {
 
     fn frag_rect(&self, block: BoxId, f: &Fragment) -> FragRect {
         let (ox, oy) = self.origin_of(block);
-        FragRect { x: ox + f.x.to_f32(), y: oy + f.y.to_f32(), w: f.w.to_f32(), h: f.h.to_f32(), fixed: self.is_fixed(block) }
+        FragRect { x: ox + f.x.to_f32(), y: oy + f.y.to_f32(), w: f.w.to_f32(), h: f.h.to_f32(), fixed: self.is_fixed(block), block }
     }
 
     /// Every fragment of the page with its rectangle: `visit(block, fragment, rect)`.
@@ -153,6 +180,14 @@ impl PageIndex {
                 return;
             }
             let y = if r.fixed { view_y } else { page_y };
+            // The pointer in the coordinates the box is laid out in: back through its transform.
+            let (x, y) = match self.xf_of.get(r.block as usize).and_then(|&i| self.inverse.get(i as usize)) {
+                Some(t) => {
+                    let p = t.apply(Pt::new(x, y));
+                    (p.x, p.y)
+                }
+                None => (x, y),
+            };
             if x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h
                 && let Some(link) = enclosing_link(doc, layout.tree.get(f.box_id).node)
             {

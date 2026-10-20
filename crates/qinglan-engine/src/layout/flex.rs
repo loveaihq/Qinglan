@@ -249,7 +249,7 @@ impl Layouter<'_> {
         let (content_left, content_top) = (g.bor[3] + g.pad[3], g.bor[0] + g.pad[0]);
         let saved = (self.pos, self.touched, std::mem::take(&mut self.fs));
         self.pos = (LU::ZERO, LU::ZERO);
-        let positioned = bx.style.boxs.position != Position::Static;
+        let positioned = super::makes_cb(&bx.style);
         if positioned {
             self.cb_stack.push(id);
         }
@@ -823,7 +823,7 @@ impl Layouter<'_> {
             let pc = flip(ax.pos_cross(a.kind), ax.crev);
             let (ax_x, ax_y) = if col { (pc, pm) } else { (pm, pc) };
             let fixed = cbx.boxs.position == Position::Fixed;
-            let cb = if fixed { None } else { self.cb_stack.last().copied() };
+            let cb = if fixed { self.fixed_cb() } else { self.cb_stack.last().copied() };
             self.pending.push(super::Pending { id: c, owner: id, sx: cl, sy: ct, cb, align: Some(StaticAlign { rw: inner_w, rh: inner_h, ax: ax_x, ay: ax_y }) });
         }
 

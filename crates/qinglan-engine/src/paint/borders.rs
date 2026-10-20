@@ -180,8 +180,10 @@ fn wedge(a: &RR, b: &RR, side: usize) -> Vec<Poly> {
 }
 
 /// Paint a border or an outline. `sy` is the scroll offset in device pixels, `clip` the drawing area in frame pixels.
-pub(super) fn draw_border(frame: &mut Frame, b: &BorderDraw, dpr: f64, sy: i32, clip: &IRect) {
+pub(super) fn draw_border(frame: &mut Frame, b: &BorderDraw, dpr: f64, (sx, sy): (i32, i32), clip: &IRect) {
     let shift = |mut r: IRect| {
+        r.x0 -= sx;
+        r.x1 -= sx;
         r.y0 -= sy;
         r.y1 -= sy;
         r

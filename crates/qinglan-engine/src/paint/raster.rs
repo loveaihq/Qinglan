@@ -19,7 +19,7 @@ use crate::vector::{FillRule, IRect, Mask};
 use crate::css::color::Color;
 use crate::layout::units::LayoutUnit as LU;
 use crate::platform::image::DecodedImage;
-use crate::platform::{FontId, Platform};
+use crate::platform::Platform;
 
 /// A pixel buffer: premultiplied BGRA, `width * 4` bytes per row, top row first.
 pub struct Frame {
@@ -61,7 +61,7 @@ pub struct RasterStats {
 }
 
 /// Layout units to device pixels, rounded.
-fn dev(v: LU, dpr: f64) -> i32 {
+pub(super) fn dev(v: LU, dpr: f64) -> i32 {
     (f64::from(v.raw()) * dpr / 64.0).round().clamp(-1.0e9, 1.0e9) as i32
 }
 
@@ -75,7 +75,7 @@ pub fn device_size(r: &Rect, dpr: f32) -> (u32, u32) {
     ((d.x1 - d.x0).max(0) as u32, (d.y1 - d.y0).max(0) as u32)
 }
 
-fn div255(v: u32) -> u32 {
+pub(super) fn div255(v: u32) -> u32 {
     (v + 128 + ((v + 128) >> 8)) >> 8
 }
 
@@ -106,18 +106,23 @@ pub struct View {
     pub dpr: f32,
 }
 
-struct Ctx<'a> {
-    list: &'a DisplayList,
-    platform: &'a dyn Platform,
-    images: &'a mut dyn ImageSource,
-    dpr: f64,
-    /// Device pixels the page is scrolled by.
-    sy: i32,
-    bounds: IRect,
-    stats: RasterStats,
+pub(super) struct Ctx<'a> {
+    pub(super) list: &'a DisplayList,
+    pub(super) platform: &'a dyn Platform,
+    pub(super) images: &'a mut dyn ImageSource,
+    pub(super) dpr: f64,
+    /// Device pixels the page is shifted left and up by (the scroll position; inside a group the offset of its layer).
+    pub(super) sx: i32,
+    pub(super) sy: i32,
+    pub(super) bounds: IRect,
+    pub(super) stats: RasterStats,
+    /// How many groups this is inside.
+    pub(super) depth: u8,
+    /// Device pixels per CSS px outside any group: images are asked for at the size the page decodes them at.
+    pub(super) base_dpr: f64,
     /// Coverage of the corner boxes of rounded clips, found when first needed in this frame: (clip, corner, mask, where the
     /// mask's origin is on the frame).
-    corner_cache: Vec<(u32, usize, Rc<Mask>, i32, i32)>,
+    pub(super) corner_cache: Vec<(u32, usize, Rc<Mask>, i32, i32)>,
 }
 
 /// A corner box up to this many pixels on a side has its coverage kept from frame to frame.
@@ -158,7 +163,7 @@ pub fn render_band(list: &DisplayList, platform: &dyn Platform, images: &mut dyn
     for p in frame.data.as_chunks_mut::<4>().0 {
         *p = px;
     }
-    let mut cx = Ctx { list, platform, images, dpr, sy: band, bounds, stats: RasterStats::default(), corner_cache: Vec::new() };
+    let mut cx = Ctx { list, platform, images, dpr, sx: 0, sy: band, bounds, stats: RasterStats::default(), corner_cache: Vec::new(), depth: 0, base_dpr: dpr };
     for it in list.fixed.iter().take(list.fixed_below) {
         cx.item(frame, it);
     }
@@ -181,17 +186,19 @@ pub fn render_band(list: &DisplayList, platform: &dyn Platform, images: &mut dyn
 }
 
 impl Ctx<'_> {
-    fn item(&mut self, frame: &mut Frame, it: &Item) {
-        let mut r = device_rect(&it.bounds, self.dpr);
-        r.y0 -= self.sy;
-        r.y1 -= self.sy;
+    pub(super) fn item(&mut self, frame: &mut Frame, it: &Item) {
+        let shift = |mut r: IRect| {
+            r.x0 -= self.sx;
+            r.x1 -= self.sx;
+            r.y0 -= self.sy;
+            r.y1 -= self.sy;
+            r
+        };
+        let r = shift(device_rect(&it.bounds, self.dpr));
         let mut clip = self.bounds;
         if it.clip != NO_CLIP {
             let Some(c) = self.list.clip_rect(it.clip) else { return };
-            let mut c = device_rect(&c, self.dpr);
-            c.y0 -= self.sy;
-            c.y1 -= self.sy;
-            clip = clip.intersect(&c);
+            clip = clip.intersect(&shift(device_rect(&c, self.dpr)));
         }
         let area = r.intersect(&clip);
         if clip.is_empty() || area.is_empty() {
@@ -260,7 +267,7 @@ impl Ctx<'_> {
                 if d.is_empty() {
                     return;
                 }
-                let (dw, dh) = ((r.x1 - r.x0).max(0) as u32, (r.y1 - r.y0).max(0) as u32);
+                let (dw, dh) = device_size(&it.bounds, self.base_dpr as f32);
                 if let Some(img) = self.images.bitmap(node, dw, dh) {
                     self.stats.images += 1;
                     draw_image(frame, &img, r, &d);
@@ -278,7 +285,19 @@ impl Ctx<'_> {
             ItemKind::Border(i) => {
                 if let Some(b) = self.list.borders.get(i as usize) {
                     self.stats.items += 1;
-                    super::borders::draw_border(frame, b, self.dpr, self.sy, clip);
+                    super::borders::draw_border(frame, b, self.dpr, (self.sx, self.sy), clip);
+                }
+            }
+            ItemKind::Shadow(i) => {
+                if let Some(s) = self.list.shadows.get(i as usize) {
+                    self.shadow(frame, i, s, clip);
+                }
+            }
+            ItemKind::Group(i) => {
+                let list = self.list;
+                if let Some(g) = list.groups.get(i as usize) {
+                    self.stats.items += 1;
+                    self.group(frame, g, r, clip);
                 }
             }
         }
@@ -288,11 +307,11 @@ impl Ctx<'_> {
     fn device_rr(&self, s: &RRect) -> RR {
         let d = device_rect(&s.rect, self.dpr);
         let k = self.dpr as f32;
-        RR { x0: d.x0 as f32, y0: (d.y0 - self.sy) as f32, x1: d.x1 as f32, y1: (d.y1 - self.sy) as f32, r: s.radii.map(|(a, b)| (a * k, b * k)) }.fit()
+        RR { x0: (d.x0 - self.sx) as f32, y0: (d.y0 - self.sy) as f32, x1: (d.x1 - self.sx) as f32, y1: (d.y1 - self.sy) as f32, r: s.radii.map(|(a, b)| (a * k, b * k)) }.fit()
     }
 
     /// The coverage of corner `k` of the shape of clip `cidx` over its corner box (made once per frame).
-    fn corner_mask(&mut self, cidx: u32, k: usize, rr: &RR) -> Option<usize> {
+    pub(super) fn corner_mask(&mut self, cidx: u32, k: usize, rr: &RR) -> Option<usize> {
         if let Some(i) = self.corner_cache.iter().position(|c| c.0 == cidx && c.1 == k) {
             return Some(i);
         }
@@ -343,12 +362,13 @@ impl Ctx<'_> {
         }
         let list = self.list;
         let grad = list.grads.get(b.grad as usize);
-        let bmp = if grad.is_none() { self.images.bitmap(b.node, tw as u32, th as u32) } else { None };
+        let (rw, rh) = device_size(&tile, self.base_dpr as f32);
+        let bmp = if grad.is_none() { self.images.bitmap(b.node, rw, rh) } else { None };
         if grad.is_none() && bmp.is_none() {
             return;
         }
         self.stats.images += usize::from(bmp.is_some());
-        let ox = (f64::from(b.origin.0) * dpr).round().clamp(-1.0e9, 1.0e9) as i32;
+        let ox = (f64::from(b.origin.0) * dpr).round().clamp(-1.0e9, 1.0e9) as i32 - self.sx;
         let oy = (f64::from(b.origin.1) * dpr).round().clamp(-1.0e9, 1.0e9) as i32 - self.sy;
         let step = |s: f32| (s > 0.0).then(|| f64::from(s) * dpr);
         let (stx, sty) = (step(b.step.0), step(b.step.1));
@@ -401,32 +421,20 @@ impl Ctx<'_> {
     }
 
     fn text(&mut self, frame: &mut Frame, run: &TextRun, clip: &IRect) {
-        let Some(glyphs) = self.list.glyphs.get(run.glyphs.0 as usize..run.glyphs.1 as usize) else { return };
-        let dpr = self.dpr as f32;
-        let size = run.size * dpr;
+        if run.blur > 0.0 {
+            return self.text_blur(frame, run, clip);
+        }
         let color = premul(run.color);
-        let mut pen = run.x.to_f32() * dpr;
-        let base = dev(run.baseline, self.dpr) - self.sy;
-        // Glyphs this far outside the clip cannot reach into it.
-        let (lo, hi) = (clip.x0 as f32 - 2.0 * size - 4.0, clip.x1 as f32 + 2.0 * size + 4.0);
-        for g in glyphs {
-            let gx = pen + g.dx * dpr;
-            pen += g.advance * dpr;
-            if !(gx > lo && gx < hi) {
-                continue;
-            }
-            let ix = gx.floor();
-            let sub = (((gx - ix) * 4.0) as u8).min(3);
-            let Some(mask) = self.platform.glyph_mask(FontId(u32::from(g.font)), u32::from(g.glyph), size, sub) else { continue };
-            let x = ix as i32 + mask.left;
-            let y = base + (g.dy * dpr).round() as i32 + mask.top;
+        let mut n = 0;
+        self.glyphs_of(run, clip, &mut |x, y, mask| {
             let area = IRect { x0: x, y0: y, x1: x + mask.width as i32, y1: y + mask.height as i32 }.intersect(clip);
             if area.is_empty() || mask.width == 0 {
-                continue;
+                return;
             }
-            self.stats.glyphs += 1;
+            n += 1;
             blend_mask(frame, &mask.alpha, mask.width as usize, (x, y), &area, color);
-        }
+        });
+        self.stats.glyphs += n;
     }
 }
 
@@ -528,7 +536,7 @@ fn draw_image(frame: &mut Frame, img: &Arc<DecodedImage>, dst: &IRect, area: &IR
 
 /// The four boxes the corners of `rr` can differ from a rectangle in (top-left, top-right, bottom-right, bottom-left);
 /// empty for a square corner.
-fn corner_boxes(rr: &RR) -> [IRect; 4] {
+pub(super) fn corner_boxes(rr: &RR) -> [IRect; 4] {
     let [tl, tr, br, bl] = rr.r;
     let b = |x0: f32, y0: f32, x1: f32, y1: f32, r: (f32, f32)| {
         if r.0 > 0.0 && r.1 > 0.0 { IRect { x0: x0.floor() as i32, y0: y0.floor() as i32, x1: x1.ceil() as i32, y1: y1.ceil() as i32 } } else { IRect { x0: 0, y0: 0, x1: 0, y1: 0 } }

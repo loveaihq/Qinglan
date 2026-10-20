@@ -10,6 +10,7 @@ pub mod color;
 mod color_names;
 pub mod computed;
 pub mod facts;
+pub mod fx;
 pub mod import_scan;
 pub mod media;
 mod parse_grid;

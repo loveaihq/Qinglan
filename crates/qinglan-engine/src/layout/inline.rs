@@ -1208,7 +1208,7 @@ impl Layouter<'_> {
         let align = align_of(text_align);
         let indent = LU::from_f32(bx.style.text.text_indent.resolve(content_w.to_f32()));
         let first_line = self.lines.len() as u32;
-        let cb_for_oof = |this: &Self, fixed: bool| if fixed { None } else { this.cb_stack.last().copied() };
+        let cb_for_oof = |this: &Self, fixed: bool| if fixed { this.fixed_cb() } else { this.cb_stack.last().copied() };
 
         let mut y = LU::ZERO;
         let mut s = 0usize;

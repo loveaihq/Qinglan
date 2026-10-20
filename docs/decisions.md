@@ -1307,3 +1307,40 @@ gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 
 - `fmath.rs`（新）：自己的 `sin_cos`、`pow`、`log2`、`atan2`，替换 C 库的 `sin`/`cos`/`pow`/`atan2f`/`logf`（渐变角度和锥形渐变、圆弧、`lab()`/`oklch()` 的色相和伽马）。映射里这些加起来约 25 KB（`pow` 6 KB、`sin`/`cos`/`_sincos_special`/`__remainder_piby2*` 约 7 KB、`atan2f` 4.7 KB、`sinf`/`cosf`/`logf` 约 5 KB）。测试对照 C 库（误差 < 1e-11、2e-6、1e-9 相对）。
 - `qinglan.exe`：2,196,992（`73c8318`）→ 修回归后 2,199,040（+2,048）→ 去掉 C 库数学、`MiscStyle` 瘦身后 2,179,584 → 加圆环分带和角盒缓存、纯色快路后 **2,183,168**（比 `73c8318` 少 13,824；2c-1 的预算 2,073,600 仍超 109,568，留给后面的步骤扣）。
 - 没做（调用次数用完）：`css::bg` 的背景长属性共用一个解析器、四种渐变共用代码、`paint::raster::draw` 里的 `bg` 瓦片循环做成非泛型的函数、`hypotf` 320 字节、`fmod` 704 字节。`/MAP` 里 2c-1 新增的大头仍是 `Ctx::draw` 20.6 KB、`decor` 14.2 KB、`parse_background` 6.8 KB、`parse_image` 5.9 KB、`stroke_polys` 3.2 KB。
+
+## 第 2 层 · 2c-2 阴影、透明度、2D 变形（2026-10-20）
+
+起点 `72b0a79`。代码：`css/fx.rs`（解析、`Fx`、变换矩阵）、`paint/fx.rs`（模糊、阴影、组的光栅）、`paint/build.rs`（阴影项、组、行内透明度）、`paint/raster.rs`、`layout/mod.rs`（层叠上下文、包含块）、`interact.rs`（点击检测）、`vector/mod.rs`（`Transform::inverse`）。测试：`tests/effects.rs` 29 条（手算像素），WPT 见下。
+
+### 样式
+- 新属性 `opacity`、`box-shadow`、`text-shadow`（继承）、`transform`、`transform-origin`（`PropId` 增加 5 个，共 119，还在 u128 位图里）。前四个除 `text-shadow` 外放进 `MiscStyle::fx: Option<Rc<Fx>>`（全是初始值时是 `None`，每个元素只多 8 字节）；`text-shadow` 在 `TextStyle::shadow`。`opacity` 存成 0..=255（四舍五入，0.5 → 128，和 Chromium 一样）。
+- `box-shadow`/`text-shadow` 最多 16 个；长度在计算时变成 px。`transform` 函数：`matrix`、`translate(X/Y)`、`scale(X/Y)`（数或百分比）、`rotate`、`skew(X/Y)`；**3D 函数只取 2D 部分**（记在这里）：`matrix3d` 取 m11 m12 m21 m22 m41 m42，`translate3d`/`translateZ`、`scale3d`/`scaleZ`、`rotate3d`/`rotateX`/`rotateY`/`rotateZ`（取旋转矩阵左上 2×2，所以 `rotateX(a)` 是 `scaleY(cos a)`）、`perspective()` 当恒等；**z 方向缩放为 0 时矩阵奇异，整个元素不画**（WPT `transform3d-scale-004` 的要求）。`translate`、`rotate`、`scale` 这三个单独的属性（css-transforms-2）没做，`transform-style`、`perspective` 属性没做。`transform-origin` 只用前两个值（第三个只检查是长度）。
+- 层叠：`opacity` < 1 或有 `transform` 造层叠上下文（`makes_context`）；不是定位盒的，和 `z-index: 0` 的定位盒一起、按文档顺序画（css-color-4 12.1，css-transforms-1 2；`paint_order` 把它们放进 `stacked`，`z` 当 0，`position` 记成 `relative`）。有 `transform` 的盒子是绝对定位和 fixed 子孙的包含块（`makes_cb`；块、flex、grid、表格盒用它；`Layouter::fixed_cb()` 在包含块栈里找最近的变换祖先）；**表格的行、行组、标题不是**（WPT 5 条 `limit (table parts)`）。画的时候 `in_fixed` 遇到变换祖先就不算 fixed。
+
+### 阴影（css-backgrounds-3 6.1）
+- **形状**：外阴影是边框盒 + 偏移 + 扩展（宽高不小于 0），圆角半径按 6.1.1：半径 + 扩展，半径小于扩展时扩展先乘 `1 + (r/s − 1)³`；内阴影是 padding box 里“洞”的补集（洞 = padding box 缩小扩展量、再偏移，半径同样处理）。外阴影画在背景下面、只画在边框盒外面（边框盒的形状从阴影里挖掉，圆角用已有的角遮罩）；内阴影画在背景上面、边框下面，只画在 padding box 里。空盒子（0×0）仍有外阴影；多个阴影第一个在最上面。行内盒每个片段各画一份。
+- **模糊**：标准差 = 模糊半径 / 2（6.1.2）。三次盒式模糊，盒子大小按 filter-effects-1 `feGaussianBlur` 的公式（`d = floor(σ·3·√(2π)/4 + 0.5)`，偶数时两次 `d` 一左一右、一次 `d+1`），每次是滑动和，代价和半径无关。阴影窗口是形状外扩 3 次盒子的伸展量；窗口超过 4M 像素不画（整页大的带模糊阴影会没有）。
+- **缓存**：模糊后的遮罩按（形状宽高、半径、σ、内阴影的洞）哈希，放进线程局部的缓存，每条最多 1M 像素、总共 6 MB，满了清空；滚动只平移整数像素，所以不重新模糊。没有模糊、角是方的外阴影（`0 0 0 5px` 之类，还有 `100vmax` 的遮罩）不用遮罩，直接按矩形画。逐行画的时候边框盒里面的整段直接跳过。
+- **text-shadow**：每个阴影一个文字项（偏移、颜色、模糊），画在文字下面，最后一个在最底下；文字透明时阴影仍画（`color: transparent`）；**下划线等装饰线没有阴影**（WPT 一条 `bug (open)`）。有模糊的文字阴影把整个 run 的字形覆盖合到一张遮罩上再模糊，**每帧重新模糊，没缓存**（合成的 36 张卡片页上 72 个 run 约 15 ms）。
+
+### 透明度和变形的画法：组
+- **显示列表**：有 `opacity` < 1 或 `transform` 的盒子（`paint_box`）把自己画进一个 `Group`（`DisplayList::groups`），在父列表里是一个 `ItemKind::Group` 项，`bounds` 是组内容的外包框经变换后的外包框、`clip` 是组外面的裁剪；组内的项仍用页面坐标（没变换之前），裁剪链从头开始（`Builder::sinks`）。所以索引、可滚动高度（`DisplayList::height`）自动包含变换后的范围（只向下；水平方向本来就没有横向滚动）。`opacity: 0` 和奇异变换不生成组。
+- **行内元素的 `opacity`**：行内盒（`<span>`、`<a>`）的片段按连续的一段成组，跨行共用一个组（同一个元素的两行重叠时只合成一次，WPT `t32-opacity-offscreen-multiple-boxes`）；只含它的行内内容，**里面的浮动和块不在组里**（`limit (inline opacity)`）。行内元素的 `transform` 不生效（规范如此）。
+- **光栅**（`paint/fx.rs::group`）：先把变换分成“缩放 k（两列长度的较大者，限制在 1/8..8）”和“余下的线性部分 R”。组内的项按 `dpr·k` **直立地**画（文字按缩放后的字号重新光栅，所以放大不糊），图片仍按页面的解码大小去要（`Ctx::base_dpr`）。R 是单位矩阵时只剩整数像素的平移：不透明度 255 就直接画进帧（偏移取整，最常见的 `translate(-50%, -50%)`、`scale(1.05)` 没有额外代价）；不透明度 < 1 画进一张和可见部分一样大的层再按 alpha 叠上去。R 不是单位矩阵（旋转、斜切、翻转）：算出目标区域在层空间里对应的范围，画进那一块层，再逐像素逆映射、双线性取样叠上去（四分之一圈、翻转时平移取整，取样落在像素中心，所以是精确的）。**记下的选择**：旋转和斜切的边缘比精确覆盖率糊（取样 vs. 路径覆盖），WPT `transforms-skewX/Y`、`transform-compound-001` 因此不过（`limit (resampled layers)`）；文字是“直立画好再变换”，不是转成路径。
+- **上限**：层只分配组的可见部分，所以不超过帧的大小（帧是视口或一条视口带）；旋转层的源范围上限是帧像素数的 2 倍；嵌套的组最多 6 层。**超过上限的组整个不画**（不是“去掉透明度照画”：旋转的组去掉变换会画在错的地方；不透明度的组碰到上限只有嵌套过深一种情况）。这一点和任务单的写法（“不做透明直接画”）不同，记在这里。
+- **点击检测**（`interact.rs`）：`PageIndex` 对每个变换盒（含祖先）存逆矩阵，`link_at` 先把指针经逆矩阵映回盒子自己的坐标再比较片段矩形；奇异变换的逆是 NaN，什么也点不中。`opacity: 0` 的元素仍可点（和浏览器一样）。
+
+### WPT（`qinglan-cli wpt`，提交 3bcf9ec；新目录用 `tests/wpt/` 里同样的筛法：有 `rel=match|mismatch`、没有 `<script>`、没有 3D、`filter`/`mask`/`clip-path`/动画/字体/书写方向/SVG/表单……的页面）
+- `css/css-transforms`：133 / 146（91.1%），bug 类 4（`bug (open)`，每条有原因：`transform-display-002/003`、`transform-generated-001`、`transform-transformed-tr-percent-height-child`，都没查）；其余 9 条失败是 `limit`：`transforms-skewX/Y`、`transform-compound-001`（重采样）、5 条表格部分不是包含块、1 条手动（hover）测试。
+- `css/css-color`（`opacity`）：11 / 12（91.7%），bug 类 0（`inline-opacity-float-child`：行内元素里的浮动不在组里，`limit`）。
+- `css/css-text-decor/text-shadow`：16 / 18（88.9%），bug 类 1（`decorations-multiple-zorder`，`bug (open)`）；1 条是彩色 emoji（2d）。
+- `css/css-backgrounds`（加了 25 个 `box-shadow` 测试）：220 / 237（92.8%），bug 类 6 = 原来 5 条 `bug (open)` + `box-shadow-overlapping-001`（行内盒的阴影和背景一起画在行里文字之前，盖不住前一个兄弟的文字，`bug (open)`）；`box-shadow-border-radius-001`（csswg-drafts#7103，规范后来改了，`limit`）、`box-shadow-radius-000`（模糊差 ≤ 5/255，`limit`）。
+- `css/css-images` 不变 58 / 126。`wpt --check`：2403 / 2403（原 2221，加了 182 条）。`tests/wpt` 22 MB（≤ 24 MB）。测试页挑选脚本不入库（`/tmp` 里的）；`dynamic-blur`（`onload` 里改样式）手动去掉了。`classify` 里的“2c-2”一类删了；没做的 `translate:`/`rotate:`/`scale:`、`perspective`、`preserve-3d` 归 `none`（不计划）。
+
+### 体积
+- `qinglan.exe`：2,183,168（2c-1b）→ **2,253,312**（+70,144），任务单这一步的预算 2,244,608（+61,440），**超出 8,704 字节**。第 2 层总上限 2,726,297 还剩 472,985。链接映射（`/MAP`，v0 名字，按模块累加）里这一步新增的大头：`css::fx` 约 17 KB（`parse_transform` 6.3、`parse_shadows` 2.1、`Fx` 的 `eq` 1.5）、`Ctx::draw` 20.8 KB（把 `shadow`、`group`、`text_blur` 内联了进去）、`Builder::decor` 16.8 KB 加 `box_shadows` 3.0、`blur_mask` 2.8、`finish_group` 2.0、`Builder::text` 3.3。已经做的：新类型的 `Debug` 只写名字、冷函数 `#[inline(never)]`（这两项没有改变文件大小，LTO 本来就去掉了没用到的派生）。没有再做的：`parse_transform` 改成表驱动、`group` 的两条合成路径合并、去掉 `matrix3d` 等的专门解析。按任务单“超了就停下报告，不单独开压体积的一轮”处理，留给第 2 层最后统一压。
+
+### 速度和内存（release，插电 `BatteryStatus = 2`，CPU 占用约 28%，**机器上有一个 Emulator.exe 在忙（约 0.7 个核）**，没有 cargo/rustc/qpdf/link；`qinglan.exe --bench` 1920×1080 dpr 1，每次新进程）
+- zhwiki-rec，5 次：滚到底后私有字节 47.14、46.87、46.62、47.33、46.42 MB（**最大 47.33 MB**，≤ 50）；首屏 172.0、164.4、141.0、153.6、166.3 ms（中位数 164.4，≤ 200）；滚动每帧中位数 6.6–6.8 ms、95 分位 10.5–12.4 ms（≤ 16 / 33）。
+- gh-ripgrep（阴影、变换、透明度声明最多的一页），5 次：首屏 223.7、237.3、190.7、232.3、266.0 ms（中位数 232.3，**仍超 200 ms**，2c-1/2c-1b 就没达到，这一步没有改善也没有明显变坏；样式阶段占大头）；滚动中位数 5.7–6.3 ms、95 分位 10.4–13.5 ms；滚动光栅（`render --scroll-bench`）中位数 4.0 / 4.3 ms，95 分位 6.7 / 7.6 ms；内存 24.9–26.3 MB。gh-rust 3 次：首屏 172–198 ms，滚动中位数 6.4–8.4 ms、95 分位 11.0–17.9 ms。
+- **压力页**（合成的，300 张绝对定位卡片：圆角、三层阴影含 14px 模糊和内阴影、带模糊的 text-shadow，三分之一有 `opacity`，五分之一旋转，七分之一缩放；视口里同时约 36 张）：滚动光栅中位数 73 ms（95 分位 89）。分项（中位数）：只有三层阴影 34.5 → **17.0 ms**（模糊遮罩缓存加按行跳过边框盒内部之后；其中约 5 ms 是页面本身），加模糊文字阴影 32.7，只有透明度 8.5，只有旋转和缩放 16.7。**这页不达标（≤ 16 ms）**：每帧要混 36×3 个阴影窗口和 72 个没缓存的模糊文字 run；真实页面（GitHub、MDN、Discourse）一屏上没有这么多，留给后面（文字阴影缓存、阴影只混可见的行带）。

@@ -101,6 +101,15 @@ impl Transform {
             f: self.b * inner.e + self.d * inner.f + self.f,
         }
     }
+    /// The inverse; every field is NaN for a transform that cannot be inverted (nothing maps back through it).
+    pub fn inverse(&self) -> Transform {
+        let det = self.a * self.d - self.b * self.c;
+        if det.is_nan() || det.abs() <= 1.0e-12 {
+            return Transform { a: f32::NAN, b: f32::NAN, c: f32::NAN, d: f32::NAN, e: f32::NAN, f: f32::NAN };
+        }
+        let (a, b, c, d) = (self.d / det, -self.b / det, -self.c / det, self.a / det);
+        Transform { a, b, c, d, e: -(a * self.e + c * self.f), f: -(b * self.e + d * self.f) }
+    }
     /// The square root of the area scale: how much lengths grow on average.
     pub fn scale_factor(&self) -> f32 {
         (self.a * self.d - self.b * self.c).abs().sqrt()

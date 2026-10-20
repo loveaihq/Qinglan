@@ -6,7 +6,9 @@
 
 use std::rc::Rc;
 
-use super::{BgDraw, BorderDraw, DisplayList, ImagePlace, ImageSpot, Item, ItemKind, NO_CLIP, PaintGlyph, RRect, Rect, Round, TextRun, gradient};
+use super::{BgDraw, BorderDraw, DisplayList, Group, ImagePlace, ImageSpot, Item, ItemKind, NO_CLIP, PaintGlyph, RRect, Rect, Round, ShadowDraw, TextRun, gradient};
+use crate::css::fx::Shadow;
+use crate::vector::Transform;
 use crate::css::bg::{Backgrounds, BgBox, BgImage, BgRepeat, BgSize, Pos1, Rep};
 use crate::css::color::Color;
 use crate::css::computed::{ComputedStyle, slant_of};
@@ -17,7 +19,7 @@ use crate::html::dom::{Document, NONE, NodeId};
 use crate::layout::block::{border_px, pad_px};
 use crate::layout::boxtree::{BgRef, BoxId, BoxKind, NO_BOX, ReplacedKind, Role, role_of};
 use crate::layout::units::LayoutUnit as LU;
-use crate::layout::{BoxOut, FragKind, Fragment, LayoutResult, Positioned, makes_context};
+use crate::layout::{BoxOut, FragKind, Fragment, LayoutResult, Positioned, has_effect, has_transform, makes_context};
 use crate::platform::{FontQuery, Platform};
 
 /// Ancestor walks (clip, fixed) never go further than this.
@@ -29,8 +31,15 @@ const GREY_FILL: Color = Color::rgb(0xe0, 0xe0, 0xe0);
 const GREY_LINE: Color = Color::rgb(0x76, 0x76, 0x76);
 const GREY_TEXT: Color = Color::rgb(0x50, 0x50, 0x50);
 
+/// Is the box painted at its own turn, among the positioned boxes of its stacking context (not in the flow)? Positioned boxes
+/// are, and so are those with an `opacity` below 1 or a `transform` (css-color-4 12.1, css-transforms-1 2).
 fn positioned(style: &ComputedStyle) -> bool {
-    !matches!(style.boxs.position, Position::Static | Position::Sticky)
+    !matches!(style.boxs.position, Position::Static | Position::Sticky) || has_effect(style)
+}
+
+/// Is the box the containing block of absolutely positioned descendants?
+fn is_cb(style: &ComputedStyle) -> bool {
+    !matches!(style.boxs.position, Position::Static | Position::Sticky) || has_transform(style)
 }
 
 /// Boxes with a position of their own in `LayoutResult::boxes`.
@@ -41,7 +50,7 @@ fn has_box_out(kind: BoxKind) -> bool {
 /// Build the display list of a layout. `doc` is read for the `checked` and `loading` attributes; the
 /// platform shapes the labels of placeholder boxes.
 pub fn build_display_list(doc: &Document, res: &LayoutResult, platform: &dyn Platform) -> DisplayList {
-    let mut b = Builder { doc, res, platform, list: DisplayList::empty(), clip: NO_CLIP, fixed: false, canvas_from: res.canvas.map_or(NO_BOX, |c| c.from), floats: Vec::new(), outlines: Vec::new() };
+    let mut b = Builder { doc, res, platform, list: DisplayList::empty(), clip: NO_CLIP, fixed: false, canvas_from: res.canvas.map_or(NO_BOX, |c| c.from), floats: Vec::new(), outlines: Vec::new(), sinks: Vec::new(), inline_fx: res.tree.boxes.iter().any(|b| b.kind == BoxKind::Inline && b.style.misc.fx.as_deref().is_some_and(|x| x.opacity < 255)) };
     b.list.canvas = res.canvas.map(|c| c.color);
     b.list.partial = res.partial;
     let root = res.tree.root;
@@ -66,6 +75,10 @@ struct Builder<'a> {
     floats: Vec<(BoxId, LU, LU, u32, bool)>,
     /// Outlines met on the way, waiting for the end of their stacking context: (outline, clip, fixed).
     outlines: Vec<(BorderDraw, u32, bool)>,
+    /// Open groups: the items of each so far and the clip outside it.
+    sinks: Vec<(Vec<Item>, u32)>,
+    /// Some inline box has an `opacity` below 1 (the lines are checked for groups only then).
+    inline_fx: bool,
 }
 
 impl Builder<'_> {
@@ -84,7 +97,9 @@ impl Builder<'_> {
             return;
         }
         let item = Item { bounds, clip: self.clip, kind };
-        if self.fixed {
+        if let Some((items, _)) = self.sinks.last_mut() {
+            items.push(item);
+        } else if self.fixed {
             self.list.fixed.push(item);
         } else {
             self.list.items.push(item);
@@ -132,17 +147,20 @@ impl Builder<'_> {
     fn in_fixed(&self, id: BoxId) -> bool {
         let tree = &self.res.tree;
         let mut cur = id;
+        let mut fixed = false;
         for _ in 0..MAX_WALK {
             if cur == NO_BOX {
-                return false;
+                break;
             }
             let b = tree.get(cur);
-            if b.style.boxs.position == Position::Fixed {
-                return true;
+            // A transformed ancestor of a fixed box is its containing block: it scrolls with the page (css-transforms-1 2).
+            if fixed && has_transform(&b.style) {
+                return false;
             }
+            fixed |= b.style.boxs.position == Position::Fixed;
             cur = b.parent;
         }
-        false
+        fixed
     }
 
     /// The padding box of a box whose border box is `r`.
@@ -169,7 +187,7 @@ impl Builder<'_> {
                 break;
             }
             let b = tree.get(cur);
-            if !counting && positioned(&b.style) {
+            if !counting && is_cb(&b.style) {
                 counting = true;
             }
             if counting && has_box_out(b.kind) {
@@ -232,6 +250,60 @@ impl Builder<'_> {
     /// each one as a context of its own), then the in-flow inline content, text included (step 7). Two walks of the
     /// block tree make that order without a buffer: one for the blocks, one for the lines.
     fn paint_box(&mut self, id: BoxId, ax: LU, ay: LU) {
+        let grouped = self.open_group(id);
+        self.paint_box_inner(id, ax, ay);
+        if grouped {
+            self.close_group(id, ax, ay);
+        }
+    }
+
+    /// A box with an `opacity` below 1 or a `transform` is painted into a group of its own (see [`Group`]); the items it
+    /// pushes go to the group and carry a clip chain of their own.
+    fn open_group(&mut self, id: BoxId) -> bool {
+        if id == self.res.tree.root || !has_effect(&self.res.tree.get(id).style) {
+            return false;
+        }
+        self.sinks.push((Vec::new(), self.clip));
+        self.clip = NO_CLIP;
+        true
+    }
+
+    fn close_group(&mut self, id: BoxId, ax: LU, ay: LU) {
+        let Some(fx) = self.res.tree.get(id).style.misc.fx.clone() else { return };
+        let o = self.res.box_out(id);
+        let (x, y) = (ax.to_f32(), ay.to_f32());
+        let xf = Transform::translate(x, y).compose(&fx.matrix(o.w.to_f32(), o.h.to_f32())).compose(&Transform::translate(-x, -y));
+        self.finish_group(fx.opacity, xf);
+    }
+
+    /// End the innermost open group: its items are drawn with `opacity` about `xf`.
+    #[inline(never)]
+    fn finish_group(&mut self, opacity: u8, xf: Transform) {
+        let Some((items, outer)) = self.sinks.pop() else { return };
+        self.clip = outer;
+        let Some(local) = items.iter().map(|i| i.bounds).reduce(|a, b| {
+            let (x, y) = (a.x.min(b.x), a.y.min(b.y));
+            Rect::new(x, y, a.right().max(b.right()) - x, a.bottom().max(b.bottom()) - y)
+        }) else {
+            return;
+        };
+        let det = xf.a * xf.d - xf.b * xf.c;
+        // `opacity: 0` paints nothing; a transform that cannot be inverted draws nothing (css-transforms-1 "singular").
+        if opacity == 0 || !(det.abs() > 1e-9 && det.is_finite() && [xf.e, xf.f].iter().all(|v| v.is_finite())) {
+            return;
+        }
+        let corners = [(local.x, local.y), (local.right(), local.y), (local.x, local.bottom()), (local.right(), local.bottom())].map(|(cx, cy)| xf.apply(crate::vector::Pt::new(cx.to_f32(), cy.to_f32())));
+        let lim = (MAX_PAGE_HEIGHT_PX / 2) as f32;
+        let fold = |f: fn(f32, f32) -> f32, g: fn(&crate::vector::Pt) -> f32, init: f32| corners.iter().map(g).fold(init, f).clamp(-lim, lim);
+        let (x0, x1) = (fold(f32::min, |p| p.x, f32::MAX), fold(f32::max, |p| p.x, f32::MIN));
+        let (y0, y1) = (fold(f32::min, |p| p.y, f32::MAX), fold(f32::max, |p| p.y, f32::MIN));
+        let bounds = Rect::new(LU::from_f32(x0), LU::from_f32(y0), LU::from_f32(x1 - x0), LU::from_f32(y1 - y0));
+        self.list.groups.push(Group { items, opacity, xf, local });
+        let gi = (self.list.groups.len() - 1) as u32;
+        self.push(bounds, ItemKind::Group(gi));
+    }
+
+    fn paint_box_inner(&mut self, id: BoxId, ax: LU, ay: LU) {
         let first = self.floats.len();
         let first_outline = self.outlines.len();
         self.walk(id, ax, ay, false);
@@ -290,6 +362,9 @@ impl Builder<'_> {
                 let mut floats = Vec::new();
                 crate::layout::floats::floats_in(&res.tree, id, &mut floats);
                 for c in floats {
+                    if has_effect(&res.tree.get(c).style) {
+                        continue;
+                    }
                     let co = res.box_out(c);
                     self.floats.push((c, ax + co.x, ay + co.y, self.clip, self.fixed));
                 }
@@ -365,6 +440,10 @@ impl Builder<'_> {
             radii[1] = (0.0, 0.0);
             radii[2] = (0.0, 0.0);
         }
+        let shadows = m.fx.as_deref().filter(|f| !f.shadows.is_empty()).map(|f| f.shadows.as_slice());
+        if let Some(sh) = shadows {
+            self.box_shadows(sh, style, r, radii, sides, false);
+        }
         let has_img = m.bg.images.iter().any(|i| !matches!(i, BgImage::None));
         let color = m.background_color.resolve(style.text.color);
         if (color.a != 0 && !canvas) || has_img {
@@ -375,10 +454,42 @@ impl Builder<'_> {
                 self.backgrounds(id, style, r, radii, sides);
             }
         }
+        if let Some(sh) = shadows {
+            self.box_shadows(sh, style, r, radii, sides, true);
+        }
         if borders {
             self.border_items(style, r, sides, radii);
         }
         self.outline(style, r, radii);
+    }
+
+    /// The outer (below the background) or inset (above it) shadows of a box, the first one on top (css-backgrounds-3 6.1.3).
+    #[inline(never)]
+    fn box_shadows(&mut self, shadows: &[Shadow], style: &ComputedStyle, r: Rect, radii: [(f32, f32); 4], sides: [bool; 4], inset: bool) {
+        let bd = &style.border;
+        let bw: [LU; 4] = std::array::from_fn(|i| if sides.get(i).copied().unwrap_or(false) { border_px(bd.width.get(i).copied().unwrap_or(0.0)) } else { LU::ZERO });
+        let pb = Rect::new(r.x + bw[3], r.y + bw[0], (r.w - bw[1] - bw[3]).max0(), (r.h - bw[0] - bw[2]).max0());
+        for s in shadows.iter().rev().filter(|s| s.inset == inset) {
+            let [dx, dy, blur, spread] = s.px();
+            let color = s.color.resolve(style.text.color);
+            if color.a == 0 || ![dx, dy, blur, spread].iter().all(|v| v.is_finite()) {
+                continue;
+            }
+            let (dx, dy, blur, spread) = (dx.clamp(-1.0e6, 1.0e6), dy.clamp(-1.0e6, 1.0e6), blur.min(1.0e5), spread.clamp(-1.0e6, 1.0e6));
+            let (rect, radii, bounds) = if inset {
+                (pb, inset_radii(radii, bw.map(LU::to_f32)), pb)
+            } else {
+                let g = LU::from_f32(spread.max(0.0) + blur * 1.5 + 1.0);
+                (r, radii, Rect::new(r.x + LU::from_f32(dx) - g, r.y + LU::from_f32(dy) - g, r.w + g + g, r.h + g + g))
+            };
+            // (An empty box still casts a shadow, but has no padding box to cast it into.)
+            if inset && rect.is_empty() {
+                continue;
+            }
+            let i = self.list.shadows.len() as u32;
+            self.list.shadows.push(ShadowDraw { rect, radii, color, dx, dy, blur, spread, inset });
+            self.push(bounds, ItemKind::Shadow(i));
+        }
     }
 
     /// The background color and layers (css-backgrounds-3 2, 3): the color first, then the layers from the last to the first.
@@ -611,13 +722,55 @@ impl Builder<'_> {
 
     fn lines(&mut self, o: &BoxOut, ax: LU, ay: LU) {
         let res = self.res;
+        // The inline boxes with an `opacity` below 1 that the fragments being painted are in, outermost first: each is a group
+        // around its consecutive fragments (a line at a time), css-color-4 12.1.
+        let mut open: Vec<BoxId> = Vec::new();
         for li in o.lines.0..o.lines.1 {
             let Some(l) = res.lines.get(li as usize) else { continue };
             for fi in l.frags.0..l.frags.1 {
                 if let Some(f) = res.fragments.get(fi as usize) {
+                    if !self.inline_fx {
+                        self.fragment(f, ax, ay);
+                        continue;
+                    }
+                    let mut want: Vec<BoxId> = Vec::new();
+                    let mut cur = f.box_id;
+                    for _ in 0..MAX_WALK {
+                        if cur == NO_BOX {
+                            break;
+                        }
+                        let b = res.tree.get(cur);
+                        if !matches!(b.kind, BoxKind::Inline | BoxKind::Text | BoxKind::LineBreak) {
+                            break;
+                        }
+                        if b.kind == BoxKind::Inline && b.style.misc.fx.as_deref().is_some_and(|x| x.opacity < 255) {
+                            want.push(cur);
+                        }
+                        cur = b.parent;
+                    }
+                    want.reverse();
+                    self.sync_inline_groups(&mut open, &want);
                     self.fragment(f, ax, ay);
                 }
             }
+        }
+        self.sync_inline_groups(&mut open, &[]);
+    }
+
+    /// Close the open inline groups that are not in `want` (and those inside them), then open the missing ones.
+    #[inline(never)]
+    fn sync_inline_groups(&mut self, open: &mut Vec<BoxId>, want: &[BoxId]) {
+        let keep = open.iter().zip(want).take_while(|(a, b)| a == b).count();
+        while open.len() > keep {
+            if let Some(b) = open.pop() {
+                let op = self.res.tree.get(b).style.misc.fx.as_deref().map_or(255, |x| x.opacity);
+                self.finish_group(op, Transform::IDENTITY);
+            }
+        }
+        for &b in want.iter().skip(keep) {
+            self.sinks.push((Vec::new(), self.clip));
+            self.clip = NO_CLIP;
+            open.push(b);
         }
     }
 
@@ -656,7 +809,7 @@ impl Builder<'_> {
         let res = self.res;
         let style = &res.tree.get(f.box_id).style;
         let color = style.text.color;
-        if !Self::visible_style(style) || color.a == 0 {
+        if !Self::visible_style(style) || (color.a == 0 && style.text.shadow.is_none()) {
             return;
         }
         let Some(gs) = res.glyphs.get(glyphs.0 as usize..glyphs.1 as usize) else { return };
@@ -668,17 +821,36 @@ impl Builder<'_> {
         let (x, top) = (ax + f.x, ay + f.y);
         let bounds = Rect::new(x - half, top - half, f.w + half + half, f.h + half + half);
         let paint = gs.iter().map(|g| PaintGlyph { font: g.font, glyph: g.glyph, advance: g.advance, dx: g.offset_x, dy: g.offset_y });
-        self.push_text(bounds, x, top + asc, size, color, paint);
+        let shadows = style.text.shadow.clone();
+        self.push_text(bounds, x, top + asc, size, color, paint, shadows.as_deref().map(Vec::as_slice));
     }
 
-    fn push_text(&mut self, bounds: Rect, x: LU, baseline: LU, size: f32, color: Color, glyphs: impl Iterator<Item = PaintGlyph>) {
-        if bounds.is_empty() || !self.visible(&bounds) {
+    #[allow(clippy::too_many_arguments)]
+    fn push_text(&mut self, bounds: Rect, x: LU, baseline: LU, size: f32, color: Color, glyphs: impl Iterator<Item = PaintGlyph>, shadows: Option<&[Shadow]>) {
+        // A shadow can reach into view from outside the bounds of the text.
+        let reach = LU::from_f32(shadows.map_or(0.0, |sh| sh.iter().map(Shadow::px).map(|[dx, dy, b, _]| dx.abs().max(dy.abs()) + b * 1.5 + 1.0).fold(0.0, f32::max)).min(1.0e5));
+        let wide = Rect::new(bounds.x - reach, bounds.y - reach, bounds.w + reach + reach, bounds.h + reach + reach);
+        if bounds.is_empty() || !self.visible(&wide) {
             return;
         }
         let start = self.list.glyphs.len() as u32;
         self.list.glyphs.extend(glyphs);
-        let run = TextRun { x, baseline, size, color, glyphs: (start, self.list.glyphs.len() as u32) };
-        self.push(bounds, ItemKind::Text(run));
+        let glyphs = (start, self.list.glyphs.len() as u32);
+        // `text-shadow` (css-text-decor-3 4.1): the last shadow at the back, all below the text.
+        for s in shadows.unwrap_or(&[]).iter().rev() {
+            let [dx, dy, blur, _] = s.px();
+            let col = s.color.resolve(color);
+            if col.a == 0 || ![dx, dy, blur].iter().all(|v| v.is_finite()) {
+                continue;
+            }
+            let (dx, dy, blur) = (dx.clamp(-1.0e5, 1.0e5), dy.clamp(-1.0e5, 1.0e5), blur.min(1.0e4));
+            let g = LU::from_f32(blur * 1.5 + 1.0);
+            let b = Rect::new(bounds.x + LU::from_f32(dx) - g, bounds.y + LU::from_f32(dy) - g, bounds.w + g + g, bounds.h + g + g);
+            self.push(b, ItemKind::Text(TextRun { x: x + LU::from_f32(dx), baseline: baseline + LU::from_f32(dy), size, color: col, glyphs, blur }));
+        }
+        if color.a != 0 {
+            self.push(bounds, ItemKind::Text(TextRun { x, baseline, size, color, glyphs, blur: 0.0 }));
+        }
     }
 
     // ---- replaced boxes -------------------------------------------------------------------------------
@@ -757,7 +929,7 @@ impl Builder<'_> {
         let (x, base) = (r.x + pad, r.y + pad + LU::from_f32(ascent).round_px());
         let prev = self.push_clip(r);
         let bounds = Rect::new(r.x, r.y, r.w, r.h);
-        self.push_text(bounds, x, base, f.size, GREY_TEXT, glyphs);
+        self.push_text(bounds, x, base, f.size, GREY_TEXT, glyphs, None);
         self.restore(prev);
     }
 

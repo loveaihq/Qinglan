@@ -1,12 +1,12 @@
 # WPT `css/css-backgrounds`
 
-测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-backgrounds`，用时 1.4 秒。
+测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-backgrounds`，用时 1.8 秒。
 
-- 通过 **198 / 212**（93.4%）
-- bug 类失败：**5**
+- 通过 **220 / 237**（92.8%）
+- bug 类失败：**6**
 - 跳过：无
 
-失败分类：bug (open) 5，limit (background-attachment) 5，limit (contain) 2，limit (gradient color spaces) 1，limit (relative colors, ::first-line) 1
+失败分类：bug (open) 6，limit (background-attachment) 5，limit (blur) 1，limit (contain) 2，limit (gradient color spaces) 1，limit (relative colors, ::first-line) 1，limit (spec change) 1
 
 ## 失败
 
@@ -24,6 +24,9 @@
 | background-origin-006.html | limit (background-attachment) | background-attachment fixed and local are painted as scroll (task 2c: recorded in decisions.md) (5400 pixels differ (largest difference 255); first at (0,0): #ff0000, the reference has #008000) |
 | border-radius-012.html | bug (open) | an inline box with a radius broken over two lines: the arcs differ by anti-aliasing and 1px; not investigated in 2c-1 (1676 pixels differ (largest difference 255); first at (21,58): #fdfdfd, the reference has #ffffff) |
 | border-radius-clip-002.htm | bug (open) | overflow clip with a radius around positioned / transformed-looking content differs at the arcs; not investigated in 2c-1 (67 pixels differ (largest difference 97); first at (39,86): #050404, the reference has #050505) |
+| box-shadow-border-radius-001.html | limit (spec change) | csswg-drafts#7103 asks for a circle; css-backgrounds-3 6.1.1 (cited in the code) gives the radius 1 + 149 * (1 + (1/149 - 1)^3) = 4px, which is the notref (renders like css/css-backgrounds/reference/box-shadow-border-radius-001-notref.html, which it must not) |
+| box-shadow-overlapping-001.html | bug (open) | the shadow of an inline box (span) is painted with its background, before the text of the line, so it does not cover the red text of the preceding sibling; the inline box fragments come first; not fixed in 2c-2 (30000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
+| box-shadow-radius-000.html | limit (blur) | three box blurs against the reference's blur: up to 5/255 apart (the spec allows 5%) (104 pixels differ (largest difference 5); first at (238,73): #c2bfbf, the reference has #c2c2c2) |
 | linear-gradient-currentcolor-first-line.html | limit (relative colors, ::first-line) | relative color syntax / ::first-line backgrounds are not done (1280 pixels differ (largest difference 255); first at (8,48): #ff0000, the reference has #008000) |
 | table-cell-background-local-002.html | limit (background-attachment) | background-attachment fixed and local are painted as scroll (task 2c: recorded in decisions.md) (10000 pixels differ (largest difference 255); first at (112,168): #ffffff, the reference has #008000) |
 
@@ -213,6 +216,26 @@
 - border-width-small-values-001-c.html
 - border-width-small-values-001-d.html
 - border-width-small-values-001-e.html
+- box-shadow-005.html
+- box-shadow-029.html
+- box-shadow-039.html
+- box-shadow-040.html
+- box-shadow-041.html
+- box-shadow-042.html
+- box-shadow-body.html
+- box-shadow-calc.html
+- box-shadow-currentcolor.html
+- box-shadow-inset-without-border-radius.html
+- box-shadow-invalid-001.html
+- box-shadow-multiple-001.html
+- box-shadow-outset-without-border-radius-001.html
+- box-shadow-overlapping-002.html
+- box-shadow-overlapping-003.html
+- box-shadow-overlapping-004.html
+- box-shadow-radius-001.html
+- box-shadow-radius-002.html
+- box-shadow-table-border-collapse-001.html
+- box-shadow-table-row-display.html
 - css-border-radius-001.html
 - css3-background-clip-border-box.html
 - css3-background-clip.html
@@ -222,6 +245,8 @@
 - css3-background-size-001.html
 - css3-background-size-contain.html
 - css3-background-size.html
+- css3-box-shadow.html
+- fieldset-inset-shadow.html
 - first-letter-space-not-selected.html
 - inline-background-rtl-001.html
 - order-of-images.htm

@@ -1267,6 +1267,11 @@ fn parse_longhand(prop: PropId, cvs: &[Cv], items: &[&Cv], env: &ParseEnv) -> Op
             Lp::Pct(_) => None,
             l => Some(Value::Length(l)),
         },
+        Opacity => super::fx::parse_opacity(one_ref?),
+        BoxShadow => super::fx::parse_shadows(cvs, false),
+        TextShadow => super::fx::parse_shadows(cvs, true),
+        Transform => super::fx::parse_transform(cvs),
+        TransformOrigin => super::fx::parse_origin(items),
     }
 }
 

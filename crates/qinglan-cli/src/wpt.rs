@@ -405,8 +405,8 @@ fn classify(src: &str) -> Option<(&'static str, &'static str)> {
     if has(&["grid-lanes", "masonry", "subgrid"]) {
         return Some(("none", "subgrid and masonry (grid-lanes) are not planned"));
     }
-    if has(&["box-shadow", "text-shadow", "opacity:", "transform:", "transform-origin", "translate:", "rotate:", "scale:", "perspective"]) {
-        return Some(("2c-2", "shadows, opacity and transforms"));
+    if has(&["translate:", "rotate:", "scale:", "perspective", "preserve-3d", "transform-style", "backface"]) {
+        return Some(("none", "individual transform properties and real 3D transforms are not planned"));
     }
     if has(&["mix-blend", "background-blend", "cross-fade(", "image-set(", "element(", "paint(", "-webkit-gradient", "-moz-", "border-image", "color-mix(", "light-dark(", "color(", "currentcolor/", "sibling-index", "anchor("]) {
         return Some(("none", "a feature layer 2 does not do (blend modes, border-image, cross-fade, image-set, element(), color-mix ...)"));

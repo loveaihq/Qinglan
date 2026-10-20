@@ -404,6 +404,12 @@ pub(crate) struct Layouter<'a> {
 }
 
 impl Layouter<'_> {
+    /// The containing block of a `position: fixed` box: the viewport (`None`), or the nearest transformed ancestor on the
+    /// containing-block stack (css-transforms-1 2).
+    pub(crate) fn fixed_cb(&self) -> Option<BoxId> {
+        self.cb_stack.iter().rev().copied().find(|&b| has_transform(&self.tree.get(b).style))
+    }
+
     /// Count `n` work units. Returns false once the budget is used up.
     pub(crate) fn charge(&mut self, n: u64) -> bool {
         self.work = self.work.saturating_add(n);
@@ -569,10 +575,27 @@ fn stacking_context(tree: &BoxTree, id: BoxId) -> BoxId {
     tree.root
 }
 
-/// A positioned box with a `z-index` other than `auto`, or `position: fixed`, starts a stacking context.
+/// A positioned box with a `z-index` other than `auto`, or `position: fixed`, or a box with an `opacity` below 1 or a
+/// `transform`, starts a stacking context (CSS2 appendix E, css-color-4 12.1, css-transforms-1 2).
 pub fn makes_context(style: &crate::css::computed::ComputedStyle) -> bool {
     let b = &style.boxs;
-    !matches!(b.position, Position::Static | Position::Sticky) && (b.z_index.is_some() || b.position == Position::Fixed)
+    (!matches!(b.position, Position::Static | Position::Sticky) && (b.z_index.is_some() || b.position == Position::Fixed)) || has_effect(style)
+}
+
+/// `opacity` below 1 or a `transform`: the box is painted as a group and, if it is not positioned, in the layer of the
+/// positioned boxes with `z-index: 0` (css-color-4 12.1; css-transforms-1 2).
+pub fn has_effect(style: &crate::css::computed::ComputedStyle) -> bool {
+    style.misc.fx.as_deref().is_some_and(|f| f.opacity < 255 || !f.xform.is_empty())
+}
+
+/// A `transform` makes the box the containing block of its absolutely positioned and fixed descendants (css-transforms-1 2).
+pub fn has_transform(style: &crate::css::computed::ComputedStyle) -> bool {
+    style.misc.fx.as_deref().is_some_and(|f| !f.xform.is_empty())
+}
+
+/// Is the box the containing block of absolutely positioned descendants (positioned, or transformed)?
+pub fn makes_cb(style: &crate::css::computed::ComputedStyle) -> bool {
+    style.boxs.position != Position::Static || has_transform(style)
 }
 
 /// Positioned boxes in painting order (L1 task 10; CSS2 appendix E.2): `below` / `above` are all of them in one list
@@ -583,11 +606,16 @@ fn paint_order(tree: &BoxTree) -> (Vec<Positioned>, Vec<Positioned>, Vec<Positio
         if !matches!(b.kind, BoxKind::Block | BoxKind::InlineBlock | BoxKind::Replaced) {
             continue;
         }
-        let pos = b.style.boxs.position;
-        if matches!(pos, Position::Static | Position::Sticky) {
-            continue;
+        let mut pos = b.style.boxs.position;
+        let plain = matches!(pos, Position::Static | Position::Sticky);
+        if plain {
+            if !has_effect(&b.style) {
+                continue;
+            }
+            // Not positioned, but painted with the `z-index: 0` positioned boxes (it ignores `z-index`).
+            pos = Position::Relative;
         }
-        let z = b.style.boxs.z_index.unwrap_or(0);
+        let z = if plain { 0 } else { b.style.boxs.z_index.unwrap_or(0) };
         let p = Positioned { box_id: i as BoxId, position: pos, z_index: z, auto: !makes_context(&b.style), ctx: stacking_context(tree, i as BoxId) };
         all.push((z, b.order, p));
     }

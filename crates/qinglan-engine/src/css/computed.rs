@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 use super::bg::{Backgrounds, BgImage, BgSize, BgVal, Pos1};
 use super::color::{Color, ColorValue};
+use super::fx::{Fx, Shadow};
 use super::syntax::Cv;
 use super::types::*;
 use super::values::{LenCtx, LenUnit, Lp, fmt_num};
@@ -94,6 +95,8 @@ pub struct TextStyle {
     pub caption_side: CaptionSide,
     /// The element's language (nearest `lang` attribute), inherited.
     pub lang: Option<Rc<str>>,
+    /// `text-shadow` (inherited).
+    pub shadow: Option<Rc<Vec<Shadow>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -110,6 +113,8 @@ pub struct MiscStyle {
     pub radius: Option<Rc<[(Lp, Lp); 4]>>,
     /// `None`: no outline.
     pub outline: Option<Rc<Outline>>,
+    /// opacity, box-shadow, transform: `None` while all are initial.
+    pub fx: Option<Rc<Fx>>,
 }
 
 /// The outline longhands (css-ui-3 6). The width is 0 when the style is `none`.
@@ -294,6 +299,7 @@ impl TextStyle {
             empty_cells: EmptyCells::Show,
             caption_side: CaptionSide::Top,
             lang: None,
+            shadow: None,
         }
     }
 }
@@ -309,6 +315,7 @@ impl MiscStyle {
             bg,
             radius: None,
             outline: None,
+            fx: None,
             vertical_align: VerticalAlign::Baseline,
             text_decoration_line: TextDecorationLine::NONE,
             text_decoration_style: TextDecorationStyle::Solid,
@@ -662,6 +669,12 @@ pub fn compute_text(parent: &Rc<TextStyle>, d: &Declared<'_>, ctx: &LenCtx, lang
     simple!(PropId::BorderCollapse, BorderCollapse, border_collapse);
     simple!(PropId::EmptyCells, EmptyCells, empty_cells);
     simple!(PropId::CaptionSide, CaptionSide, caption_side);
+    match pick(d, PropId::TextShadow) {
+        Pick::Inherit => {}
+        Pick::Initial => t.shadow = None,
+        Pick::Value(Value::Shadows(l)) => t.shadow = l.as_ref().map(|l| Rc::new(l.iter().map(|s| s.compute(ctx)).collect())),
+        Pick::Value(_) => {}
+    }
     match pick(d, PropId::BorderSpacing) {
         Pick::Inherit => {}
         Pick::Initial => t.border_spacing = [Lp::ZERO, Lp::ZERO],
@@ -951,6 +964,33 @@ pub fn compute_misc(parent: &Rc<MiscStyle>, init_rc: &Rc<MiscStyle>, d: &Declare
         };
         if o != Outline::NONE {
             m.outline = Some(Rc::new(o));
+        }
+    }
+    if d.touches(FX_BITS) {
+        let pf = parent.fx.as_deref();
+        let mut fx = Fx::initial();
+        match pick(d, PropId::Opacity) {
+            Pick::Inherit => fx.opacity = pf.map_or(255, |p| p.opacity),
+            Pick::Value(Value::Opacity(v)) => fx.opacity = (v * 255.0).round() as u8,
+            _ => {}
+        }
+        match pick(d, PropId::BoxShadow) {
+            Pick::Inherit => fx.shadows = pf.map_or_else(Vec::new, |p| p.shadows.clone()),
+            Pick::Value(Value::Shadows(Some(l))) => fx.shadows = l.iter().map(|s| s.compute(ctx)).collect(),
+            _ => {}
+        }
+        match pick(d, PropId::Transform) {
+            Pick::Inherit => fx.xform = pf.map_or_else(Vec::new, |p| p.xform.clone()),
+            Pick::Value(Value::Transform(Some(l))) => fx.xform = l.iter().map(|f| f.compute(ctx)).collect(),
+            _ => {}
+        }
+        match pick(d, PropId::TransformOrigin) {
+            Pick::Inherit => fx.origin = pf.map_or(fx.origin.clone(), |p| p.origin.clone()),
+            Pick::Value(Value::Origin(x, y)) => fx.origin = (x.compute(ctx), y.compute(ctx)),
+            _ => {}
+        }
+        if fx != Fx::initial() {
+            m.fx = Some(Rc::new(fx));
         }
     }
     // Declared but equal to the initial style (`vertical-align: baseline`, `background: none`): share that one.

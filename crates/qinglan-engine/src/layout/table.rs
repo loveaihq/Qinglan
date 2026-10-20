@@ -573,7 +573,7 @@ impl Layouter<'_> {
         let grid = self.grid(id);
         let saved = (self.pos, self.touched, std::mem::take(&mut self.fs));
         self.pos = (LU::ZERO, LU::ZERO);
-        let positioned = bs.position != Position::Static;
+        let positioned = bs.position != Position::Static || super::has_transform(&self.tree.get(id).style);
         if positioned {
             self.cb_stack.push(id);
         }

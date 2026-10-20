@@ -671,6 +671,14 @@ pub enum Value {
     Radius(Lp, Lp),
     /// `outline-offset`.
     Length(Lp),
+    /// `opacity`, 0..=1.
+    Opacity(f32),
+    /// `box-shadow` / `text-shadow`; `None` is `none`.
+    Shadows(Option<Rc<Vec<super::fx::Shadow>>>),
+    /// `transform`; `None` is `none`.
+    Transform(Option<Rc<Vec<super::fx::TFn>>>),
+    /// `transform-origin`.
+    Origin(Lp, Lp),
     /// A property that is parsed and validated but has no effect.
     Ignored,
 }
@@ -814,9 +822,14 @@ pub enum PropId {
     GridColumnStart,
     GridRowEnd,
     GridColumnEnd,
+    Opacity,
+    BoxShadow,
+    TextShadow,
+    Transform,
+    TransformOrigin,
 }
 
-pub const PROP_COUNT: usize = PropId::GridColumnEnd as usize + 1;
+pub const PROP_COUNT: usize = PropId::TransformOrigin as usize + 1;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Group {
@@ -856,7 +869,7 @@ impl PropId {
             FontFamily | FontSize | FontWeight | FontStyle | LineHeight | LetterSpacing | WordSpacing => Group::Font,
             Color | TextAlign | TextIndent | TextTransform | WhiteSpaceCollapse | TextWrapMode | WordBreak | OverflowWrap
             | Direction | Visibility | Cursor | ListStyleType | ListStylePosition | TabSize | Quotes | BorderCollapse | BorderSpacing
-            | EmptyCells | CaptionSide => Group::Text,
+            | EmptyCells | CaptionSide | TextShadow => Group::Text,
             Content | CounterReset | CounterIncrement | CounterSet => Group::Gen,
             FlexDirection | FlexWrap | Order | FlexGrow | FlexShrink | FlexBasis | JustifyContent | AlignItems | AlignSelf
             | AlignContent | RowGap | ColumnGap | JustifyItems | JustifySelf => Group::Flex,
@@ -865,7 +878,7 @@ impl PropId {
             VerticalAlign | TextDecorationLine | TextDecorationStyle | TextDecorationColor | TextDecorationThickness
             | BackgroundColor | BorderTopLeftRadius | BorderTopRightRadius | BorderBottomRightRadius | BorderBottomLeftRadius
             | BackgroundImage | BackgroundPositionX | BackgroundPositionY | BackgroundSize | BackgroundRepeat | BackgroundOrigin
-            | BackgroundClip | OutlineWidth | OutlineStyle | OutlineColor | OutlineOffset => Group::Misc,
+            | BackgroundClip | OutlineWidth | OutlineStyle | OutlineColor | OutlineOffset | Opacity | BoxShadow | Transform | TransformOrigin => Group::Misc,
         }
     }
 
@@ -991,6 +1004,11 @@ impl PropId {
             GridColumnStart => "grid-column-start",
             GridRowEnd => "grid-row-end",
             GridColumnEnd => "grid-column-end",
+            Opacity => "opacity",
+            BoxShadow => "box-shadow",
+            TextShadow => "text-shadow",
+            Transform => "transform",
+            TransformOrigin => "transform-origin",
         }
     }
 
@@ -1016,6 +1034,7 @@ pub const ALL_PROPS: [PropId; PROP_COUNT] = {
         EmptyCells, CaptionSide, TableLayout, FlexDirection, FlexWrap, Order, FlexGrow, FlexShrink, FlexBasis, JustifyContent,
         AlignItems, AlignSelf, AlignContent, RowGap, ColumnGap, JustifyItems, JustifySelf, GridTemplateColumns, GridTemplateRows,
         GridTemplateAreas, GridAutoColumns, GridAutoRows, GridAutoFlow, GridRowStart, GridColumnStart, GridRowEnd, GridColumnEnd,
+        Opacity, BoxShadow, TextShadow, Transform, TransformOrigin,
     ]
 };
 
@@ -1042,6 +1061,8 @@ pub const BG_BITS: u128 = PropId::BackgroundImage.bit()
     | PropId::BackgroundRepeat.bit()
     | PropId::BackgroundOrigin.bit()
     | PropId::BackgroundClip.bit();
+/// The effect longhands kept in [`super::fx::Fx`].
+pub const FX_BITS: u128 = PropId::Opacity.bit() | PropId::BoxShadow.bit() | PropId::Transform.bit() | PropId::TransformOrigin.bit();
 pub const BOX_BITS: u128 = group_bits(Group::Box);
 pub const BORDER_BITS: u128 = group_bits(Group::Border);
 pub const FONT_BITS: u128 = group_bits(Group::Font);

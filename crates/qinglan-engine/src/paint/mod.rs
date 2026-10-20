@@ -17,6 +17,7 @@
 
 mod borders;
 pub mod build;
+mod fx;
 pub mod decode;
 pub mod gradient;
 pub mod images;
@@ -26,6 +27,7 @@ use crate::css::color::Color;
 use crate::css::types::BorderLineStyle;
 use crate::html::dom::NodeId;
 use crate::layout::units::LayoutUnit as LU;
+use crate::vector::Transform;
 
 pub use build::build_display_list;
 pub use images::{Band, ImageSource, ImageStore, NoBitmaps, far_images, wanted_images};
@@ -127,6 +129,8 @@ pub struct TextRun {
     pub size: f32,
     pub color: Color,
     pub glyphs: (u32, u32),
+    /// The blur radius of a text shadow, CSS px (0: plain text).
+    pub blur: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -140,6 +144,34 @@ pub enum ItemKind {
     Bg(u32),
     /// A border or outline that is not a plain solid rectangle: `DisplayList::borders[i]`.
     Border(u32),
+    /// A box shadow: `DisplayList::shadows[i]`, drawn in `Item::bounds`.
+    Shadow(u32),
+    /// A group (`opacity`, `transform`): `DisplayList::groups[i]`, drawn in `Item::bounds` (its transformed extent).
+    Group(u32),
+}
+
+/// A `box-shadow` (css-backgrounds-3 6.1). Outer: `rect` is the border box and the shadow is cast outside it; inset: `rect` is
+/// the padding box and the shadow is cast inside it. Offsets, blur and spread in CSS px.
+#[derive(Clone, Copy, Debug)]
+pub struct ShadowDraw {
+    pub rect: Rect,
+    pub radii: [(f32, f32); 4],
+    pub color: Color,
+    pub dx: f32,
+    pub dy: f32,
+    pub blur: f32,
+    pub spread: f32,
+    pub inset: bool,
+}
+
+/// Things painted together as one: through an offscreen layer with `opacity`, and about `xf` (page CSS px to page CSS px).
+/// The items are in the page coordinates of the untransformed box, with a clip chain of their own.
+pub struct Group {
+    pub items: Vec<Item>,
+    pub opacity: u8,
+    pub xf: Transform,
+    /// The union of the bounds of `items`.
+    pub local: Rect,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -183,6 +215,8 @@ pub struct DisplayList {
     pub bgs: Vec<BgDraw>,
     pub grads: Vec<gradient::GradPaint>,
     pub borders: Vec<BorderDraw>,
+    pub shadows: Vec<ShadowDraw>,
+    pub groups: Vec<Group>,
     pub glyphs: Vec<PaintGlyph>,
     /// The canvas background colour (None: white).
     pub canvas: Option<Color>,
@@ -206,6 +240,8 @@ impl DisplayList {
             bgs: Vec::new(),
             grads: Vec::new(),
             borders: Vec::new(),
+            shadows: Vec::new(),
+            groups: Vec::new(),
             glyphs: Vec::new(),
             canvas: None,
             height: LU::ZERO,

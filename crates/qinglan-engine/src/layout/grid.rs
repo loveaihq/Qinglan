@@ -750,7 +750,7 @@ impl Layouter<'_> {
         let (content_left, content_top) = (g.bor[3] + g.pad[3], g.bor[0] + g.pad[0]);
         let saved = (self.pos, self.touched, std::mem::take(&mut self.fs));
         self.pos = (LU::ZERO, LU::ZERO);
-        let positioned = bx.style.boxs.position != Position::Static;
+        let positioned = super::makes_cb(&bx.style);
         if positioned {
             self.cb_stack.push(id);
         }
@@ -1406,7 +1406,7 @@ impl Layouter<'_> {
                 continue;
             }
             let fixed = cb.style.boxs.position == Position::Fixed;
-            let pcb = if fixed { None } else { self.cb_stack.last().copied() };
+            let pcb = if fixed { self.fixed_cb() } else { self.cb_stack.last().copied() };
             if hit && pcb == Some(id) {
                 // The container was cut: its positioned children wait for the full layout.
                 continue;
