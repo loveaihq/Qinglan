@@ -105,9 +105,11 @@ pub struct MiscStyle {
     pub text_decoration_thickness: Option<Lp>,
     pub background_color: ColorValue,
     pub bg: Rc<Backgrounds>,
-    /// `border-top-left-radius`, top-right, bottom-right, bottom-left: horizontal and vertical radius.
-    pub radius: [(Lp, Lp); 4],
-    pub outline: Outline,
+    /// `border-top-left-radius`, top-right, bottom-right, bottom-left: horizontal and vertical radius. `None`: all square (kept
+    /// out of the struct because most elements have none: 128 bytes each).
+    pub radius: Option<Rc<[(Lp, Lp); 4]>>,
+    /// `None`: no outline.
+    pub outline: Option<Rc<Outline>>,
 }
 
 /// The outline longhands (css-ui-3 6). The width is 0 when the style is `none`.
@@ -117,6 +119,17 @@ pub struct Outline {
     pub style: BorderLineStyle,
     pub color: ColorValue,
     pub offset: f32,
+}
+
+impl Outline {
+    pub const NONE: Outline = Outline { width: 0.0, style: BorderLineStyle::None, color: ColorValue::CurrentColor, offset: 0.0 };
+}
+
+impl MiscStyle {
+    /// The outline longhands (the initial ones when the element has none).
+    pub fn outline(&self) -> Outline {
+        self.outline.as_deref().copied().unwrap_or(Outline::NONE)
+    }
 }
 
 /// Generated content (CSS2 12.2, 12.4): `content` and the counter properties. None of them is inherited.
@@ -294,8 +307,8 @@ impl MiscStyle {
     fn with_bg(bg: Rc<Backgrounds>) -> MiscStyle {
         MiscStyle {
             bg,
-            radius: [(Lp::ZERO, Lp::ZERO), (Lp::ZERO, Lp::ZERO), (Lp::ZERO, Lp::ZERO), (Lp::ZERO, Lp::ZERO)],
-            outline: Outline { width: 0.0, style: BorderLineStyle::None, color: ColorValue::CurrentColor, offset: 0.0 },
+            radius: None,
+            outline: None,
             vertical_align: VerticalAlign::Baseline,
             text_decoration_line: TextDecorationLine::NONE,
             text_decoration_style: TextDecorationStyle::Solid,
@@ -889,18 +902,23 @@ pub fn compute_misc(parent: &Rc<MiscStyle>, init_rc: &Rc<MiscStyle>, d: &Declare
         m.bg = compute_backgrounds(&parent.bg, &init_rc.bg, d, ctx);
     }
     let radii = [PropId::BorderTopLeftRadius, PropId::BorderTopRightRadius, PropId::BorderBottomRightRadius, PropId::BorderBottomLeftRadius];
+    let mut rad: [(Lp, Lp); 4] = std::array::from_fn(|_| (Lp::ZERO, Lp::ZERO));
     for (i, p) in radii.into_iter().enumerate() {
-        let Some(dst) = m.radius.get_mut(i) else { continue };
+        let Some(dst) = rad.get_mut(i) else { continue };
         match pick(d, p) {
-            Pick::Inherit => *dst = parent.radius.get(i).cloned().unwrap_or((Lp::ZERO, Lp::ZERO)),
+            Pick::Inherit => *dst = parent.radius.as_ref().and_then(|r| r.get(i)).cloned().unwrap_or((Lp::ZERO, Lp::ZERO)),
             Pick::Value(Value::Radius(a, b)) => *dst = (a.compute(ctx), b.compute(ctx)),
             _ => {}
         }
     }
+    if rad.iter().any(|(a, b)| *a != Lp::ZERO || *b != Lp::ZERO) {
+        m.radius = Some(Rc::new(rad));
+    }
     if d.touches(PropId::OutlineWidth.bit() | PropId::OutlineStyle.bit() | PropId::OutlineColor.bit() | PropId::OutlineOffset.bit()) {
-        let o = &mut m.outline;
+        let po = parent.outline();
+        let mut o = Outline::NONE;
         o.style = match pick(d, PropId::OutlineStyle) {
-            Pick::Inherit => parent.outline.style,
+            Pick::Inherit => po.style,
             Pick::Value(Value::BorderStyle(s)) => *s,
             _ => BorderLineStyle::None,
         };
@@ -908,7 +926,7 @@ pub fn compute_misc(parent: &Rc<MiscStyle>, init_rc: &Rc<MiscStyle>, d: &Declare
             0.0
         } else {
             match pick(d, PropId::OutlineWidth) {
-                Pick::Inherit => parent.outline.width,
+                Pick::Inherit => po.width,
                 Pick::Value(Value::BorderWidth(BorderWidthSpec::Kw(k))) => match k {
                     BorderWidthKw::Thin => 1.0,
                     BorderWidthKw::Medium => 3.0,
@@ -922,17 +940,21 @@ pub fn compute_misc(parent: &Rc<MiscStyle>, init_rc: &Rc<MiscStyle>, d: &Declare
             }
         };
         o.color = match pick(d, PropId::OutlineColor) {
-            Pick::Inherit => parent.outline.color,
+            Pick::Inherit => po.color,
             Pick::Value(Value::Color(c)) => *c,
             _ => ColorValue::CurrentColor,
         };
         o.offset = match pick(d, PropId::OutlineOffset) {
-            Pick::Inherit => parent.outline.offset,
+            Pick::Inherit => po.offset,
             Pick::Value(Value::Length(l)) => l.compute(ctx).as_px().unwrap_or(0.0),
             _ => 0.0,
         };
+        if o != Outline::NONE {
+            m.outline = Some(Rc::new(o));
+        }
     }
-    Rc::new(m)
+    // Declared but equal to the initial style (`vertical-align: baseline`, `background: none`): share that one.
+    if m == **init_rc { init_rc.clone() } else { Rc::new(m) }
 }
 
 /// The background longhands (not inherited; `inherit` copies the parent's list).
@@ -1223,7 +1245,8 @@ impl ComputedStyle {
         add(PropId::TextDecorationThickness, m.text_decoration_thickness.as_ref().map_or("auto".into(), Lp::to_css));
         add(PropId::BackgroundColor, colors(m.background_color));
         let list = |it: Vec<String>| it.join(", ");
-        for (p, r) in [PropId::BorderTopLeftRadius, PropId::BorderTopRightRadius, PropId::BorderBottomRightRadius, PropId::BorderBottomLeftRadius].into_iter().zip(m.radius.iter()) {
+        let radii = m.radius.as_deref().cloned().unwrap_or_else(|| std::array::from_fn(|_| (Lp::ZERO, Lp::ZERO)));
+        for (p, r) in [PropId::BorderTopLeftRadius, PropId::BorderTopRightRadius, PropId::BorderBottomRightRadius, PropId::BorderBottomLeftRadius].into_iter().zip(radii.iter()) {
             add(p, if r.0 == r.1 { r.0.to_css() } else { format!("{} {}", r.0.to_css(), r.1.to_css()) });
         }
         let bg = &m.bg;
@@ -1234,7 +1257,7 @@ impl ComputedStyle {
         add(PropId::BackgroundRepeat, list(bg.repeat.iter().map(|r| r.to_css()).collect()));
         add(PropId::BackgroundOrigin, list(bg.origin.iter().map(|b| b.to_css().to_string()).collect()));
         add(PropId::BackgroundClip, list(bg.clip.iter().map(|b| b.to_css().to_string()).collect()));
-        let o = &m.outline;
+        let o = &m.outline();
         add(PropId::OutlineWidth, px(o.width));
         add(PropId::OutlineStyle, o.style.keyword().into());
         add(PropId::OutlineColor, colors(o.color));

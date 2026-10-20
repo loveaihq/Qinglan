@@ -356,7 +356,7 @@ impl Builder<'_> {
     fn decor(&mut self, id: BoxId, style: &Rc<ComputedStyle>, r: Rect, sides: [bool; 4], borders: bool) {
         let m = &style.misc;
         let canvas = id == self.canvas_from;
-        let mut radii = resolve_radii(&m.radius, r.w.to_f32(), r.h.to_f32());
+        let mut radii = resolve_radii(m.radius.as_deref(), r.w.to_f32(), r.h.to_f32());
         if !sides[3] {
             radii[0] = (0.0, 0.0);
             radii[3] = (0.0, 0.0);
@@ -366,8 +366,14 @@ impl Builder<'_> {
             radii[2] = (0.0, 0.0);
         }
         let has_img = m.bg.images.iter().any(|i| !matches!(i, BgImage::None));
-        if (m.background_color.resolve(style.text.color).a != 0 && !canvas) || has_img {
-            self.backgrounds(id, style, r, radii, sides);
+        let color = m.background_color.resolve(style.text.color);
+        if (color.a != 0 && !canvas) || has_img {
+            // A plain color in a square border box (nearly every background) is one rectangle.
+            if !has_img && radii == [(0.0, 0.0); 4] && matches!(Backgrounds::nth(&m.bg.clip, m.bg.images.len().saturating_sub(1)), Some(BgBox::Border | BgBox::Text)) {
+                self.rect(r, color);
+            } else {
+                self.backgrounds(id, style, r, radii, sides);
+            }
         }
         if borders {
             self.border_items(style, r, sides, radii);
@@ -385,7 +391,7 @@ impl Builder<'_> {
         // background reaches to the middle of them (the border box). A cell and the table are inset by their halves of the
         // edges for the padding box (where the image is placed); rows and columns have none.
         let collapsed = style.text.border_collapse == BorderCollapse::Collapse && !matches!(role_of(res.tree.get(id)), Role::Other | Role::Caption);
-        let halves = res.halves.get(&id).filter(|_| collapsed);
+        let halves = if collapsed { res.halves.get(&id) } else { None };
         let bw: [LU; 4] = std::array::from_fn(|i| match (sides.get(i).copied().unwrap_or(false), halves) {
             (false, _) => LU::ZERO,
             (true, Some(h)) => h.get(i).copied().unwrap_or(LU::ZERO),
@@ -566,7 +572,7 @@ impl Builder<'_> {
     /// `outline` (css-ui-3 6): outside the border box by `outline-offset`, painted on top of the stacking context
     /// (CSS2 E.2 step 10), so it is queued until the context is done.
     fn outline(&mut self, style: &ComputedStyle, r: Rect, radii: [(f32, f32); 4]) {
-        let o = &style.misc.outline;
+        let o = &style.misc.outline();
         let color = o.color.resolve(style.text.color);
         if o.width <= 0.0 || o.style == BorderLineStyle::None || color.a == 0 {
             return;
@@ -597,7 +603,7 @@ impl Builder<'_> {
     fn clip_box(&mut self, id: BoxId, rect: Rect) -> u32 {
         let pb = self.padding_box(id, rect);
         let style = &self.res.tree.get(id).style;
-        let radii = resolve_radii(&style.misc.radius, rect.w.to_f32(), rect.h.to_f32());
+        let radii = resolve_radii(style.misc.radius.as_deref(), rect.w.to_f32(), rect.h.to_f32());
         let bd = &style.border;
         let bwf: [f32; 4] = std::array::from_fn(|i| border_px(bd.width.get(i).copied().unwrap_or(0.0)).to_f32());
         self.push_round(pb, inset_radii(radii, bwf))
@@ -696,7 +702,7 @@ impl Builder<'_> {
             Some(ReplacedKind::Image) => {
                 if bx.image().is_some() && !content.is_empty() && self.visible(&content) {
                     // A radius clips the picture to the rounded inner edge (css-backgrounds-3 5.4).
-                    let radii = resolve_radii(&style.misc.radius, r.w.to_f32(), r.h.to_f32());
+                    let radii = resolve_radii(style.misc.radius.as_deref(), r.w.to_f32(), r.h.to_f32());
                     let inner = inset_radii(radii, [t.to_f32(), rt.to_f32(), bt.to_f32(), l.to_f32()]);
                     let prev = inner.iter().any(|(a, b)| *a > 0.0 && *b > 0.0).then(|| self.push_round(content, inner));
                     self.push(content, ItemKind::Image { node: bx.node });
@@ -832,8 +838,9 @@ impl Builder<'_> {
 
 /// css-backgrounds-3 5.1, 5.5: the radii of a border box of `w` x `h` (percentages resolved against it), all scaled down by the
 /// smallest ratio side / (sum of the two radii on it) when some pair would overlap. A corner with a zero radius is square.
-fn resolve_radii(r: &[(Lp, Lp); 4], w: f32, h: f32) -> [(f32, f32); 4] {
+fn resolve_radii(r: Option<&[(Lp, Lp); 4]>, w: f32, h: f32) -> [(f32, f32); 4] {
     let mut out = [(0.0f32, 0.0f32); 4];
+    let Some(r) = r else { return out };
     for (o, (a, b)) in out.iter_mut().zip(r.iter()) {
         *o = (a.resolve(w).max(0.0), b.resolve(h).max(0.0));
     }
