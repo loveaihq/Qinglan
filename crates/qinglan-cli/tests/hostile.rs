@@ -400,3 +400,139 @@ fn floats_100k() {
     }
     run(page("100 000 floats that never fit side by side", html), "floats_100k");
 }
+
+// ---- web fonts (step 2d-1): the decoders are fed hostile font files through the whole pipeline ----------------------
+
+/// Bits written the way deflate and Brotli read them: the first bit goes to the low end of the first byte.
+struct Bits {
+    bytes: Vec<u8>,
+    n: usize,
+}
+
+impl Bits {
+    fn new() -> Bits {
+        Bits { bytes: Vec::new(), n: 0 }
+    }
+    fn put(&mut self, value: u64, count: usize) {
+        for i in 0..count {
+            if self.n.is_multiple_of(8) {
+                self.bytes.push(0);
+            }
+            if i < 64 && (value >> i) & 1 == 1 {
+                let last = self.bytes.len() - 1;
+                self.bytes[last] |= 1 << (self.n % 8);
+            }
+            self.n += 1;
+        }
+    }
+    /// A prefix code, most significant bit first (deflate's Huffman codes).
+    fn code(&mut self, value: u32, len: usize) {
+        for i in (0..len).rev() {
+            self.put(u64::from((value >> i) & 1), 1);
+        }
+    }
+}
+
+/// A Brotli stream of `blocks` meta-blocks of 958 * 1095 bytes each (zeros): every command inserts one literal and
+/// copies 1094 bytes from distance 1, with all the prefix codes one symbol long, so a command costs 11 bits.
+fn brotli_zeros(blocks: usize) -> Vec<u8> {
+    let mut b = Bits::new();
+    b.put(0, 1); // WBITS 16
+    let mlen: u64 = 958 * 1095;
+    for _ in 0..blocks {
+        b.put(0, 1); // ISLAST
+        b.put(2, 2); // 6 nibbles
+        b.put(mlen - 1, 24);
+        b.put(0, 1); // ISUNCOMPRESSED
+        b.put(0, 3); // one block type each for literals, commands, distances
+        b.put(0, 2); // NPOSTFIX
+        b.put(0, 4); // NDIRECT
+        b.put(0, 2); // context mode of the literal block type
+        b.put(0, 2); // one literal tree, one distance tree
+        for (alphabet_bits, symbol) in [(8, 0u64), (10, 398), (6, 16)] {
+            b.put(1, 2); // simple prefix code
+            b.put(0, 2); // one symbol
+            b.put(symbol, alphabet_bits);
+        }
+        b.put(0, 11 * 958);
+    }
+    b.put(1, 1); // ISLAST
+    b.put(1, 1); // ISLASTEMPTY
+    b.bytes
+}
+
+/// A zlib stream of one literal and `matches` copies of 258 bytes (distance 1): a fixed-Huffman block, 13 bits each.
+fn zlib_zeros(matches: usize) -> Vec<u8> {
+    let mut b = Bits::new();
+    b.put(1, 1); // BFINAL
+    b.put(1, 2); // fixed Huffman
+    b.code(0x30 + 0x61, 8); // literal 'a'
+    for _ in 0..matches {
+        b.code(0xC0 + 5, 8); // length symbol 285 = 258
+        b.code(0, 5); // distance symbol 0 = 1
+    }
+    b.code(0, 7); // end of block
+    let mut z = vec![0x78, 0x9C];
+    z.extend_from_slice(&b.bytes);
+    z.extend_from_slice(&[0, 0, 0, 0]);
+    z
+}
+
+fn font_case(item: &'static str, mime: &'static str, font: Vec<u8>) -> Case {
+    let html = "<!doctype html><title>x</title><style>@font-face { font-family: hostile; src: url(/f.font) } p { font-family: hostile, serif; font-size: 24px }</style>\
+                <p>Hello, web font. The quick brown fox jumps over the lazy dog.</p>";
+    let mut c = page(item, html);
+    c.extra.push(("/f.font".to_string(), mime, font));
+    c
+}
+
+fn woff2_with(total_sfnt: u32, directory: &[u8], compressed: &[u8]) -> Vec<u8> {
+    let mut f = Vec::new();
+    f.extend_from_slice(b"wOF2");
+    f.extend_from_slice(&[0, 1, 0, 0]);
+    f.extend_from_slice(&0u32.to_be_bytes()); // length: patched below
+    f.extend_from_slice(&1u16.to_be_bytes());
+    f.extend_from_slice(&[0, 0]);
+    f.extend_from_slice(&total_sfnt.to_be_bytes());
+    f.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
+    f.extend_from_slice(&[0; 24]);
+    f.extend_from_slice(directory);
+    f.extend_from_slice(compressed);
+    let len = f.len() as u32;
+    f[8..12].copy_from_slice(&len.to_be_bytes());
+    f
+}
+
+#[test]
+fn woff2_claims_a_1gb_table() {
+    // flags 1 (head), origLength 1 GB as UIntBase128, an empty Brotli stream.
+    let font = woff2_with(1 << 30, &[1, 0x84, 0x80, 0x80, 0x80, 0x00], &[0x06]);
+    run(font_case("web font: WOFF2 that claims a 1 GB table", "font/woff2", font), "woff2_1gb");
+}
+
+#[test]
+fn brotli_bomb_in_a_woff2() {
+    // 8,000,000 bytes declared (head), 600 meta-blocks of 1 MB behind them (about 750 KB of input, 600 MB of output).
+    let stream = brotli_zeros(600);
+    let font = woff2_with(8_000_000, &[1, 0xBD, 0x84, 0x80, 0x00], &stream);
+    run(font_case("web font: Brotli bomb (600 MB from 750 KB)", "font/woff2", font), "brotli_bomb");
+}
+
+#[test]
+fn zlib_bomb_in_a_woff() {
+    // One table of 4,000,000 declared bytes whose zlib stream goes on for 100 MB (400,000 copies of 258 bytes).
+    let z = zlib_zeros(400_000);
+    let mut f = vec![0u8; 64];
+    f[..4].copy_from_slice(b"wOFF");
+    f[4..8].copy_from_slice(&[0, 1, 0, 0]);
+    f[12..14].copy_from_slice(&1u16.to_be_bytes());
+    f[16..20].copy_from_slice(&4_000_000u32.to_be_bytes());
+    f[44..48].copy_from_slice(b"head");
+    f[48..52].copy_from_slice(&64u32.to_be_bytes());
+    f[52..56].copy_from_slice(&(z.len() as u32).to_be_bytes());
+    f[56..60].copy_from_slice(&4_000_000u32.to_be_bytes());
+    f.extend_from_slice(&z);
+    let len = f.len() as u32;
+    f[8..12].copy_from_slice(&len.to_be_bytes());
+    run(font_case("web font: zlib bomb (100 MB from 650 KB)", "font/woff", f), "zlib_bomb");
+}

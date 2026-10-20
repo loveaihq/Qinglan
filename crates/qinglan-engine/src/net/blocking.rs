@@ -8,6 +8,7 @@ use super::content::{self, ContentKind};
 use super::loader::{LoadEvent, LoadRequest, Loader, Ticket};
 use super::page::{PageResources, Update, apply_probe, probe_response};
 use super::{ResourceKind, Response};
+use crate::css::StyleOutput;
 use crate::encoding::{Encoding, decode_document};
 use crate::html::dom::Document;
 use crate::html::treebuilder::parse_document;
@@ -136,6 +137,27 @@ pub fn load_sheets(loader: &mut Loader, res: &mut PageResources, platform: &dyn 
         }
     }
     true
+}
+
+/// Fetch the web fonts of a styled page and wait for them (or `timeout`). Returns how many faces were still loading.
+pub fn load_fonts(loader: &mut Loader, res: &mut PageResources, doc: &Document, styled: &StyleOutput, platform: &dyn Platform, timeout: Duration) -> usize {
+    res.start_fonts(doc, styled, loader, platform);
+    let deadline = Instant::now() + timeout;
+    while res.fonts.pending() > 0 {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        let events = loader.wait(left);
+        let stalled = events.is_empty() && loader.pending() == 0;
+        for ev in events {
+            res.handle(loader, ev, platform);
+        }
+        if stalled {
+            break;
+        }
+    }
+    res.fonts.pending()
 }
 
 /// What happened to the images of a page.

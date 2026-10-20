@@ -13,6 +13,7 @@
 //! is always a typed [`NetError`] or [`policy::Refusal`], never a panic.
 
 pub mod blocking;
+pub mod fonts;
 pub mod cache;
 pub mod content;
 pub mod data_url;
@@ -58,6 +59,8 @@ pub enum ResourceKind {
     /// A style sheet (`<link>` or `@import`).
     Style,
     Image,
+    /// A web font (`@font-face`).
+    Font,
 }
 
 impl ResourceKind {
@@ -65,6 +68,7 @@ impl ResourceKind {
         match self {
             ResourceKind::Document | ResourceKind::Style => MAX_TEXT_BYTES,
             ResourceKind::Image => MAX_IMAGE_BYTES,
+            ResourceKind::Font => crate::fonts::MAX_FONT_BYTES,
         }
     }
 
@@ -72,6 +76,7 @@ impl ResourceKind {
         match self {
             ResourceKind::Document => "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8,image/*;q=0.7,*/*;q=0.5",
             ResourceKind::Style => "text/css,*/*;q=0.1",
+            ResourceKind::Font => "font/woff2,font/woff,font/ttf,font/otf,application/font-woff,*/*;q=0.1",
             ResourceKind::Image => "image/png,image/jpeg,image/gif,image/bmp,image/x-icon,image/webp,image/*;q=0.8,*/*;q=0.5",
         }
     }
@@ -80,7 +85,7 @@ impl ResourceKind {
     pub(crate) fn priority(self) -> usize {
         match self {
             ResourceKind::Document => 0,
-            ResourceKind::Style => 1,
+            ResourceKind::Style | ResourceKind::Font => 1,
             ResourceKind::Image => 2,
         }
     }

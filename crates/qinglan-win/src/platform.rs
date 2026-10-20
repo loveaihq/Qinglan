@@ -11,12 +11,13 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use qinglan_engine::css::types::{FontFamily, GenericFamily};
-use qinglan_engine::platform::{FontId, FontMetrics, FontQuery, FontSlant, Glyph, GlyphMask, Platform};
+use qinglan_engine::fonts::face::{FaceDesc, rank_faces};
+use qinglan_engine::platform::{FontId, FontMetrics, FontQuery, FontSlant, Glyph, GlyphMask, Platform, WebFaceState};
 
 use crate::fx::{FxHasher, FxMap};
 use crate::lru::Lru;
 use crate::sys;
-use crate::sys::dwrite::{DesignMetrics, Face, Factory, Font, ScriptAnalysis, Shaped, break_between};
+use crate::sys::dwrite::{DesignMetrics, Face, Factory, Font, ScriptAnalysis, Shaped, WebFontLoader, break_between};
 
 /// Glyph mask cache budget (L1 task 8: LRU, at most 8 MB).
 const GLYPH_CACHE_BYTES: usize = 3 << 19;
@@ -28,6 +29,12 @@ const MAX_FONTS: usize = 512;
 const MAX_QUERIES: usize = 8192;
 /// A single `GetGlyphs` call gets at most this many UTF-16 units (its cluster map holds 16-bit values).
 const MAX_RUN_UNITS: usize = 8192;
+
+/// Font ids travel as 16 bits through layout and the display list (`PlacedGlyph::font`): system fonts are below
+/// `WEB_BASE`, web fonts from `WEB_BASE` to `HIDDEN`, and `HIDDEN` is set in the id of a font whose text is laid out but not drawn (a web font still loading in its block period).
+const HIDDEN: u32 = 0x8000;
+/// Ids of web fonts start here; they live in their own table so that they can be dropped with the page.
+const WEB_BASE: u32 = 0x4000;
 
 /// Size at which context-free characters are shaped (advances are scaled linearly afterwards).
 const PROBE: f32 = 100.0;
@@ -106,15 +113,37 @@ impl CacheStats {
 
 struct FontEntry {
     face: Face,
-    font: Font,
+    /// The system font this face was made from (none for a web font).
+    font: Option<Font>,
     m: DesignMetrics,
     /// Advance of "0" in design units.
     zero_advance: Option<f32>,
     /// Code point to glyph index (0 = the font has none).
     cmap: RefCell<FxMap<u32, u16>>,
+    /// The `unicode-range` of a web font; it draws nothing outside it.
+    ranges: Option<Rc<[(u32, u32)]>>,
+}
+
+#[derive(Clone, Copy)]
+enum WState {
+    Fallback,
+    Hidden,
+    /// Loaded: the id of its font (in `Inner::web_fonts`).
+    Ready(u32),
+    /// `src: local()`: the system font family with this collection index.
+    Local(u32),
+}
+
+struct WebFace {
+    desc: FaceDesc,
+    state: WState,
 }
 
 impl FontEntry {
+    fn in_ranges(&self, cp: u32) -> bool {
+        self.ranges.as_ref().is_none_or(|r| r.iter().any(|&(a, b)| (a..=b).contains(&cp)))
+    }
+
     fn glyph_of(&self, cp: u32) -> u16 {
         if let Some(&g) = self.cmap.borrow().get(&cp) {
             return g;
@@ -132,6 +161,10 @@ struct QueryInfo {
     lang: Option<String>,
     /// The fonts of the `font-family` list that exist, in order (or the default font).
     chain: Vec<u32>,
+    /// The whole family list in order when some web face of it is hidden (`HIDDEN | face index` marks it); else empty.
+    items: Vec<u32>,
+    /// The primary font (css-fonts-4 5.1 "first available font"): the first of the chain that has a space.
+    primary: u32,
     /// Normalized locale, NUL-terminated UTF-16, and a hash of it.
     locale: Vec<u16>,
     loc: u32,
@@ -175,6 +208,12 @@ struct Inner {
     simple: FxMap<(u32, u32, u32), (u16, f32)>,
     /// Shaped words (see `shape_words`).
     words: FxMap<u64, WordEntry>,
+    /// The `@font-face` faces of the page, in order of declaration, and the faces of each family (lower-case name).
+    web: Vec<WebFace>,
+    web_by_family: FxMap<String, Vec<usize>>,
+    web_fonts: FxMap<u32, Rc<FontEntry>>,
+    next_web_id: u32,
+    web_loader: Option<WebFontLoader>,
 }
 
 /// A word (or one space) shaped at `PROBE` size; advances and offsets are scaled to the real size when used.
@@ -212,6 +251,11 @@ impl WinPlatform {
             stats: CacheStats::default(),
             simple: FxMap::default(),
             words: FxMap::default(),
+            web: Vec::new(),
+            web_by_family: FxMap::default(),
+            web_fonts: FxMap::default(),
+            next_web_id: 0,
+            web_loader: None,
         };
         Some(WinPlatform { dw, inner: RefCell::new(inner) })
     }
@@ -231,13 +275,13 @@ impl WinPlatform {
 
     /// Name (en-US) of the family of `font`, for tests and diagnostics.
     pub fn family_name(&self, font: FontId) -> Option<String> {
-        let e = self.inner.borrow().fonts.get(font.0 as usize).cloned()?;
-        e.font.family_name()
+        let e = self.inner.borrow().entry(font.0).cloned()?;
+        e.font.as_ref()?.family_name()
     }
 
     /// `DWRITE_FONT_SIMULATIONS` of `font`: 1 = synthetic bold, 2 = synthetic oblique.
     pub fn simulations(&self, font: FontId) -> u32 {
-        self.inner.borrow().fonts.get(font.0 as usize).map_or(0, |e| e.font.simulations())
+        self.inner.borrow().entry(font.0).map_or(0, |e| e.font.as_ref().map_or(0, |f| f.simulations()))
     }
 
     /// Empty the glyph mask cache (the memory breakdown of the benches).
@@ -411,6 +455,21 @@ fn is_attached(c: char) -> bool {
 }
 
 impl Inner {
+    /// A font by id: a system font, or a web font (the `HIDDEN` bit is ignored).
+    fn entry(&self, id: u32) -> Option<&Rc<FontEntry>> {
+        let id = id & !HIDDEN;
+        if id >= WEB_BASE { self.web_fonts.get(&id) } else { self.fonts.get(id as usize) }
+    }
+
+    /// The web faces changed: nothing computed from the font lists is valid any more.
+    fn invalidate_text(&mut self) {
+        self.queries.clear();
+        self.query_map.clear();
+        self.sticky.clear();
+        self.choice.clear();
+        self.shape_cache = Lru::new(SHAPE_CACHE_BYTES);
+    }
+
     /// Time of one `GetGlyphs` + `GetGlyphPlacements` call; calls over 300 us are counted apart
     /// (the first call for a font and script pays for loading its tables).
     fn add_shape_time(&mut self, us: u64) {
@@ -453,7 +512,7 @@ impl Inner {
         let m = face.metrics();
         let zero_advance = face.glyph_indices(&[u32::from(b'0')]).and_then(|v| v.first().copied()).filter(|&g| g != 0).and_then(|g| face.design_advance(g)).map(|a| a as f32);
         let id = self.fonts.len() as u32;
-        self.fonts.push(Rc::new(FontEntry { face, font, m, zero_advance, cmap: RefCell::new(FxMap::default()) }));
+        self.fonts.push(Rc::new(FontEntry { face, font: Some(font), m, zero_advance, cmap: RefCell::new(FxMap::default()), ranges: None }));
         self.by_face.insert(addr, id);
         Some(id)
     }
@@ -499,7 +558,39 @@ impl Inner {
             FontSlant::Italic => 2,
         };
         let mut chain: Vec<u32> = Vec::new();
+        let mut items: Vec<u32> = Vec::new();
+        let mut any_hidden = false;
         for fam in q.families.iter().take(16) {
+            // A family with @font-face faces is those faces (best match first); an installed font of the same
+            // name is not used (css-fonts-4 4.1).
+            if let FontFamily::Named(n) = fam
+                && let Some(ids) = self.web_by_family.get(&n.to_lowercase()).cloned()
+            {
+                let ranked: Vec<usize> = {
+                    let descs: Vec<&FaceDesc> = ids.iter().filter_map(|&i| self.web.get(i).map(|w| &w.desc)).collect();
+                    rank_faces(&descs, q.weight, q.slant).into_iter().filter_map(|r| ids.get(r).copied()).collect()
+                };
+                for wi in ranked {
+                    let state = self.web.get(wi).map(|w| w.state);
+                    let font = match state {
+                        Some(WState::Ready(id)) => Some(id),
+                        Some(WState::Local(fi)) => self.font_from_family(dw, fi, weight, style),
+                        Some(WState::Hidden) => {
+                            items.push(HIDDEN | wi as u32);
+                            any_hidden = true;
+                            None
+                        }
+                        _ => None,
+                    };
+                    if let Some(f) = font
+                        && !chain.contains(&f)
+                    {
+                        chain.push(f);
+                        items.push(f);
+                    }
+                }
+                continue;
+            }
             let fi = match fam {
                 FontFamily::Named(n) => self.find_family(dw, n),
                 FontFamily::Generic(g) => generic_names(*g).iter().find_map(|n| self.find_family(dw, n)),
@@ -507,20 +598,28 @@ impl Inner {
             if let Some(f) = fi.and_then(|fi| self.font_from_family(dw, fi, weight, style))
                 && !chain.contains(&f) {
                     chain.push(f);
+                    items.push(f);
                 }
         }
         if chain.is_empty()
             && let Some(f) = self.default_font(dw, weight, style) {
                 chain.push(f);
+                items.push(f);
             }
+        if !any_hidden {
+            items.clear();
+        }
+        let primary = chain.iter().copied().find(|&f| self.covers(f, 0x20)).or_else(|| chain.first().copied()).unwrap_or(0);
         let locale_name = q.lang.and_then(normalize_lang).or_else(|| normalize_lang(&self.default_locale)).unwrap_or_else(|| "en-US".to_string());
-        let base_name = chain.first().and_then(|&f| self.fonts.get(f as usize)).and_then(|e| e.font.family_name()).unwrap_or_else(|| "Segoe UI".to_string());
+        let base_name = chain.first().and_then(|&f| self.entry(f)).and_then(|e| e.font.as_ref()).and_then(|f| f.family_name()).unwrap_or_else(|| "Segoe UI".to_string());
         let info = QueryInfo {
             families: q.families.to_vec(),
             weight_bits: q.weight.to_bits(),
             slant: q.slant,
             lang: q.lang.map(str::to_string),
             chain,
+            items,
+            primary,
             loc: locale_hash(&locale_name),
             locale: wide_nul(&locale_name),
             base_family: wide_nul(&base_name),
@@ -535,7 +634,7 @@ impl Inner {
     }
 
     fn covers(&self, font: u32, cp: u32) -> bool {
-        self.fonts.get(font as usize).is_some_and(|e| e.glyph_of(cp) != 0)
+        self.entry(font).is_some_and(|e| e.in_ranges(cp) && e.glyph_of(cp) != 0)
     }
 
     /// The font that draws `c` for query `qi`: the first of the family list that has it, then the
@@ -559,12 +658,26 @@ impl Inner {
     }
 
     fn resolve_char(&mut self, dw: &Factory, qi: u32, q: &QueryInfo, cp: u32) -> Option<u32> {
-        if let Some(&f) = q.chain.iter().find(|&&f| self.covers(f, cp)) {
-            return Some(f);
+        // A hidden web face that has the character makes it invisible; the font that gives it room is the next one.
+        let mut hidden = 0u32;
+        if q.items.is_empty() {
+            if let Some(&f) = q.chain.iter().find(|&&f| self.covers(f, cp)) {
+                return Some(f);
+            }
+        } else {
+            for &it in &q.items {
+                if it & HIDDEN != 0 {
+                    if self.web.get((it & !HIDDEN) as usize).is_some_and(|w| w.desc.covers(cp)) {
+                        hidden = HIDDEN;
+                    }
+                } else if self.covers(it, cp) {
+                    return Some(it | hidden);
+                }
+            }
         }
         let sticky = self.sticky.get(qi as usize).cloned().unwrap_or_default();
         if let Some(&f) = sticky.iter().find(|&&f| self.covers(f, cp)) {
-            return Some(f);
+            return Some(f | hidden);
         }
         let c = char::from_u32(cp)?;
         let mut buf = [0u16; 2];
@@ -580,7 +693,7 @@ impl Inner {
             s.insert(0, f);
             s.truncate(4);
         }
-        Some(f)
+        Some(f | hidden)
     }
 
     fn shape_uncached(&mut self, dw: &Factory, text: &str, qi: u32, size: f32) -> Vec<Glyph> {
@@ -615,7 +728,13 @@ impl Inner {
                 b += 1;
             }
             if let Some(seg) = u16s.get(a..b) {
-                self.shape_segment(dw, &q, f, seg, a, &map, size, &mut out);
+                let before = out.len();
+                self.shape_segment(dw, &q, f & !HIDDEN, seg, a, &map, size, &mut out);
+                if f & HIDDEN != 0 {
+                    for g in out.iter_mut().skip(before) {
+                        g.font = FontId(g.font.0 | HIDDEN);
+                    }
+                }
             }
             a = b;
         }
@@ -634,7 +753,7 @@ impl Inner {
             if s.is_empty() || !s.chars().all(is_attached) {
                 continue;
             }
-            let Some(e) = self.fonts.get(g.font.0 as usize) else { continue };
+            let Some(e) = self.entry(g.font.0) else { continue };
             let sp = e.glyph_of(0x20);
             if sp == 0 {
                 continue;
@@ -648,7 +767,7 @@ impl Inner {
     /// per-character cache; everything between them is split into script runs and shaped whole.
     #[allow(clippy::too_many_arguments)]
     fn shape_segment(&mut self, dw: &Factory, q: &QueryInfo, fid: u32, seg: &[u16], base: usize, map: &[u32], size: f32, out: &mut Vec<Glyph>) {
-        let Some(entry) = self.fonts.get(fid as usize).cloned() else { return };
+        let Some(entry) = self.entry(fid).cloned() else { return };
         let mut i = 0usize;
         let mut pending = 0usize; // start of the stretch not yet shaped
         while i < seg.len() {
@@ -742,7 +861,7 @@ impl Inner {
             }
         }
         for ((fid, script, shapes), cs) in groups {
-            let Some(entry) = self.fonts.get(fid as usize).cloned() else { continue };
+            let Some(entry) = self.entry(fid).cloned() else { continue };
             for part in cs.chunks(BATCH_CHARS) {
                 self.shape_batch(dw, &q, fid, &entry, ScriptAnalysis { script, shapes }, part);
             }
@@ -798,7 +917,7 @@ impl Inner {
     fn prefetch_words(&mut self, dw: &Factory, qi: u32, words: &[&str]) {
         let Some(q) = self.queries.get(qi as usize).cloned() else { return };
         let Some(&fid) = q.chain.first() else { return };
-        let Some(entry) = self.fonts.get(fid as usize).cloned() else { return };
+        let Some(entry) = self.entry(fid).cloned() else { return };
         // All printable ASCII must come from the primary font, or the words would be split by fallback.
         if !(0x21u32..0x7F).all(|cp| self.covers(fid, cp)) {
             return;
@@ -1048,12 +1167,14 @@ impl Platform for WinPlatform {
     fn resolve_font(&self, query: &FontQuery<'_>) -> Option<FontId> {
         let mut inn = self.inner.borrow_mut();
         let qi = inn.query_index(&self.dw, query);
-        inn.queries.get(qi as usize)?.chain.first().map(|&f| FontId(f))
+        // It gives `ex`, `ch` and the strut; a web font whose `unicode-range` leaves out U+0020 is passed over.
+        let q = inn.queries.get(qi as usize)?;
+        (!q.chain.is_empty()).then_some(FontId(q.primary))
     }
 
     fn font_metrics(&self, font: FontId, size_px: f32) -> FontMetrics {
         let inn = self.inner.borrow();
-        let Some(e) = inn.fonts.get(font.0 as usize) else { return FontMetrics::default() };
+        let Some(e) = inn.entry(font.0) else { return FontMetrics::default() };
         let m = &e.m;
         let s = if size_px.is_finite() { size_px / m.units_per_em.max(1.0) } else { 0.0 };
         FontMetrics {
@@ -1104,6 +1225,75 @@ impl Platform for WinPlatform {
         inn.prefetch_words(&self.dw, qi, words);
     }
 
+    fn set_web_faces(&self, faces: &[FaceDesc]) {
+        let mut inn = self.inner.borrow_mut();
+        if inn.web.is_empty() && faces.is_empty() {
+            return;
+        }
+        // The faces of the page before go first (they use the bytes the loader holds), then the loader.
+        inn.web_fonts.clear();
+        inn.web_loader = None;
+        if inn.next_web_id > 0 {
+            // Font ids (16 bits wide in the display list) are used again from 0: nothing cached under the old ones may stay.
+            inn.next_web_id = 0;
+            inn.glyph_cache = Lru::new(GLYPH_CACHE_BYTES);
+            inn.simple = FxMap::default();
+            inn.words = FxMap::default();
+        }
+        inn.web = faces.iter().map(|d| WebFace { desc: d.clone(), state: WState::Fallback }).collect();
+        inn.web_by_family = FxMap::default();
+        for (i, d) in faces.iter().enumerate() {
+            inn.web_by_family.entry(d.family.clone()).or_default().push(i);
+        }
+        inn.invalidate_text();
+    }
+
+    fn set_web_face_state(&self, index: usize, state: WebFaceState) {
+        let mut inn = self.inner.borrow_mut();
+        if let Some(w) = inn.web.get_mut(index)
+            && matches!(w.state, WState::Fallback | WState::Hidden)
+        {
+            w.state = match state {
+                WebFaceState::Fallback => WState::Fallback,
+                WebFaceState::Hidden => WState::Hidden,
+            };
+            inn.invalidate_text();
+        }
+    }
+
+    fn load_web_face(&self, index: usize, sfnt: &[u8]) -> bool {
+        let mut inn = self.inner.borrow_mut();
+        if index >= inn.web.len() || inn.next_web_id >= 0x3000 {
+            return false;
+        }
+        if inn.web_loader.is_none() {
+            inn.web_loader = WebFontLoader::new(&self.dw);
+        }
+        let Some(face) = inn.web_loader.as_mut().and_then(|l| l.create_face(sfnt.to_vec())) else { return false };
+        let m = face.metrics();
+        let zero_advance = face.glyph_indices(&[u32::from(b'0')]).and_then(|v| v.first().copied()).filter(|&g| g != 0).and_then(|g| face.design_advance(g)).map(|a| a as f32);
+        let ranges: Option<Rc<[(u32, u32)]>> = inn.web.get(index).filter(|w| !w.desc.ranges.is_empty()).map(|w| w.desc.ranges.as_slice().into());
+        let id = WEB_BASE + inn.next_web_id;
+        inn.next_web_id += 1;
+        inn.web_fonts.insert(id, Rc::new(FontEntry { face, font: None, m, zero_advance, cmap: RefCell::new(FxMap::default()), ranges }));
+        if let Some(w) = inn.web.get_mut(index) {
+            w.state = WState::Ready(id);
+        }
+        inn.invalidate_text();
+        true
+    }
+
+    fn use_local_face(&self, index: usize, name: &str) -> bool {
+        let mut inn = self.inner.borrow_mut();
+        let Some(fi) = inn.find_family(&self.dw, name) else { return false };
+        match inn.web.get_mut(index) {
+            Some(w) => w.state = WState::Local(fi),
+            None => return false,
+        }
+        inn.invalidate_text();
+        true
+    }
+
     fn line_breaks(&self, text: &str, lang: Option<&str>) -> Vec<usize> {
         if text.len() < 2 {
             return Vec::new();
@@ -1148,6 +1338,9 @@ impl Platform for WinPlatform {
     }
 
     fn glyph_mask(&self, font: FontId, glyph: u32, size_px: f32, subpixel: u8) -> Option<Rc<GlyphMask>> {
+        if font.0 & HIDDEN != 0 {
+            return None;
+        }
         let sub = subpixel.min(3);
         let size = if size_px.is_finite() { size_px.clamp(0.01, 1024.0) } else { return None };
         let g = u16::try_from(glyph).ok()?;
@@ -1159,7 +1352,7 @@ impl Platform for WinPlatform {
             return r;
         }
         inn.stats.glyph_misses += 1;
-        let entry = inn.fonts.get(font.0 as usize)?.clone();
+        let entry = inn.entry(font.0)?.clone();
         let mask = self.dw.rasterize(&entry.face, g, size, f32::from(sub) / 4.0).map(|raw| {
             // ClearType 3x1 gives one coverage value per colour stripe; the mean is plain grayscale.
             let alpha: Vec<u8> = raw.rgb.as_chunks::<3>().0.iter().map(|p| (p.iter().map(|&b| u32::from(b)).sum::<u32>() / 3) as u8).collect();

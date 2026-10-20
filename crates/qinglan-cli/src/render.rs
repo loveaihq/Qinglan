@@ -112,6 +112,13 @@ pub fn run(mut cx: Ctx<'_>, a: &RenderArgs) -> ExitCode {
     let t_ready = Instant::now();
     let styled = style_document_with(&mut cx.opened.doc, Some(&doc_url), cx.res, &sopts, Some(cx.platform));
     let d_style = t_ready.elapsed();
+    qinglan_engine::net::blocking::load_fonts(cx.loader, cx.res, &cx.opened.doc, &styled, cx.platform, std::time::Duration::from_secs(10));
+    if cx.res.fonts.counts().0 > 0 {
+        let (declared, ready, failed) = cx.res.fonts.counts();
+        eprintln!("web fonts: {declared} faces declared, {ready} loaded, {failed} failed");
+    }
+    // `ex` and `ch` were measured before the fonts were there.
+    let styled = if cx.res.fonts.any_ready() { style_document_with(&mut cx.opened.doc, Some(&doc_url), cx.res, &sopts, Some(cx.platform)) } else { styled };
     for m in &styled.missing {
         eprintln!("warning: style sheet not found: {m}");
     }

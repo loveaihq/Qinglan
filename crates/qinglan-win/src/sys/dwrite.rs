@@ -33,6 +33,7 @@ const E_NOT_SUFFICIENT_BUFFER: HRESULT = 0x8007_007A_u32 as i32;
 
 const IID_IUNKNOWN: Guid = Guid { d1: 0, d2: 0, d3: 0, d4: [0xC0, 0, 0, 0, 0, 0, 0, 0x46] };
 const IID_IDWRITEFACTORY2: Guid = Guid { d1: 0x0439_fc60, d2: 0xca44, d3: 0x4994, d4: [0x8d, 0xee, 0x3a, 0x9a, 0xf7, 0xb7, 0x32, 0xec] };
+const IID_IDWRITEFACTORY5: Guid = Guid { d1: 0x958d_b99a, d2: 0xbe2a, d3: 0x4f09, d4: [0xaf, 0x7d, 0x65, 0x18, 0x98, 0x03, 0xd1, 0xd3] };
 const IID_IDWRITETEXTANALYSISSOURCE: Guid = Guid { d1: 0x688e_1a58, d2: 0x5094, d3: 0x47c8, d4: [0xad, 0xc8, 0xfb, 0xce, 0xa6, 0x0a, 0xe9, 0x2b] };
 const IID_IDWRITETEXTANALYSISSINK: Guid = Guid { d1: 0x5810_cd44, d2: 0x0ca0, d3: 0x4701, d4: [0xb3, 0xfa, 0xbe, 0xc5, 0x18, 0x2a, 0xe4, 0xf6] };
 
@@ -62,12 +63,42 @@ type Out<V> = *mut *mut Raw<V>;
 struct FactoryVtbl {
     base: UnknownVtbl,
     get_system_font_collection: unsafe extern "system" fn(P, Out<CollectionVtbl>, BOOL) -> HRESULT, // 3
-    _pad1: [usize; 17],                                                                              // 4..=20
+    _pad1a: [usize; 5],                                                                              // 4..=8
+    create_font_face: unsafe extern "system" fn(P, u32, u32, *const P, u32, u32, Out<FaceVtbl>) -> HRESULT, // 9 CreateFontFace
+    _pad1b: [usize; 3],                                                                              // 10..=12
+    register_font_file_loader: unsafe extern "system" fn(P, P) -> HRESULT,                           // 13
+    unregister_font_file_loader: unsafe extern "system" fn(P, P) -> HRESULT,                         // 14
+    _pad1c: [usize; 6],                                                                              // 15..=20
     create_text_analyzer: unsafe extern "system" fn(P, Out<AnalyzerVtbl>) -> HRESULT,                // 21
     _pad2: usize,                                                                                    // 22
     create_glyph_run_analysis: unsafe extern "system" fn(P, *const GlyphRun, f32, *const c_void, u32, u32, f32, f32, Out<GlyphRunAnalysisVtbl>) -> HRESULT, // 23
     _pad3: [usize; 2],                                                                               // 24, 25
     get_system_font_fallback: unsafe extern "system" fn(P, Out<FallbackVtbl>) -> HRESULT,            // 26
+}
+
+/// `IDWriteFactory5` (dwrite_3.h): 44 CreateInMemoryFontFileLoader (IDWriteFactory3 adds 31 to 39, Factory4 40 to 43).
+#[repr(C)]
+struct Factory5Vtbl {
+    base: UnknownVtbl,
+    _pad1: [usize; 41],                                                                        // 3..=43
+    create_in_memory_font_file_loader: unsafe extern "system" fn(P, Out<MemLoaderVtbl>) -> HRESULT, // 44
+}
+
+/// `IDWriteInMemoryFontFileLoader` (derives IDWriteFontFileLoader, whose only method is 3 CreateStreamFromKey):
+/// 4 CreateInMemoryFontFileReference.
+#[repr(C)]
+struct MemLoaderVtbl {
+    base: UnknownVtbl,
+    _pad1: usize, // 3
+    create_in_memory_font_file_reference: unsafe extern "system" fn(P, P, *const c_void, u32, P, Out<FontFileVtbl>) -> HRESULT, // 4
+}
+
+/// `IDWriteFontFile`: 3 GetReferenceKey, 4 GetLoader, 5 Analyze.
+#[repr(C)]
+struct FontFileVtbl {
+    base: UnknownVtbl,
+    _pad1: [usize; 2], // 3, 4
+    analyze: unsafe extern "system" fn(P, *mut BOOL, *mut u32, *mut u32, *mut u32) -> HRESULT, // 5
 }
 
 #[repr(C)]
@@ -745,6 +776,100 @@ pub fn warm(fonts: &[WarmFont<'_>]) -> Option<(Warm, usize)> {
     let _ = f.map_characters(&han, &to_wide_nul("zh-Hans"), &to_wide_nul("Segoe UI"), 400, 0);
     let n = faces.len();
     Some((Warm { _factory: f, _faces: faces }, n))
+}
+
+/// `QueryInterface` for another interface of the same object.
+fn query<V, W>(p: &ComPtr<V>, iid: &Guid) -> Option<ComPtr<W>> {
+    let mut out: P = null_mut();
+    // SAFETY: by `ComPtr`'s invariant the vtable starts with IUnknown's methods; `iid` and `out` are valid.
+    let hr = unsafe {
+        let vt = (*p.p.as_ptr()).vtbl as *const UnknownVtbl;
+        ((*vt).query_interface)(p.raw(), iid, &mut out)
+    };
+    if !hr_ok(hr) {
+        return None;
+    }
+    // SAFETY: on success `out` is a new reference to the interface asked for.
+    unsafe { ComPtr::from_raw(out.cast()) }
+}
+
+/// Fonts that came with a page, made from memory with `IDWriteInMemoryFontFileLoader` (Windows 10 1809 and later).
+/// The loader is registered with the factory for as long as this value lives; the font bytes are kept here too, so
+/// they outlive every face made from them (the loader may use them in place). Drop the faces first, then this.
+pub struct WebFontLoader {
+    factory: ComPtr<FactoryVtbl>,
+    loader: ComPtr<MemLoaderVtbl>,
+    data: Vec<Vec<u8>>,
+}
+
+impl WebFontLoader {
+    /// `None` when the system has no `IDWriteFactory5`.
+    pub fn new(dw: &Factory) -> Option<WebFontLoader> {
+        let f5: ComPtr<Factory5Vtbl> = query(&dw.factory, &IID_IDWRITEFACTORY5)?;
+        let mut out: *mut Raw<MemLoaderVtbl> = null_mut();
+        // SAFETY: live IDWriteFactory5, valid out pointer.
+        let hr = unsafe { vcall!(f5, create_in_memory_font_file_loader, &mut out) };
+        if !hr_ok(hr) {
+            return None;
+        }
+        // SAFETY: owned reference on success.
+        let loader = unsafe { ComPtr::from_raw(out) }?;
+        let factory: ComPtr<FactoryVtbl> = query(&dw.factory, &IID_IDWRITEFACTORY2)?;
+        // SAFETY: both are live; the in-memory loader derives from IDWriteFontFileLoader, which is what is registered.
+        let hr = unsafe { vcall!(factory, register_font_file_loader, loader.raw()) };
+        if !hr_ok(hr) {
+            return None;
+        }
+        Some(WebFontLoader { factory, loader, data: Vec::new() })
+    }
+
+    /// A font face for the font file `bytes` (an sfnt), or `None` when DirectWrite does not accept it.
+    pub fn create_face(&mut self, bytes: Vec<u8>) -> Option<Face> {
+        let len = u32::try_from(bytes.len()).ok()?;
+        self.data.push(bytes);
+        let face = self.make_face(len);
+        if face.is_none() {
+            self.data.pop();
+        }
+        face
+    }
+
+    fn make_face(&self, len: u32) -> Option<Face> {
+        let data = self.data.last()?;
+        let mut file: *mut Raw<FontFileVtbl> = null_mut();
+        // SAFETY: the loader and factory are live; `data` stays where it is as long as `self` lives (the buffer of
+        // a `Vec` does not move when the outer vector grows); a null owner means the loader keeps no reference.
+        let hr = unsafe { vcall!(self.loader, create_in_memory_font_file_reference, self.factory.raw(), data.as_ptr().cast(), len, null_mut(), &mut file) };
+        if !hr_ok(hr) {
+            return None;
+        }
+        // SAFETY: owned reference on success.
+        let file = unsafe { ComPtr::from_raw(file) }?;
+        let (mut supported, mut file_type, mut face_type, mut faces) = (0 as BOOL, 0u32, 0u32, 0u32);
+        // SAFETY: live font file, valid out pointers.
+        let hr = unsafe { vcall!(file, analyze, &mut supported, &mut file_type, &mut face_type, &mut faces) };
+        if !hr_ok(hr) || supported == 0 || faces == 0 {
+            return None;
+        }
+        let files = [file.raw()];
+        let mut out: *mut Raw<FaceVtbl> = null_mut();
+        // SAFETY: one live font file; face 0, no simulations.
+        let hr = unsafe { vcall!(self.factory, create_font_face, face_type, 1, files.as_ptr(), 0, 0, &mut out) };
+        if !hr_ok(hr) {
+            return None;
+        }
+        // SAFETY: owned reference on success.
+        unsafe { ComPtr::from_raw(out) }.map(|raw| Face { raw })
+    }
+}
+
+impl Drop for WebFontLoader {
+    fn drop(&mut self) {
+        // SAFETY: both pointers are live; this undoes the registration made in `new`.
+        unsafe {
+            vcall!(self.factory, unregister_font_file_loader, self.loader.raw());
+        }
+    }
 }
 
 /// The DirectWrite objects the platform needs.

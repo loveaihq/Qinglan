@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>web fonts</title>
+<style>
+@font-face { font-family: "Ahem"; src: url(../wpt/fonts/Ahem.ttf) format("truetype"); }
+@font-face { font-family: "NKo Web"; src: url(../../crates/qinglan-engine/tests/fixtures/fonts/NotoSansNko-regular-webfont.woff2) format("woff2"); }
+@font-face { font-family: "Revalia Web"; src: url(../../crates/qinglan-engine/tests/fixtures/fonts/Revalia.woff) format("woff"); font-display: swap; }
+@font-face { font-family: "Missing"; src: url(nothing-here.woff2) format("woff2"), local("Courier New"); }
+body { margin: 8px; font-size: 32px; font-family: serif }
+</style>
+<p style="font-family: Ahem">Ahem font XX</p>
+<p style="font-family: 'NKo Web', serif">&#x7CA;&#x7CB;&#x7CC; ABC</p>
+<p style="font-family: 'Revalia Web', serif">Revalia text</p>
+<p style="font-family: Missing, serif">Local Courier fallback</p>
+<p>Plain serif</p>

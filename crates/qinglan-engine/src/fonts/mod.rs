@@ -64,6 +64,7 @@ impl<'a> Rd<'a> {
         Rd { d, p: 0 }
     }
 
+    #[inline(never)]
     pub fn take(&mut self, n: usize) -> Result<&'a [u8], FontError> {
         let end = self.p.checked_add(n).ok_or(FontError::Truncated)?;
         let s = self.d.get(self.p..end).ok_or(FontError::Truncated)?;

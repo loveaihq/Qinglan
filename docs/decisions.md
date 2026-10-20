@@ -140,6 +140,11 @@
 | 网格里跨多条轨道的项（`resolve_intrinsic`） | 每项 2 + 4×跨度 单位；查一遍弹性轨道另计 跨度/8 | 剩下的跨轨道项不参与轨道尺寸，页面标记"不完整" |
 | 浮动放置（`floats.rs`） | 每轮 1 + 已有浮动数/4 单位（行内的 `line_band` 每次 1 + 浮动数/8） | 浮动停在当前位置，页面标记"不完整" |
 | 生成内容的盒子（`::before`/`::after`/引号/`counter`） | 文档节点数在 `MAX_NODES` 下留的空间的 1/4 | 后面的不生成，页面标记"不完整" |
+| 网页字体：单个字体解码后（`fonts::MAX_FONT_BYTES`；WOFF/WOFF2 声明的大小、Brotli/inflate 的输出都在分配前核对） | 8 MB | 这个字体不用，文字用下一个字体 |
+| 网页字体：一页所有字体解码后合计（`MAX_PAGE_FONT_BYTES`，计入内存，换页时释放） | 16 MB | 之后到的字体不用 |
+| 网页字体：字体文件的表数（`MAX_TABLES`） | 128 | 拒绝这个字体 |
+| 网页字体：每页 `@font-face` 规则 / 每页取的字面 / 取字体的请求 | 256 / 32 / 128 | 多的规则丢掉；其余字面不下载；`src` 里后面的不再试 |
+| 网页字体：每个字面的 `unicode-range` 范围数 / `src` 条数 | 512 / 16 | 多的丢掉 |
 
 ### 1a 审查后的补充（2026-10-15）
 
@@ -1382,3 +1387,49 @@ gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 
 - **内存**（滚到底后私有字节，5 轮最大值）：zhwiki-rec **47.11 MB**（旧 50.63，用电池那一轮；之前插电的旧值 47.3）；gh-ripgrep 23.27；gh-rust 21.13。滚动帧中位数 zhwiki-rec 12.1（电池，旧 12.5）、gh-ripgrep 10.7（旧 11.2）、gh-rust 14.0（旧 14.4）。
 - **体积**：`qinglan.exe` 2,253,824 → **2,268,672**（+14,848，预算 +20,480）。没有生成链接映射（`/MAP` 要改 `RUSTFLAGS`，这一步不许）；体积直接按文件字节量。
 - `cargo test --workspace --no-fail-fast`：412 通过（效果测试 33 里有一条的测试自己在调试版里 `u8` 溢出，改了再跑过）；`qinglan-cli wpt --check` 2403 / 2403；`cargo clippy --workspace --all-targets` 无警告。
+
+## 第 2 层 · 2d-1 网页字体（2026-10-20）
+
+代码：引擎 `fonts/`（`bits.rs`、`huff.rs`、`inflate.rs`、`brotli.rs`、`brotli_tables.rs`（生成）、`brotli_dict.z`、`sfnt.rs`、`woff.rs`、`woff2.rs`、`face.rs`）、`net/fonts.rs`（取字体、`font-display` 计时）、`css/stylesheet.rs`（`Rule::FontFace`）、`platform/mod.rs`（4 个新方法）；`qinglan-win` 的 `sys/dwrite.rs`（`IDWriteFactory5` 内存加载器）和 `platform.rs`；窗口 `qinglan-app`（`TIMER_FONT`、字体到达后合并进现有重排节流）；命令行 `render`/`record` 取字体、`wpt --win`。测试：`crates/qinglan-engine/tests/fonts.rs`（解码器）、`crates/qinglan-win/tests/webfonts.rs`（DirectWrite）、`crates/qinglan-cli/tests/hostile.rs`（3 个恶意字体）、WPT `css/css-fonts`。工具：`tools/make_font_vectors.py`、`tools/gen_brotli_tables.py`（只在做测试数据、生成表时用，不进产品）。
+
+### `@font-face`（css-fonts-4 第 4 节）
+- **从规则块的原文读，不用组件值**：`unicode-range: U+1E00-1EFF` 经过 CSS 分词变成数字和量纲（`1E00` 被当成指数），丢了十六进制。`fonts::face::parse_font_face` 自己按分号、逗号、引号、括号切文本。描述符：`font-family`（字符串或标识符序列，通用字体名无效）、`src`（`url()`、`local()`、`format()`、`tech()`）、`unicode-range`、`font-weight`/`font-stretch`/`font-style`（范围；`oblique` 带角度）、`font-display`；其余忽略（`size-adjust`、`ascent-override`、`font-variation-settings` 等没做）。没有 `font-family` 或没有可用 `src` 的规则丢掉。`url()` 按样式表地址取绝对地址。
+- `format()` 认 woff2、woff、truetype、opentype 和它们的 `-variations`，别的（svg、embedded-opentype）这一条跳过；`tech()` 认 variations、features-opentype、color-COLRv0/v1、palettes。
+- 同名规则都留着（保持声明顺序），`@media`/`@supports`/`@layer` 里的按条件算（走 `RuleSet::add_rules`），上限 256 条。
+
+### 字体匹配（5.2）
+- `rank_faces`：同一个 family 的所有字面按"拉伸（想要 100%）、样式、粗细"排成一个次序，同分时后声明的在前。粗细按 5.2 的三条规则（< 400、> 500、400 到 500 先升到 500 再降再升），样式按 normal/italic/oblique 的优先次序，拉伸先包含再窄再宽。排出的次序对每个字符都成立，所以平台只要"次序中第一个 `unicode-range` 含这个字符、字体里也有这个字符的"，结果和 5.2 对"含这个字符的字面"做匹配一样（测试 `font-weight-search-direction` 的网页字体那一半对）。
+- **没有 `font-stretch` 属性**：样式引擎里没有（`FontQuery` 没有拉伸），所以只会要 `normal`；描述符读了、排了，但选不到别的宽度。WPT `font-stretch-02…15` 因此失败，写在 `notes.txt`（`limit (font-stretch)`），留给以后的一步。
+- **带 `unicode-range` 的字面会让"第一个字体"变化**（5.1 "first available font"）：`resolve_font` 返回家族表里第一个有空格（U+0020）的字体，它给 `ex`、`ch` 和 strut；不含空格的子集字面跳过。`first-available-font-001…007` 全过。
+- **有同名网页字体的 family 不再用安装的同名字体**（4.1）；一个字面没加载好、失败、或还在 `swap` 以外时，家族表里没有它，字符落到下一个 family。
+
+### 取字体（`net/fonts.rs`）
+- 样式算完就开始：`PageResources::start_fonts` 把所有字面告诉平台（`set_web_faces`，全部"不可用"），然后只取页面用得到的：对每个不同的（family 列表、粗细、斜体）——来自所有计算样式去重——按 `rank_faces` 的次序取，跳过 `unicode-range` 和页面文字用到的 Unicode 块（每块 256 个码位，扫一遍文本节点）都不相交的字面，跳过范围和已选字面完全相同的。没有 `@font-face` 的页面一点工作都没有（`set_web_faces(&[])` 在平台上是空操作）。
+- 取字体是子资源，`ResourceKind::Font`：混合内容（https 页的 http 字体）拒绝、`file:` 页可以加载 `file:` 字体、`data:` 可以，规则和图片完全一样（`policy::plan` 没有为字体改一行）；优先级和样式表同档；响应上限 8 MB。**不做 CORS**：字体是跨源取的、不检查 `Access-Control-Allow-Origin`——这个浏览器没有脚本，没有跨源读取的问题，但和浏览器不一样（浏览器会拒绝没有 CORS 头的跨源字体）。这一条是有意的偏离，记在这里。
+- `src` 按顺序试：`local(名字)` 用安装的字体族（`FindFamilyName`，不认全名和 PostScript 名）；`url()` 请求，失败（网络、HTTP 错误、解码失败、DirectWrite 不收、超过合计上限）就试下一条；都不行字面失败。
+- **`font-display`**（4.5）：`auto`/`block` 3 秒块期，之后一直换；`swap` 没有块期；`fallback` 100 ms 块期、3 秒换期；`optional` 100 ms、没有换期（块期之后才到的字体不用）。块期里字面是"隐藏"：这个字面 `unicode-range` 内的字符用下一个字体的字形和宽度排版但不画（`HIDDEN` 位，见下）；块期结束（`TIMER_FONT`）变成"不可用"，字体到了再变成可用；每次变化都请求一次重排，合并进现有的重排节流（`relayout.request()` + `plan_relayout()`，滚动时推迟）。注意：这样的重排也计入 `image_relayouts`。
+- **`ex`/`ch` 在窗口里用回退字体量**：样式在取字体之前算，窗口不为字体重算样式；命令行（`render`、WPT）在字体到齐后重算一次样式。记为限制。没做合成粗体/斜体（网页字体缺粗体时不加粗；系统字体 DirectWrite 照旧合成）、`size-adjust` 和各种 override。
+
+### 解码器（纯 Rust，`forbid(unsafe_code)`，clippy 禁下标和 panic；输入全不可信）
+- **inflate**（RFC 1951）+ zlib 外壳（RFC 1950，核对 Adler-32）：一个按 8 位查表、更长的码一位一位走的前缀码解码器（`huff.rs`，Brotli 共用）；输出上限由调用方给（WOFF 里是该表声明的 `origLength`），超了立即 `TooLarge`；每个块至少吃输入，所以工作量和输入加（有上限的）输出成正比。
+- **Brotli**（RFC 7932）：完整：窗口位、元数据块、非压缩块、块类型切换、上下文映射（含逆移到前）、简单和复杂前缀码、距离短码和 NPOSTFIX/NDIRECT、静态字典和 121 种变换（表由 `tools/gen_brotli_tables.py` 从 google/brotli 的 `transform.c`/`context.c` 生成，UTF-8 上下文表 512 字节）。元块声明的长度在读它之前就和剩余上限比；一个命令至少吃输入或产出 2 字节，字典词变换成空的算错（防零进度循环）。**静态字典**（122,784 字节）以 deflate 压缩的形式放在 exe 里：**58,898 字节**（zlib 9 级的原始 deflate；`brotli_dict.z`），第一次有流引用字典时 inflate 出来放进 `OnceLock`（进程里留 122 KB 堆）。
+- **WOFF 1.0**：头、目录、每张表 zlib 或原样；声明的 `totalSfntSize` 和各表 `origLength` 之和先和 8 MB 比；表按标签排序重写成 sfnt（`sfnt.rs`：4 字节对齐、重算目录校验和和 `head.checkSumAdjustment`）。
+- **WOFF2**：表目录（UIntBase128、63 个已知标签号、变换版本）、一个 Brotli 流、`glyf`/`loca` 变换的还原（5.1：各个流、三元组坐标、复合字形、bbox 位图、`overlapSimpleBitmap`）、`hmtx` 变换（5.4）。**字体集（`ttcf`）拒绝**（`Unsupported`），不便宜。还原出的字形用标准 glyf 编码重写（带重复标志压缩）。声明的各表长度之和先和上限比，Brotli 的输出上限就是这个和，实际长度必须相等。
+- **恶意输入**：`tests/fonts.rs`：Brotli 官方测试向量（`google/brotli` 的 `tests/testdata`，MIT，`tests/fixtures/brotli/LICENSE`）14 对加 `empty.compressed.00…18`、`x.compressed.00…03` 共 37 个，全部和期望输出一致；`monkey.compressed` 的每个前缀、每一位翻转、`quickfox_repeated.compressed` 每一位翻转都不 panic；WOFF2/WOFF 的前缀和改字节；声明 1 GB 的 WOFF2/WOFF（整体和单表）在分配前 `TooLarge`；Brotli 炸弹（600 个 1 MB 元块，输入 750 KB）在上限处停。`hostile.rs` 三个整页用例：WOFF2 声称 1 GB 的表、Brotli 炸弹、zlib 炸弹（声明 4 MB、流 100 MB）。向量字体来自 WPT 的 `fonts/`（OFL/BSD，`tests/fixtures/fonts/NOTICE-fonts.txt`）：WOFF 3 个（和期望的 sfnt 逐字节相同）、WOFF2 2 个（Noto Sans N'Ko、Mongolian：除 `glyf`/`loca`/`head` 外各表逐字节相同，字形头相同，字形外形由 `qinglan-win/tests/webfonts.rs` 用 DirectWrite 画出来逐像素比，相同）。期望输出由 fontTools（`tools/make_font_vectors.py`，只在做数据时用，不进仓库的构建）解出。
+
+### DirectWrite（`sys/dwrite.rs`、`platform.rs`）
+- `IDWriteFactory5::CreateInMemoryFontFileLoader`（Windows 10 1809 起）。槽号按 `dwrite.h`/`dwrite_3.h` 逐个数，用脚本核对：`IDWriteFactory` 9 CreateFontFace、13 RegisterFontFileLoader、14 UnregisterFontFileLoader；`IDWriteFactory5` 44 CreateInMemoryFontFileLoader（IID 958DB99A-BE2A-4F09-AF7D-65189803D1D3）；`IDWriteInMemoryFontFileLoader` 4 CreateInMemoryFontFileReference；`IDWriteFontFile` 5 Analyze。`WebFontLoader` 持有加载器（注册着）和字体字节（加载器可能直接用它们，所以放到字面全丢掉之后才放；也可能多一份拷贝）。DirectWrite 不收的字体（`Analyze` 不支持）→ `load_web_face` 返回 false，字面保持不可用。
+- **字体号**：`PlacedGlyph::font` 是 `u16`，所以网页字体号放在 0x4000 起（一页最多 0x3000 个），0x8000 位是"隐藏"；系统字体号（≤ 512）在下面。网页字体在自己的表里（`web_fonts`），换页时清掉（字面全丢，字体面释放，加载器注销），字体号从 0 重新用，所以同时清掉按字体号做键的缓存（字形遮罩、单字、词）。字面状态一变，所有按查询算好的东西（家族表、选字体的缓存、整形缓存）作废。
+- 一个字面的 `unicode-range` 放在字体条目里（`covers` 检查它），所以家族表里的字面像普通字体一样参加"第一个有这个字符的"。隐藏字面在 `items` 里占位；字符落在隐藏字面的范围内就带上 `HIDDEN` 位，宽度和字形来自后面的字体，`glyph_mask` 返回 `None`。
+- 测试：WOFF2 解出的字体和同一字体的 TrueType 画出的字形逐像素相同（19 个字符）；坏字体被拒；`unicode-range` 之外落到下一个字体；隐藏时占位相同、不画、度量有；换成"不可用"后和没有网页字体时的整形相同。
+
+### 数据（release；插电 `BatteryStatus = 2`；机器上有一个 Emulator.exe，CPU 负载约 25%，没有 cargo/rustc/qpdf 在跑）
+- **exe**：2,480,640 字节，比 2d-1 之前的 2,268,672 多 **211,968**，**超出 2d-1 的 +150 KB（2,422,272）58,368 字节**。没有压回去：静态字典 58,898（固定），其余约 153 KB 是解码器、`@font-face` 解析、取字体、DirectWrite 加载和窗口代码；把解码器的位读取、前缀码解码、`Rd::take` 标成不内联省了 17,920。继续压要么放弃 WOFF2（字典），要么把解码器放到 `opt-level = "z"` 的单独 crate，这一步没做，留给第 2 层最后统一压。
+- **内存**（`qinglan.exe --bench`，zhwiki-rec 1920×1080，5 次新进程，滚到底）：46.05、45.99、46.01、47.41、45.56 MB，最大 47.41 MB（≤ 50）。
+- **首屏**（同上，5 次，毫秒，排序）：zhwiki-rec 127.4 / 140.1 / 140.9 / 144.3 / 187.6（中位数 140.9）；gh-ripgrep 131.1 / 178.6 / 189.6 / 211.6 / 213.4（中位数 189.6，抖动大，两个里最慢的两次超过 200）。两页都没有 `@font-face`，所以网页字体对它们只多了 `set_web_faces(&[])`（空操作）和 `resolve_font` 里一次缓存的主字体。
+- **WPT** `css/css-fonts`（`--win`，51 个）：**32 / 51（62.7%）**，bug 类 3（`separators`、`font-default-01`、`font-face-unicode-range-2`，各有 `notes.txt` 一行说明没修的原因），其余 16 个是已知限制（`font-stretch` 属性 12、`rex`/`ric` 单位 2、系统字体粗细匹配 1、默认字体 1，都在 `notes.txt`）。`wpt --check` 2435 / 2435（原 2403 + 新的 32，`passing-win.txt`）。怎么挑的：`tests/wpt/README.md`。
+- **真实网页**（`qinglan-cli record` + `render --replay`，1280×2400）：gov-uk 声明 4 个字面、加载 2 个，页面用的 GDS Transport 字体出来了（和 Edge 的字形一致）；mdn-div 声明 13 个、加载 6 个；jvns 声明 20 个（KaTeX 数学字体）、没取（页面没用）。旧的录制里没有字体文件（当时不取），所以重新录了这 3 页的字体。
+
+### 没做 / 留给后面
+- `font-stretch` 属性；`size-adjust`/`ascent-override` 等描述符；`font-variation-settings`；合成粗体斜体；窗口里字体到达后为 `ex`/`ch` 重算样式；字体集（`ttcf`）的 WOFF2；彩色字体的 `tech()` 之外的（2d-2 做彩色 emoji）。
+- 评审（2d 之后统一做）要看的：`woff2.rs` 的 `reconstruct_glyf`（三元组、复合字形、bbox 位图）、`brotli.rs` 的 `meta_block`（块切换、上下文映射、字典引用）、`fonts/face.rs` 的文本解析（括号和引号嵌套）。

@@ -50,7 +50,7 @@ impl<'a> BitReader<'a> {
         Ok(())
     }
 
-    #[inline]
+    #[inline(never)]
     pub fn read(&mut self, k: u32) -> Result<u32, FontError> {
         if k == 0 {
             return Ok(0);

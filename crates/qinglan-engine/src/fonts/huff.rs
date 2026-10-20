@@ -84,7 +84,7 @@ impl Huff {
         Ok(Huff { fast, count, syms, single: None })
     }
 
-    #[inline]
+    #[inline(never)]
     pub fn decode(&self, br: &mut BitReader<'_>) -> Result<u16, FontError> {
         if let Some(s) = self.single {
             return Ok(s);

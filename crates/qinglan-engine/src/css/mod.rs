@@ -78,6 +78,8 @@ pub struct StyleOutput {
     pub author_rules: usize,
     /// Style sheets that could not be loaded.
     pub missing: Vec<String>,
+    /// The `@font-face` rules of the author sheets that apply, in order of declaration.
+    pub font_faces: Vec<crate::fonts::face::FontFaceRule>,
     /// Time per phase; the durations are zero unless `StyleOptions::profile` was set.
     pub timings: StyleTimings,
 }
@@ -395,7 +397,7 @@ pub fn style_document_with(
         })
     };
     clock.lap(&mut timings.cascade);
-    StyleOutput { tree, sheets, author_rules, missing, timings }
+    StyleOutput { tree, sheets, author_rules, missing, font_faces: author.take_font_faces(), timings }
 }
 
 /// A stopwatch that does nothing when profiling is off.

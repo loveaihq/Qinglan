@@ -15,9 +15,10 @@
 
 use std::sync::Arc;
 
+use super::fonts::FontLoads;
 use super::loader::{LoadEvent, LoadRequest, Loader, Ticket};
 use super::{ResourceKind, Response, content, policy};
-use crate::css::{MAX_SHEETS, ResourceLoader, StyleOptions, base_url, linked_stylesheets, scan_imports};
+use crate::css::{MAX_SHEETS, ResourceLoader, StyleOptions, StyleOutput, base_url, linked_stylesheets, scan_imports};
 use crate::encoding::{Encoding, decode_stylesheet};
 use crate::html::atoms::FxHashMap;
 use crate::html::dom::{Document, NodeId};
@@ -51,6 +52,8 @@ pub enum Update {
     Sheet { url: String, ok: bool },
     /// The bytes (or the failure) of an image for every node that uses it.
     Image { nodes: Vec<NodeId>, url: Url, result: Result<Arc<Response>, String> },
+    /// A web font arrived or failed. `changed`: text looks different now (a face is usable, or invisible text shows).
+    Font { changed: bool },
 }
 
 pub struct PageResources {
@@ -68,6 +71,8 @@ pub struct PageResources {
     pending_images: usize,
     /// Answer from the loader's back/forward cache when it can (history navigation).
     pub use_cache: bool,
+    /// The page's `@font-face` fonts.
+    pub fonts: FontLoads,
 }
 
 impl PageResources {
@@ -87,6 +92,7 @@ impl PageResources {
             image_count: 0,
             pending_images: 0,
             use_cache: false,
+            fonts: FontLoads::default(),
         }
     }
 
@@ -124,6 +130,11 @@ impl PageResources {
                 false
             }
         }
+    }
+
+    /// After styling: declare the `@font-face` faces to the platform and fetch the ones the page's text can use.
+    pub fn start_fonts(&mut self, doc: &Document, styled: &StyleOutput, loader: &mut Loader, platform: &dyn Platform) {
+        self.fonts.start(doc, styled, &self.page, self.use_cache, loader, platform);
     }
 
     /// Style sheets submitted and not yet answered (imports included).
@@ -209,6 +220,10 @@ impl PageResources {
 
     /// Process one loader event. `None` when the ticket is not one of this page's (the caller's own).
     pub fn handle(&mut self, loader: &mut Loader, ev: LoadEvent, platform: &dyn Platform) -> Option<Update> {
+        if self.fonts.owns(ev.ticket) {
+            let changed = self.fonts.handle(ev, &self.page, self.use_cache, loader, platform, std::time::Instant::now());
+            return Some(Update::Font { changed });
+        }
         let waiter = self.waiting.remove(&ev.ticket)?;
         match waiter {
             Waiter::Sheet { key, depth } => {

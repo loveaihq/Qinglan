@@ -428,8 +428,8 @@ impl Decoder<'_> {
             for _ in 0..ins_len {
                 let bt = lit_b.next(br)?;
                 let n = out.len();
-                let p1 = if n >= 1 { at(&out, n - 1)? } else { 0 };
-                let p2 = if n >= 2 { at(&out, n - 2)? } else { 0 };
+                let p1 = if n >= 1 { at(out, n - 1)? } else { 0 };
+                let p2 = if n >= 2 { at(out, n - 2)? } else { 0 };
                 let ctx = literal_context(at(&modes, bt)?, p1, p2);
                 let tree = usize::from(at(&lit_map, bt * 64 + ctx)?);
                 let byte = at_ref(&lit_codes, tree)?.decode(br)?;
@@ -462,7 +462,7 @@ impl Decoder<'_> {
                     out.extend_from_within(start..start + copy_len);
                 } else {
                     for k in 0..copy_len {
-                        let b = at(&out, start + k)?;
+                        let b = at(out, start + k)?;
                         out.push(b);
                     }
                 }
@@ -573,10 +573,10 @@ fn transform(word: &[u8], id: usize, out: &mut Vec<u8>) -> Result<(), FontError>
 fn upper(p: &mut [u8]) -> usize {
     let Some(&b0) = p.first() else { return 1 };
     if b0 < 0xC0 {
-        if b0.is_ascii_lowercase() {
-            if let Some(b) = p.first_mut() {
-                *b ^= 32;
-            }
+        if b0.is_ascii_lowercase()
+            && let Some(b) = p.first_mut()
+        {
+            *b ^= 32;
         }
         1
     } else if b0 < 0xE0 {

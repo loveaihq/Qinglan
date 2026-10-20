@@ -142,6 +142,7 @@ pub struct RuleSet {
     /// The rules of `::before`, `::after` and `::marker` (matched against the element they belong to).
     pseudo_rules: Vec<IndexedRule>,
     pseudo: Buckets,
+    font_faces: Vec<Rc<crate::fonts::face::FontFaceRule>>,
 }
 
 impl Default for RuleSet {
@@ -162,7 +163,13 @@ impl RuleSet {
             next_order: 0,
             pseudo_rules: Vec::new(),
             pseudo: Buckets::default(),
+            font_faces: Vec::new(),
         }
+    }
+
+    /// The `@font-face` rules of the sheets added (the media that apply), in order.
+    pub fn take_font_faces(&mut self) -> Vec<crate::fonts::face::FontFaceRule> {
+        std::mem::take(&mut self.font_faces).iter().map(|r| (**r).clone()).collect()
     }
 
     /// The attribute selectors some rule tests (their outcomes are part of an element's matching signature).
@@ -206,6 +213,11 @@ impl RuleSet {
                         None => self.layers.child(layer, None),
                     };
                     self.add_rules(inner, origin, env, node, depth, resolver);
+                }
+                Rule::FontFace(f) => {
+                    if self.font_faces.len() < crate::fonts::face::MAX_FACES {
+                        self.font_faces.push(f.clone());
+                    }
                 }
                 Rule::LayerStatement(names) => {
                     for p in names {

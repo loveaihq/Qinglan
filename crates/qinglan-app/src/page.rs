@@ -100,6 +100,13 @@ impl Page {
         self.styled = Some(out);
     }
 
+    /// Declare the page's `@font-face` faces to the platform and fetch the ones its text uses.
+    pub fn start_fonts(&mut self, loader: &mut Loader, platform: &dyn Platform) {
+        if let Some(styled) = &self.styled {
+            self.res.start_fonts(&self.doc, styled, loader, platform);
+        }
+    }
+
     /// Lay out and make the display list. With `stop_y` the layout stops that far down the page (first-screen-first);
     /// a layout that stopped has no hit-testing index.
     pub fn layout(&mut self, platform: &dyn Platform, vp: Viewport, stop_y: Option<f32>) {
@@ -200,6 +207,7 @@ impl Page {
         match self.res.handle(loader, ev, platform)? {
             Update::Sheet { .. } => Some(PageUpdate::Sheet),
             Update::Image { nodes, url, result } => Some(PageUpdate::Image(self.apply_image(&nodes, &url, result))),
+            Update::Font { changed } => Some(PageUpdate::Font(changed)),
         }
     }
 
@@ -272,4 +280,6 @@ impl Page {
 pub enum PageUpdate {
     Sheet,
     Image(Effect),
+    /// A web font arrived or failed; true when the text looks different (lay out again).
+    Font(bool),
 }

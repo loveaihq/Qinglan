@@ -373,6 +373,8 @@ fn main() -> ExitCode {
     let t_sheets = t0.elapsed();
     let doc_url = opened.url.clone();
     let out = style_document_with(&mut opened.doc, Some(&doc_url), &mut res, &sopts, Some(platform));
+    // Web fonts: fetched (so that `record` keeps them), not used by the dumps.
+    blocking::load_fonts(&mut loader, &mut res, &opened.doc, &out, platform, SHEET_TIMEOUT);
     let t_style = t0.elapsed();
     let failed = res.failed_sheets();
     for (u, why) in &failed {

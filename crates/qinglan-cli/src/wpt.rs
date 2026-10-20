@@ -29,7 +29,8 @@ use qinglan_engine::net::{NetError, Request, Response, Transport};
 use qinglan_engine::paint::build_display_list;
 use qinglan_engine::paint::images::{Band, ImageStore};
 use qinglan_engine::paint::raster::{Frame, View, render_frame};
-use qinglan_engine::platform::TestPlatform;
+use qinglan_engine::platform::{Platform, TestPlatform};
+use qinglan_win::WinPlatform;
 use qinglan_engine::url::Url;
 use qinglan_win::WicDecoder;
 
@@ -221,15 +222,24 @@ fn scan(text: String) -> TestInfo {
     info
 }
 
+/// `--win`: render with the Windows platform (DirectWrite) instead of the test platform. Needed for what depends on real
+/// fonts, the `@font-face` tests; its passing list is `passing-win.txt`.
+static WIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn win_mode() -> bool {
+    WIN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 struct Runner {
     root: PathBuf,
+    win: Option<WinPlatform>,
     loader: Loader,
     frames: HashMap<String, Arc<Frame>>,
 }
 
 impl Runner {
     fn new(root: &Path) -> Runner {
-        Runner { root: root.to_path_buf(), loader: Loader::without_wake(Arc::new(WptTransport { root: root.to_path_buf() })), frames: HashMap::new() }
+        Runner { root: root.to_path_buf(), win: if win_mode() { WinPlatform::new() } else { None }, loader: Loader::without_wake(Arc::new(WptTransport { root: root.to_path_buf() })), frames: HashMap::new() }
     }
 
     fn source(&self, rel: &str) -> String {
@@ -243,7 +253,10 @@ impl Runner {
         if let Some(f) = self.frames.get(&key) {
             return Ok(f.clone());
         }
-        let platform = &TestPlatform;
+        let platform: &dyn Platform = match &self.win {
+            Some(w) => w,
+            None => &TestPlatform,
+        };
         let mut opened = match blocking::open(&mut self.loader, url, platform, OPEN_TIMEOUT) {
             OpenResult::Page(p) if p.status < 400 => p,
             OpenResult::Page(p) => return Err(format!("{} answered HTTP {}", url.pathname(), p.status)),
@@ -256,6 +269,9 @@ impl Runner {
         blocking::load_sheets(&mut self.loader, &mut res, platform, Duration::from_secs(10));
         let doc_url = opened.url.clone();
         let styled = style_document_with(&mut opened.doc, Some(&doc_url), &mut res, &sopts, Some(platform));
+        blocking::load_fonts(&mut self.loader, &mut res, &opened.doc, &styled, platform, Duration::from_secs(10));
+        // `ex` and `ch` were measured before the fonts were there.
+        let styled = if res.fonts.any_ready() { style_document_with(&mut opened.doc, Some(&doc_url), &mut res, &sopts, Some(platform)) } else { styled };
         let lopts = LayoutOptions { viewport_w: W as f32, viewport_h: H as f32, ..LayoutOptions::default() };
         let mut sizes = ImageSizes::new();
         let mut store = ImageStore::new();
@@ -411,7 +427,7 @@ fn classify(src: &str) -> Option<(&'static str, &'static str)> {
     if has(&["mix-blend", "background-blend", "cross-fade(", "image-set(", "element(", "paint(", "-webkit-gradient", "-moz-", "border-image", "color-mix(", "light-dark(", "color(", "currentcolor/", "sibling-index", "anchor("]) {
         return Some(("none", "a feature layer 2 does not do (blend modes, border-image, cross-fade, image-set, element(), color-mix ...)"));
     }
-    if has(&["@font-face", "writing-mode", "direction:rtl", "direction:ltr", "unicode-bidi", "<ruby", "dir=\"rtl\""]) {
+    if has(&["writing-mode", "direction:rtl", "direction:ltr", "unicode-bidi", "<ruby", "dir=\"rtl\""]) {
         return Some(("2d", "text features"));
     }
     if has(&["<svg", "position:sticky", "overflow:auto", "overflow:scroll", "<input", "<button", "<select", "<textarea"]) {
@@ -514,6 +530,7 @@ pub fn main(args: &[String]) -> ExitCode {
             },
             "--update" => update = true,
             "--check" => check = true,
+            "--win" => WIN.store(true, std::sync::atomic::Ordering::Relaxed),
             d if !d.starts_with('-') => dirs.push(d.trim_matches('/').to_string()),
             _ => return usage(),
         }
@@ -533,31 +550,40 @@ pub fn main(args: &[String]) -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: qinglan-cli wpt [--root tests/wpt] [--update] <dir>... | --check");
+    eprintln!("usage: qinglan-cli wpt [--root tests/wpt] [--update] [--win] <dir>... | --check");
     ExitCode::FAILURE
 }
 
 fn run_check(root: &Path) -> ExitCode {
-    let list = std::fs::read_to_string(root.join("passing.txt")).unwrap_or_default();
-    let tests: Vec<&str> = list.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
-    let mut r = Runner::new(root);
-    let dog = watchdog();
     let mut failed = 0;
-    for t in &tests {
-        let _ = dog.send(());
-        match run_one(&mut r, t) {
-            Outcome::Pass => {}
-            Outcome::Fail(why) => {
-                failed += 1;
-                println!("FAIL {t}: {why}");
-            }
-            Outcome::Skip(why) => {
-                failed += 1;
-                println!("FAIL {t}: not a test any more ({why})");
+    let mut total = 0;
+    // The test-platform list, then the Windows-platform list (the @font-face tests) when there is one.
+    for (name, win) in [("passing.txt", false), ("passing-win.txt", true)] {
+        let list = std::fs::read_to_string(root.join(name)).unwrap_or_default();
+        let tests: Vec<&str> = list.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
+        if tests.is_empty() {
+            continue;
+        }
+        WIN.store(win, std::sync::atomic::Ordering::Relaxed);
+        let mut r = Runner::new(root);
+        let dog = watchdog();
+        total += tests.len();
+        for t in &tests {
+            let _ = dog.send(());
+            match run_one(&mut r, t) {
+                Outcome::Pass => {}
+                Outcome::Fail(why) => {
+                    failed += 1;
+                    println!("FAIL {t}: {why}");
+                }
+                Outcome::Skip(why) => {
+                    failed += 1;
+                    println!("FAIL {t}: not a test any more ({why})");
+                }
             }
         }
     }
-    println!("wpt: {} of {} listed tests pass", tests.len() - failed, tests.len());
+    println!("wpt: {} of {} listed tests pass", total - failed, total);
     if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
 
@@ -601,7 +627,7 @@ fn run_dirs(root: &Path, dirs: &[String], update: bool) -> ExitCode {
         let bugs = fails.iter().filter(|f| f.1.starts_with("bug")).count();
         let pct = if judged == 0 { 0.0 } else { 100.0 * pass.len() as f64 / judged as f64 };
         let mut md = format!("# WPT `{dir}`\n\n");
-        md.push_str(&format!("测试平台（每个字 1em 见方），{W}×{H}，`qinglan-cli wpt {dir}`，用时 {:.1} 秒。\n\n", started.elapsed().as_secs_f64()));
+        md.push_str(&format!("{}，{W}×{H}，`qinglan-cli wpt {dir}`，用时 {:.1} 秒。\n\n", if win_mode() { "Windows 平台（DirectWrite，真字体）" } else { "测试平台（每个字 1em 见方）" }, started.elapsed().as_secs_f64()));
         md.push_str(&format!("- 通过 **{} / {judged}**（{pct:.1}%）\n- bug 类失败：**{bugs}**\n", pass.len()));
         let mut skip_list: Vec<_> = skipped.iter().collect();
         skip_list.sort();
@@ -622,7 +648,7 @@ fn run_dirs(root: &Path, dirs: &[String], update: bool) -> ExitCode {
         for t in &pass {
             md.push_str(&format!("- {}\n", t.trim_start_matches(&format!("{dir}/"))));
         }
-        let out = root.join(format!("RESULTS-{}.md", dir.replace('/', "-")));
+        let out = root.join(format!("RESULTS-{}{}.md", dir.replace('/', "-"), if win_mode() { "-win" } else { "" }));
         if let Err(e) = std::fs::write(&out, md) {
             eprintln!("error: cannot write {}: {e}", out.display());
             return ExitCode::FAILURE;
@@ -630,7 +656,7 @@ fn run_dirs(root: &Path, dirs: &[String], update: bool) -> ExitCode {
         println!("{dir}: {} / {judged} pass ({pct:.1}%), {bugs} bug-class failures, skipped {}", pass.len(), skip_text.join(", "));
         passing_new.extend(pass);
         if update {
-            let path = root.join("passing.txt");
+            let path = root.join(if win_mode() { "passing-win.txt" } else { "passing.txt" });
             let old = std::fs::read_to_string(&path).unwrap_or_default();
             let mut keep: Vec<String> = old.lines().filter(|l| !l.is_empty() && !l.starts_with(&format!("{dir}/"))).map(str::to_string).collect();
             keep.append(&mut passing_new);

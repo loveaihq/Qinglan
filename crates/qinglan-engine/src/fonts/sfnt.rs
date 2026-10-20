@@ -13,11 +13,10 @@ pub struct Table {
 
 fn checksum(data: &[u8]) -> u32 {
     let mut sum = 0u32;
-    let mut chunks = data.chunks_exact(4);
-    for c in chunks.by_ref() {
-        sum = sum.wrapping_add(u32::from_be_bytes([c.first().copied().unwrap_or(0), c.get(1).copied().unwrap_or(0), c.get(2).copied().unwrap_or(0), c.get(3).copied().unwrap_or(0)]));
+    let (words, rest) = data.as_chunks::<4>();
+    for c in words {
+        sum = sum.wrapping_add(u32::from_be_bytes(*c));
     }
-    let rest = chunks.remainder();
     if !rest.is_empty() {
         let mut w = [0u8; 4];
         for (d, s) in w.iter_mut().zip(rest) {

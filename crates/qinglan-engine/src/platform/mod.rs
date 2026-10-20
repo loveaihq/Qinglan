@@ -92,6 +92,16 @@ pub struct GlyphMask {
     pub alpha: Vec<u8>,
 }
 
+/// What the platform does with text in a web face that cannot be drawn yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WebFaceState {
+    /// Not usable (not loaded, failed): text goes on to the next family of the list.
+    Fallback,
+    /// Loading, inside the block period of `font-display`: text in the face's `unicode-range` takes the room of the
+    /// next family's font but is not drawn.
+    Hidden,
+}
+
 /// Services the engine asks of the host.
 pub trait Platform {
     /// Decode `bytes` from the legacy encoding `encoding`, a WHATWG encoding name such as
@@ -99,7 +109,7 @@ pub trait Platform {
     /// Returns `None` when the platform has no decoder for that encoding.
     fn decode_legacy(&self, encoding: &str, bytes: &[u8]) -> Option<String>;
 
-    /// The primary font for a query: the first family of the list that exists, or the platform's
+    /// The primary font for a query: the first family of the list that exists and has a space, or the platform's
     /// default font when none does. `None` only when the platform has no fonts at all.
     fn resolve_font(&self, query: &FontQuery<'_>) -> Option<FontId>;
 
@@ -116,6 +126,24 @@ pub trait Platform {
     /// is cheaper than one call per character or word later. It must not change what `shape` returns;
     /// the default does nothing.
     fn prefetch(&self, _chars: &str, _words: &[&str], _query: &FontQuery<'_>) {}
+
+    /// The `@font-face` faces of the page being shown, in order of declaration (replacing the earlier ones, whose fonts
+    /// are freed; an empty list is how a page is left). All start as [`WebFaceState::Fallback`]. A family with faces
+    /// shadows an installed font of the same name. The default does nothing (no web fonts).
+    fn set_web_faces(&self, _faces: &[crate::fonts::face::FaceDesc]) {}
+
+    fn set_web_face_state(&self, _index: usize, _state: WebFaceState) {}
+
+    /// Use the decoded font file `sfnt` (TrueType or OpenType) for face `index`. False when the platform cannot use
+    /// it: the face stays as it was.
+    fn load_web_face(&self, _index: usize, _sfnt: &[u8]) -> bool {
+        false
+    }
+
+    /// Use the installed font `name` for face `index` (`src: local(...)`). False when there is none.
+    fn use_local_face(&self, _index: usize, _name: &str) -> bool {
+        false
+    }
 
     /// Soft line-break opportunities of a whole paragraph (UAX #14): ascending byte offsets
     /// `o` (0 < o < `text.len()`) such that a line may end before `text[o..]`. No CSS is applied

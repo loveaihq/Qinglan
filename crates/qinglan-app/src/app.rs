@@ -35,6 +35,8 @@ const TIMER_CSS: usize = 1;
 const TIMER_RELAYOUT: usize = 2;
 const TIMER_BENCH: usize = 3;
 const TIMER_BENCH_STEP: usize = 4;
+/// The end of a `font-display` block period: invisible text is shown in the fallback font.
+const TIMER_FONT: usize = 5;
 const USER_BENCH_STEP: u32 = 1;
 /// How long the page waits for the style sheets of `<head>` (L1 task 17).
 const CSS_WAIT_MS: u32 = 5000;
@@ -330,6 +332,10 @@ impl Browser {
                 self.ui.kill_timer(TIMER_RELAYOUT);
                 self.plan_relayout();
             }
+            TIMER_FONT => {
+                self.ui.kill_timer(TIMER_FONT);
+                self.font_tick();
+            }
             TIMER_BENCH => self.bench_fail("timed out"),
             TIMER_BENCH_STEP => {
                 self.ui.kill_timer(TIMER_BENCH_STEP);
@@ -393,6 +399,13 @@ impl Browser {
             }
             Some(PageUpdate::Image(Effect::Relayout)) => self.request_image_relayout(),
             Some(PageUpdate::Image(Effect::Repaint)) => self.ui.invalidate(),
+            Some(PageUpdate::Font(changed)) => {
+                if changed {
+                    self.relayout.request();
+                    self.plan_relayout();
+                }
+                self.arm_font_timer();
+            }
             None => {}
         }
     }
@@ -657,6 +670,7 @@ impl Browser {
         }
         page.phase = Phase::Shown;
         page.style(&*platform, vp);
+        page.start_fonts(&mut self.loader, &*platform);
         let restore = page.restore.take();
         // A saved position wins over a fragment.
         let fragment = if restore.is_some() { None } else { page.fragment.take() };
@@ -688,10 +702,34 @@ impl Browser {
         self.update_scrollbar();
         self.update_notice();
         self.request_images();
+        self.arm_font_timer();
         self.ui.invalidate();
         if fragment.is_some() {
             self.paint();
         }
+    }
+
+    /// Wake up when the next `font-display` block period ends.
+    fn arm_font_timer(&mut self) {
+        let deadline = self.page.as_ref().and_then(|p| p.res.fonts.next_deadline());
+        match deadline {
+            Some(d) => {
+                let ms = d.saturating_duration_since(Instant::now()).as_millis().min(60_000) as u32;
+                self.ui.set_timer(TIMER_FONT, ms.max(1));
+            }
+            None => self.ui.kill_timer(TIMER_FONT),
+        }
+    }
+
+    /// A block period ran out: show that text in the fallback font.
+    fn font_tick(&mut self) {
+        let Some(platform) = self.platform.clone() else { return };
+        let changed = self.page.as_mut().is_some_and(|p| p.res.fonts.tick(Instant::now(), &*platform));
+        if changed {
+            self.relayout.request();
+            self.plan_relayout();
+        }
+        self.arm_font_timer();
     }
 
     fn mark_first_screen(&mut self) {

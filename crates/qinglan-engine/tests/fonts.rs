@@ -3,6 +3,8 @@
 //! Vectors: the Brotli test data of google/brotli (MIT, `fixtures/brotli/LICENSE`), fonts from the Web Platform
 //! Tests (`fixtures/fonts/NOTICE-fonts.txt`) and the expected output of `tools/make_font_vectors.py`.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -218,4 +220,58 @@ fn declared_sizes_are_checked_before_anything_is_allocated() {
     // Not a font at all.
     assert!(decode_font(b"<html>").is_err());
     assert!(decode_font(b"").is_err());
+}
+
+
+/// A Brotli stream of `blocks` meta-blocks of 958 * 1095 zero bytes (see `hostile.rs`, which builds the bombs).
+fn brotli_zeros(blocks: usize) -> Vec<u8> {
+    let (mut bytes, mut n) = (Vec::<u8>::new(), 0usize);
+    let mut put = |value: u64, count: usize| {
+        for i in 0..count {
+            if n.is_multiple_of(8) {
+                bytes.push(0);
+            }
+            if i < 64 && (value >> i) & 1 == 1 {
+                let last = bytes.len() - 1;
+                bytes[last] |= 1 << (n % 8);
+            }
+            n += 1;
+        }
+    };
+    put(0, 1);
+    let mlen: u64 = 958 * 1095;
+    for _ in 0..blocks {
+        put(0, 1);
+        put(2, 2);
+        put(mlen - 1, 24);
+        put(0, 1);
+        put(0, 3);
+        put(0, 2);
+        put(0, 4);
+        put(0, 2);
+        put(0, 2);
+        for (alphabet_bits, symbol) in [(8, 0u64), (10, 398), (6, 16)] {
+            put(1, 2);
+            put(0, 2);
+            put(symbol, alphabet_bits);
+        }
+        put(0, 11 * 958);
+    }
+    put(1, 1);
+    put(1, 1);
+    bytes
+}
+
+#[test]
+fn brotli_one_symbol_codes_and_bombs() {
+    let start = Instant::now();
+    let two = brotli::decompress(&brotli_zeros(2), 1 << 24).unwrap();
+    assert_eq!(two.len(), 2 * 958 * 1095);
+    assert!(two.iter().all(|&b| b == 0));
+    // 600 meta-blocks would be 630 MB: the cap stops it at once, however big the cap is allowed to be.
+    let bomb = brotli_zeros(600);
+    assert!(bomb.len() < 800_000, "{}", bomb.len());
+    assert_eq!(brotli::decompress(&bomb, 8_000_000), Err(FontError::TooLarge));
+    assert_eq!(brotli::decompress(&bomb, 1_000_000), Err(FontError::TooLarge));
+    assert!(start.elapsed() < Duration::from_secs(5), "{:?}", start.elapsed());
 }

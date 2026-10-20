@@ -2,7 +2,7 @@
 //! parsing of whole style sheets, `<style>` contents and `style=""` attributes
 //! (css-syntax-3, css-cascade-5, css-conditional-3, mediaqueries-4).
 //!
-//! `@font-face`, `@keyframes`, `@container`, `@page`, `@namespace` and other at-rules are ignored in
+//! `@keyframes`, `@container`, `@page`, `@namespace` and other at-rules are ignored in
 //! layer 1. CSS nesting is not supported (nested rules are dropped).
 
 use std::rc::Rc;
@@ -63,6 +63,8 @@ pub enum Rule {
     /// `@layer a, b.c;`
     LayerStatement(Vec<Vec<String>>),
     Import(ImportRule),
+    /// `@font-face`.
+    FontFace(Rc<crate::fonts::face::FontFaceRule>),
 }
 
 #[derive(Default)]
@@ -153,8 +155,16 @@ fn convert_rules(raw: Vec<LazyRule>, text: &str, ctx: &mut SheetCtx<'_>, top_lev
                     out.extend(convert_rules(inner_rules(r.block, text, ctx, depth), text, ctx, false, depth + 1));
                 }
             }
+            Some("font-face") => {
+                imports_allowed = false;
+                if let LazyBlock::Text(from, to) = r.block
+                    && let Some(rule) = text.get(from..to).and_then(|b| crate::fonts::face::parse_font_face(b, ctx.base.as_deref()))
+                {
+                    out.push(Rule::FontFace(Rc::new(rule)));
+                }
+            }
             Some(_) => {
-                // @font-face, @keyframes, @container, @page, @namespace, ...: ignored.
+                // @keyframes, @container, @page, @namespace, ...: ignored.
                 imports_allowed = false;
             }
         }
@@ -436,6 +446,7 @@ mod tests {
                 Rule::Layer(..) => "layer",
                 Rule::LayerStatement(_) => "layer-stmt",
                 Rule::Import(_) => "import",
+                Rule::FontFace(_) => "font-face",
             })
             .collect();
         assert_eq!(kinds, ["import", "style", "media", "layer-stmt", "layer", "style"]);
