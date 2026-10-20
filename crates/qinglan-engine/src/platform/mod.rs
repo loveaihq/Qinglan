@@ -155,6 +155,12 @@ pub trait Platform {
         Vec::new()
     }
 
+    /// `shape` for upright text in vertical writing (css-writing-modes-3 5.1): the vertical forms of the glyphs (OpenType `vert`)
+    /// are chosen. The default shapes it as horizontal text.
+    fn shape_upright(&self, text: &str, query: &FontQuery<'_>, size_px: f32) -> Vec<Glyph> {
+        self.shape(text, query, size_px)
+    }
+
     /// `shape` for text that runs right to left (an odd bidi level): joining and mark placement follow that direction and
     /// mirrored characters get their mirror image. The glyphs come in logical order of the clusters, as for `shape`, but the
     /// glyphs inside one cluster are in left-to-right drawing order. The default shapes as left to right.

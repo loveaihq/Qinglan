@@ -81,6 +81,10 @@ pub struct TextStyle {
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
     pub direction: Direction,
+    pub writing_mode: WritingMode,
+    pub text_orientation: TextOrientation,
+    pub text_combine: TextCombine,
+    pub ruby_position: RubyPosition,
     pub visibility: Visibility,
     pub cursor: CursorKind,
     pub list_style_type: ListStyleType,
@@ -289,6 +293,10 @@ impl TextStyle {
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,
             direction: Direction::Ltr,
+            writing_mode: WritingMode::HorizontalTb,
+            text_orientation: TextOrientation::Mixed,
+            text_combine: TextCombine::None,
+            ruby_position: RubyPosition::Over,
             visibility: Visibility::Visible,
             cursor: CursorKind::Auto,
             list_style_type: ListStyleType::Disc,
@@ -663,6 +671,10 @@ pub fn compute_text(parent: &Rc<TextStyle>, d: &Declared<'_>, ctx: &LenCtx, lang
     simple!(PropId::WordBreak, WordBreak, word_break);
     simple!(PropId::OverflowWrap, OverflowWrap, overflow_wrap);
     simple!(PropId::Direction, Direction, direction);
+    simple!(PropId::WritingMode, WritingMode, writing_mode);
+    simple!(PropId::TextOrientation, TextOrientation, text_orientation);
+    simple!(PropId::TextCombineUpright, TextCombine, text_combine);
+    simple!(PropId::RubyPosition, RubyPosition, ruby_position);
     simple!(PropId::Visibility, Visibility, visibility);
     simple!(PropId::Cursor, Cursor, cursor);
     simple!(PropId::ListStyleType, ListStyleType, list_style_type);
@@ -1281,6 +1293,10 @@ impl ComputedStyle {
         add(PropId::WordBreak, t.word_break.keyword().into());
         add(PropId::OverflowWrap, t.overflow_wrap.keyword().into());
         add(PropId::Direction, t.direction.keyword().into());
+        add(PropId::WritingMode, t.writing_mode.keyword().into());
+        add(PropId::TextOrientation, t.text_orientation.keyword().into());
+        add(PropId::TextCombineUpright, t.text_combine.keyword().into());
+        add(PropId::RubyPosition, t.ruby_position.keyword().into());
         add(PropId::Visibility, t.visibility.keyword().into());
         add(PropId::Cursor, t.cursor.keyword().into());
         add(PropId::ListStyleType, t.list_style_type.to_css());

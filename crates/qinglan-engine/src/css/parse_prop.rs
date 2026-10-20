@@ -1208,6 +1208,16 @@ fn parse_longhand(prop: PropId, cvs: &[Cv], items: &[&Cv], env: &ParseEnv) -> Op
         OverflowWrap => kw(one_ref?, super::types::OverflowWrap::from_keyword).map(Value::OverflowWrap),
         Direction => kw(one_ref?, super::types::Direction::from_keyword).map(Value::Direction),
         UnicodeBidi => kw(one_ref?, super::types::UnicodeBidi::from_keyword).map(Value::UnicodeBidi),
+        WritingMode => kw(one_ref?, |s| match s.to_ascii_lowercase().as_str() {
+            // css-writing-modes-3 2.1: the old SVG 1.1 values are aliases.
+            "lr" | "lr-tb" | "rl" | "rl-tb" => Some(super::types::WritingMode::HorizontalTb),
+            "tb" | "tb-rl" => Some(super::types::WritingMode::VerticalRl),
+            other => super::types::WritingMode::from_keyword(other),
+        })
+        .map(Value::WritingMode),
+        TextOrientation => kw(one_ref?, super::types::TextOrientation::from_keyword).map(Value::TextOrientation),
+        TextCombineUpright => kw(one_ref?, super::types::TextCombine::from_keyword).map(Value::TextCombine),
+        RubyPosition => kw(one_ref?, super::types::RubyPosition::from_keyword).map(Value::RubyPosition),
         Visibility => kw(one_ref?, super::types::Visibility::from_keyword).map(Value::Visibility),
         Cursor => parse_cursor(cvs),
         ListStyleType => parse_list_style_type(one_ref?),

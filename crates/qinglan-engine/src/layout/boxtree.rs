@@ -24,7 +24,7 @@ use crate::css::cascade::StyleTree;
 use crate::css::color::Color;
 use crate::css::computed::{BoxStyle, ComputedStyle};
 use crate::css::selector::PseudoElement;
-use crate::css::types::{Content, Dim, Display, Overflow, Position, TextWrapMode, WhiteSpaceCollapse};
+use crate::css::types::{Content, Dim, Display, Overflow, Position, RubyPosition, TextAlign, TextWrapMode, WhiteSpaceCollapse, WritingMode};
 use crate::css::values::Lp;
 use crate::html::atoms::{Atom, a};
 use crate::html::dom::{Document, MAX_NODES, NONE, Namespace, NodeData, NodeId};
@@ -120,6 +120,10 @@ pub struct LayoutBox {
     pub force_clip: bool,
     /// A flex item (an in-flow child of a flex container): it starts a formatting context of its own (flex.rs).
     pub flex_item: bool,
+    /// The root of a frame of its own (vertical.rs): its writing mode differs from the one its containing block lays its content out in.
+    pub froot: bool,
+    /// The writing mode of the frame the box sits in (meaningful for `froot` boxes).
+    pub pf: WritingMode,
 }
 
 /// The parts of a [`LayoutBox`] that most boxes do not have.
@@ -134,11 +138,15 @@ pub struct Rare {
     /// The text `::marker { content }` makes for a list item (empty: no marker); `None`: the usual marker.
     pub marker: Option<Rc<str>>,
     pub image: Option<ImageSource>,
+    /// The physical style of a box whose `style` is the logical view of a vertical frame.
+    pub phys: Option<Rc<ComputedStyle>>,
+    /// A ruby pair (atomic inline of an annotation and its base): 1 if the base block is the first child, 2 if the last.
+    pub ruby: u8,
 }
 
 impl Default for Rare {
     fn default() -> Self {
-        Rare { replaced: None, control: Control::None, synth: None, ordinal: None, marker: None, image: None }
+        Rare { replaced: None, control: Control::None, synth: None, ordinal: None, marker: None, image: None, phys: None, ruby: 0 }
     }
 }
 
@@ -159,7 +167,18 @@ impl LayoutBox {
             rare: None,
             force_clip: false,
             flex_item: false,
+            froot: false,
+            pf: WritingMode::HorizontalTb,
         }
+    }
+
+    /// The style as the author wrote it (physical sides): a box in a vertical frame keeps it beside its logical view.
+    pub fn pstyle(&self) -> &Rc<ComputedStyle> {
+        self.rare.as_ref().and_then(|r| r.phys.as_ref()).unwrap_or(&self.style)
+    }
+
+    pub(super) fn set_phys(&mut self, s: Rc<ComputedStyle>) {
+        self.rare_mut().phys = Some(s);
     }
 
     pub fn replaced(&self) -> Option<ReplacedKind> {
@@ -285,7 +304,7 @@ fn classify(d: Display) -> Gen {
         | Display::TableColumn
         | Display::TableCell
         | Display::TableCaption => Gen::Block(Some(d)),
-        Display::Ruby | Display::RubyText => Gen::Inline(Some(d)),
+        Display::Ruby | Display::RubyText | Display::RubyBase => Gen::Inline(Some(d)),
     }
 }
 
@@ -356,6 +375,8 @@ struct Builder<'a> {
     canvas: Option<Atom>,
     meter: Option<Atom>,
     progress: Option<Atom>,
+    /// Some element uses a vertical writing mode (the frames of vertical.rs are only worked out then).
+    vertical: bool,
 }
 
 /// Build the box tree of a styled document (no image sizes known).
@@ -386,6 +407,7 @@ pub fn build_box_tree_with(doc: &Document, styles: &StyleTree, env: &BuildEnv<'_
         canvas: doc.atoms.lookup("canvas"),
         meter: doc.atoms.lookup("meter"),
         progress: doc.atoms.lookup("progress"),
+        vertical: false,
     };
     let root_el = doc.document_element();
     let mut viewport_overflow = (Overflow::Auto, Overflow::Auto);
@@ -425,6 +447,21 @@ pub fn build_box_tree_with(doc: &Document, styles: &StyleTree, env: &BuildEnv<'_
             id
         }
     };
+    if b.vertical {
+        // The principal writing mode is the one of the `body` when the root has one (css-writing-modes-3 8): the root takes it, so
+        // that the `body` is no orthogonal flow of its own.
+        let body_wm = b.boxes.get(root as usize).and_then(|r| r.children.iter().find_map(|&c| b.boxes.get(c as usize).filter(|x| x.node != NONE && doc.is_html_element(x.node, a::BODY)))).map(|x| x.style.text.writing_mode);
+        if let (Some(wm), Some(r)) = (body_wm, b.boxes.get_mut(root as usize))
+            && r.style.text.writing_mode != wm
+            && r.node != NONE
+            && doc.is_html_element(r.node, a::HTML)
+        {
+            let mut t = (*r.style.text).clone();
+            t.writing_mode = wm;
+            r.style = Rc::new(ComputedStyle { text: Rc::new(t), ..(*r.style).clone() });
+        }
+        super::vertical::assign_frames(&mut b.boxes, root);
+    }
     let dummy = LayoutBox::new(BoxKind::Block, NONE, init, true);
     BoxTree { boxes: b.boxes, root, images: b.images, cut: b.gen_cut, viewport_overflow, bgs: b.bgs, dummy }
 }
@@ -464,6 +501,7 @@ impl Builder<'_> {
     fn new_box(&mut self, kind: BoxKind, node: NodeId, style: Rc<ComputedStyle>, anonymous: bool) -> BoxId {
         let id = self.boxes.len() as BoxId;
         // Text boxes carry their parent's style; the parent's own box paints the background.
+        self.vertical |= style.text.writing_mode.vertical();
         if kind != BoxKind::Text && style.misc.bg.has_url {
             self.register_bgs(id, &style);
         }
@@ -1008,6 +1046,7 @@ impl Builder<'_> {
                     Out::Block(_) => None,
                 })
                 .collect();
+            let kids = if fallback == Some(Display::Ruby) { self.ruby_pairs(&style, kids) } else { kids };
             let id = self.new_box(BoxKind::Inline, n, style, false);
             self.adopt(id, kids);
             if let Some(b) = self.box_mut(id) {
@@ -1055,6 +1094,58 @@ impl Builder<'_> {
             }
         }
         outs.extend(pieces);
+    }
+
+    /// Ruby (css-ruby-1 2, 3): each run of base boxes and the annotation (`rt`) after it become one atomic inline, an
+    /// anonymous `inline-block` that holds the annotation block and the base block side by side along the block axis, both
+    /// centred (`ruby-align: space-around`, done by the private `text-align` value) in the width of the wider one. The
+    /// annotation goes to the line-over side for `ruby-position: over` (above the base in horizontal text, to its right in
+    /// vertical text; css-writing-modes-3 6.1), under it for `under`. Annotations without a base, and more than one
+    /// annotation level, are not made into pairs.
+    fn ruby_pairs(&mut self, style: &Rc<ComputedStyle>, kids: Vec<BoxId>) -> Vec<BoxId> {
+        fn is_rt(b: &Builder<'_>, id: BoxId) -> bool {
+            b.boxes.get(id as usize).is_some_and(|x| x.kind == BoxKind::Inline && x.fallback == Some(Display::RubyText))
+        }
+        fn with_align(s: &Rc<ComputedStyle>, a: TextAlign) -> Rc<ComputedStyle> {
+            let mut t = (*s.text).clone();
+            t.text_align = a;
+            Rc::new(ComputedStyle { text: Rc::new(t), ..(**s).clone() })
+        }
+        if !kids.iter().any(|&k| is_rt(self, k)) {
+            return kids;
+        }
+        // In `vertical-lr` the logical block-start is the left, and the line-over side the right.
+        let annotation_last = (style.text.ruby_position == RubyPosition::Under) != style.text.writing_mode.lr();
+        let mut out: Vec<BoxId> = Vec::new();
+        let mut base: Vec<BoxId> = Vec::new();
+        for k in kids {
+            if !is_rt(self, k) {
+                base.push(k);
+                continue;
+            }
+            if base.is_empty() {
+                out.push(k);
+                continue;
+            }
+            let Some((node, rt_style, rt_kids)) = self.boxes.get(k as usize).map(|b| (b.node, b.style.clone(), b.children.clone())) else { continue };
+            let ann = self.new_box(BoxKind::Block, node, with_align(&rt_style, TextAlign::RubySpace), false);
+            self.finish_block(ann, rt_kids.into_iter().map(Out::Inline).collect());
+            let anon = self.anon_style(style);
+            let bb = self.new_box(BoxKind::Block, NONE, with_align(&anon, TextAlign::RubySpace), true);
+            self.finish_block(bb, std::mem::take(&mut base).into_iter().map(Out::Inline).collect());
+            let mut cs = (*anon).clone();
+            let mut bs = (*cs.boxs).clone();
+            bs.display = Display::InlineBlock;
+            cs.boxs = Rc::new(bs);
+            let pair = self.new_box(BoxKind::InlineBlock, NONE, Rc::new(cs), true);
+            self.finish_block(pair, if annotation_last { vec![Out::Block(bb), Out::Block(ann)] } else { vec![Out::Block(ann), Out::Block(bb)] });
+            if let Some(p) = self.box_mut(pair) {
+                p.rare_mut().ruby = if annotation_last { 1 } else { 2 };
+            }
+            out.push(pair);
+        }
+        out.extend(base);
+        out
     }
 
     fn adopt(&mut self, parent: BoxId, kids: Vec<BoxId>) {

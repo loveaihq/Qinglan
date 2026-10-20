@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<!--
+  Vertical writing (step 2d-2b, css-writing-modes-3). Every glyph is 10px square (font 10px/10px), the body has no margin, a vertical
+  box is an orthogonal flow whose inline size is its `height` (7.3) and whose block size (its physical width) is the lines' sum.
+  a: vertical-rl, height 50: "aaaa bbbb cc" breaks into "aaaa" (40), "bbbb" (40), "cc" (20): three lines of 10 = 30 wide. The first line
+     is at the right: x = 20, then 10, then 0. The box is 30x50 at (0,0).
+  b: vertical-lr, height 50, margin-left 15, padding 5, border 2 (the edges are 7 on every side): two lines of 10 give a content width of
+     20, so the border box is 34 wide and 64 high at (15,50); the first line is on the left of the content box: x = 15+7 = 22, then 32;
+     the text starts at y = 50+7 = 57.
+  c: vertical-rl, height 60, "a" "1234" (text-combine-upright: all, one cell of 1em: the digits are shrunk to fit) "b": one line of
+     10 wide with three cells of 10 down it, from y = 114 (a's box ends at 50, b's at 114): 114, 124, 134.
+  viewport: 400x300
+  check: block div#a :: (0,0 30x50)
+  check: text "aaaa" :: (20,0 10x40)
+  check: text "bbbb" :: (10,0 10x40)
+  check: text "cc" :: (0,0 10x20)
+  check: block div#b :: (15,50 34x64)
+  check: line (22,57 :: 10x50)
+  check: line (32,57 :: 10x50)
+  check: block div#c :: (0,114 10x60)
+  check: text "1234" :: (0,124 10x10)
+  check: text "b" :: (0,134 10x10)
+-->
+<html><head><style>
+body { margin: 0; font: 10px/10px sans-serif }
+#a { writing-mode: vertical-rl; height: 50px }
+#b { writing-mode: vertical-lr; height: 50px; margin-left: 15px; padding: 5px; border: 2px solid }
+#c { writing-mode: vertical-rl; height: 60px }
+#c span { text-combine-upright: all }
+</style></head><body>
+<div id=a>aaaa bbbb cc</div>
+<div id=b>aaaa bbbb</div>
+<div id=c>a<span>1234</span>b</div>
+</body></html>

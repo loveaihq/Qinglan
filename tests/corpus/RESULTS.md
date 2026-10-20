@@ -433,3 +433,14 @@ WPT 和表格的细节（没做的）在 `docs/decisions.md` 的 2a-2 一节。
 | emoji-wiki（英文维基 Emoji 条目） | 只差后面步骤 | 行内的彩色 emoji（😂 face with tears of joy）、IBM PC 和 Wingdings 的图片和 Edge 一致；剩下的差别是 SVG 图标、徽标（2e） | 15.7 |
 
 `corpus_run.py check` 的“文字完整度”对阿拉伯文页只有 0.24：它拿排版出来的文字顺序和 DOM 的逻辑顺序比，从右往左的片段按视觉顺序排，所以对不上，不代表缺字（缺字框 0、替换符 0）。这个检查没有改，留给第 2 层最后一次对比时按视觉顺序重做。
+
+## 第 2d-2b 步：竖排和注音（2026-10-21）
+
+只重跑两页，对 Edge（JS 关、独立 `--user-data-dir`，`tools/corpus_run.py edge`；青空文库用 2026-10-17 的图，新页今天新截）：`tools/corpus_run.py render aozora-sjis vert-tategaki`、`compose`。其余 49 页没有重跑（留给第 2 层最后一次对比）。
+
+| 页 | 结论 | 说明 | 差值（越小越像） |
+|---|---|---|---|
+| aozora-sjis（青空文库《こころ》，Shift_JIS，注音） | 和 Edge 接近 | 汉字上方的注音（`<ruby>`/`<rt>`，`rp` 不显示）一对一对地居中在底字上方，和 Edge 一样；行距因注音撑高的位置和 Edge 相同。剩下的差别是换行位置（正文列宽和 Edge 差几个字）和标题字重，不是注音 | 14.2 |
+| vert-tategaki（縦書きWeb普及委員会，https://tategaki.github.io/；`writing-mode: vertical-rl` 的大标题、导语列、小标题，横排段落夹在其中） | 和 Edge 接近 | 竖排块在横排页里按正交流排：高度是内容或视口，列从右往左，英文和数字转 90°，全角括号和句读用竖排字形（`vert`），「」在右上角位置；剩下的差别是横排英文段落的列宽（和 Edge 不同，与竖排无关）和页首被 JS 渲染的大标题（Edge 关 JS 也只显示一部分，竖排标题在两边都出来了） | 7.0 |
+
+没有在真实网页里用到 `text-orientation`、`text-combine-upright`、竖排注音（公开网页里正文里用这几个的很少）；这些由手算快照 `tests/pages/vertical.html`、`ruby.html` 和 WPT 覆盖。

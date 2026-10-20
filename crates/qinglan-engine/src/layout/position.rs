@@ -147,6 +147,9 @@ impl Layouter<'_> {
         let to_cw = |v: LU| if border_box { (v - h_extra).max0() } else { v };
         let (top, right, bottom, left) = (inset(&bs.inset[0], ch), inset(&bs.inset[1], cw), inset(&bs.inset[2], ch), inset(&bs.inset[3], cw));
         let zero = LU::ZERO;
+        // `left` and `right` both `auto`: the static position is the right edge when the direction of the block the placeholder sits in is
+        // right to left (CSS2 10.3.7); in vertical text that is the bottom edge (css-writing-modes-3 7.1).
+        let (left, right) = if left.is_none() && right.is_none() && p.align.is_none() && tree.get(p.owner).fallback.is_none() && tree.get(p.owner).style.text.direction == crate::css::types::Direction::Rtl { (None, Some(cw - sx)) } else { (left, right) };
 
         // Horizontal (CSS2 10.3.7; 10.3.8 for replaced elements, whose width is never `auto`).
         let replaced_w = (bx.kind == BoxKind::Replaced).then(|| self.replaced_size(p.id, cw, Some(ch)).0);
@@ -221,7 +224,7 @@ impl Layouter<'_> {
             (true, Some(t), Some(b)) => Some((ch - t - b - mt0 - mb0 - v_extra).max0()),
             _ => None,
         };
-        let res = self.layout_block(p.id, cw, Some(ch), Flow { root: false, forced_w: Some(content_w), forced_h, cell_bor: None, ignore_h: false });
+        let res = self.layout_block(p.id, cw, Some(ch), Flow { root: false, forced_w: Some(content_w), forced_h, cell_bor: None, ignore_h: false, inner: false });
         let h = res.h;
         let (top_f, mt) = match (top, bottom) {
             (Some(t), Some(b)) if !auto_h || forced_h.is_none() => {

@@ -32,6 +32,10 @@ impl Layouter<'_> {
 
     /// Min-content and max-content width of the content box of `id` (memoised).
     pub(crate) fn content_widths(&mut self, id: BoxId) -> (LU, LU) {
+        // The widths of a frame root are along the wrong axis for whoever asks from outside it (vertical.rs).
+        if self.tree.get(id).froot && self.in_frame != id {
+            return (LU::ZERO, LU::ZERO);
+        }
         if let Some(w) = self.widths.get(&id) {
             return *w;
         }

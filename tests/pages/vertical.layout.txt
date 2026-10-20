@@ -1,0 +1,20 @@
+viewport 400x300
+block html (0,0 400x174)
+  block body (0,0 400x174)
+    block div#a (0,0 30x50)
+      line (20,0 10x50) baseline=8
+        text "aaaa" (20,0 10x40)
+      line (10,0 10x50) baseline=8
+        text "bbbb" (10,0 10x40)
+      line (0,0 10x50) baseline=8
+        text "cc" (0,0 10x20)
+    block div#b (15,50 34x64)
+      line (22,57 10x50) baseline=59
+        text "aaaa" (22,57 10x40)
+      line (32,57 10x50) baseline=59
+        text "bbbb" (32,57 10x40)
+    block div#c (0,114 10x60)
+      line (0,114 10x60) baseline=122
+        text "a" (0,114 10x10)
+        text "1234" (0,124 10x10)
+        text "b" (0,134 10x10)

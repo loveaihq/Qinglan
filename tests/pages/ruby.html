@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<!--
+  Ruby (step 2d-2b, css-ruby-1). Every glyph is 10px square (font 10px/10px), `rt` is 50% (5px, line-height normal = 4+1 = 5), the body has
+  no margin. The base and its annotation are one atomic inline as wide as the wider of the two, the annotation over the base.
+  d: horizontal. "ab" is 20 wide, "xyz" 15: the pair is 20 wide; the annotation block is 5 high, the base block 10, the pair sits on the
+     baseline of the base (8 below the top of the base block), so it reaches 13 above the baseline and 2 below it: the line is 15 high.
+     "ab" is at (0,5) 20x10; "c" follows the pair at x = 20, its content area top is 13-8 = 5.
+  e: vertical-rl, height 100, same content: the line is one 15 wide column at x = 0..15; the annotation (logical top) is on the right: its
+     block is x = 10..15, the base block x = 0..10. "ab" is a 10x20 fragment at (0,y) and "c" follows below it at y+20.
+  viewport: 400x300
+  check: block div#d :: (0,0 200x15)
+  check: text "ab" :: (0,5 20x10)
+  check: text "c" :: (20,5 10x10)
+  check: block div#e :: (0,15 15x100)
+  check: block (anonymous) (0,15 :: 10x20)
+-->
+<html><head><style>
+body { margin: 0; font: 10px/10px sans-serif }
+#d { width: 200px }
+#e { writing-mode: vertical-rl; height: 100px }
+</style></head><body>
+<div id=d><ruby>ab<rt>xyz</rt></ruby>c</div>
+<div id=e><ruby>ab<rt>xyz</rt></ruby>c</div>
+</body></html>

@@ -221,6 +221,19 @@ struct AnalyzerVtbl {
     ) -> HRESULT, // 8
 }
 
+/// `DWRITE_FONT_FEATURE` and `DWRITE_TYPOGRAPHIC_FEATURES`.
+#[repr(C)]
+struct TypoFeature {
+    tag: u32,
+    value: u32,
+}
+
+#[repr(C)]
+struct TypoFeatures {
+    features: *const TypoFeature,
+    count: u32,
+}
+
 #[repr(C)]
 struct GlyphRunAnalysisVtbl {
     base: UnknownVtbl,
@@ -1061,15 +1074,22 @@ impl Factory {
 
     /// Shape one run of one script with one font, left to right. `locale` is NUL-terminated.
     pub fn shape(&self, text: &[u16], face: &Face, size: f32, sa: ScriptAnalysis, locale: &[u16]) -> Option<Shaped> {
-        self.shape_dir(text, face, size, sa, locale, false)
+        self.shape_dir(text, face, size, sa, locale, false, false)
     }
 
     /// `shape` in either direction: `rtl` is DirectWrite's `isRightToLeft` (joining, mark placement and mirroring).
-    pub fn shape_dir(&self, text: &[u16], face: &Face, size: f32, sa: ScriptAnalysis, locale: &[u16], rtl: bool) -> Option<Shaped> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn shape_dir(&self, text: &[u16], face: &Face, size: f32, sa: ScriptAnalysis, locale: &[u16], rtl: bool, vert: bool) -> Option<Shaped> {
         let n = text.len();
         if n == 0 || n > (1 << 20) || locale.last() != Some(&0) {
             return None;
         }
+        // Upright text in vertical writing asks for the `vert` feature over the whole run (OpenType: vertical alternates).
+        let feature = TypoFeature { tag: u32::from_le_bytes(*b"vert"), value: 1 };
+        let list = TypoFeatures { features: &raw const feature, count: 1 };
+        let list_ptr: *const TypoFeatures = &raw const list;
+        let lens = [n as u32];
+        let (feats, lens_p, nfeat): (*const P, *const u32, u32) = if vert { ((&raw const list_ptr).cast(), lens.as_ptr(), 1) } else { (null(), null(), 0) };
         let mut max = n * 3 / 2 + 16;
         loop {
             let mut cluster = vec![0u16; n];
@@ -1091,9 +1111,9 @@ impl Factory {
                     &sa,
                     locale.as_ptr(),
                     null_mut(),
-                    null(),
-                    null(),
-                    0,
+                    feats,
+                    lens_p,
+                    nfeat,
                     max as u32,
                     cluster.as_mut_ptr(),
                     tprops.as_mut_ptr(),
@@ -1297,7 +1317,7 @@ mod probe {
             let u: Vec<u16> = text.encode_utf16().collect();
             let sa = dw.analyze_script(&u, &locale)[0].2;
             for rtl in [false, true] {
-                let sh = dw.shape_dir(&u, &f, 20.0, sa, &locale, rtl).expect("shape");
+                let sh = dw.shape_dir(&u, &f, 20.0, sa, &locale, rtl, false).expect("shape");
                 println!("{fname} {text} rtl={rtl}: glyphs={:?} clusters={:?} adv={:?} off={:?}", sh.glyphs, sh.cluster_map, sh.advances, sh.offsets);
             }
         }

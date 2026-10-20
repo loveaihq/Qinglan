@@ -131,6 +131,9 @@ pub struct TextRun {
     pub glyphs: (u32, u32),
     /// The blur radius of a text shadow, CSS px (0: plain text).
     pub blur: f32,
+    /// Sideways text in vertical writing: `x` is the baseline, `baseline` where the pen starts; the pen runs down and the
+    /// glyphs are turned a quarter clockwise.
+    pub rot: bool,
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -1,0 +1,23 @@
+viewport 400x300
+block html (0,0 400x115)
+  block body (0,0 400x115)
+    block div#d (0,0 200x15)
+      line (0,0 200x15) baseline=13
+        inline-block (anonymous) (0,0 20x15)
+          block rt (0,0 20x5)
+            line (0,0 20x5) baseline=4
+              text "xyz" (0.828125,0 18.3125x5)
+          block (anonymous) (0,5 20x10)
+            line (0,5 20x10) baseline=13
+              text "ab" (0,5 20x10)
+        text "c" (20,5 10x10)
+    block div#e (0,15 15x100)
+      line (0,15 15x100) baseline=28
+        inline-block (anonymous) (0,15 15x20)
+          block rt (10,15 5x20)
+            line (10,15 5x20) baseline=19
+              text "xyz" (10,15.828125 5x18.3125)
+          block (anonymous) (0,15 10x20)
+            line (0,15 10x20) baseline=23
+              text "ab" (0,15 10x20)
+        text "c" (0,35 10x10)

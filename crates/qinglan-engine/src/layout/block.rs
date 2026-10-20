@@ -48,10 +48,10 @@ pub(crate) struct Geom {
     pub(super) ml: LU,
     pub(super) spec_h: Option<LU>,
     /// The computed `height` is `auto` or 0 (CSS2 8.3.1: such a box can collapse through).
-    h_zero_or_auto: bool,
+    pub(super) h_zero_or_auto: bool,
     pub(super) min_h: LU,
     pub(super) max_h: Option<LU>,
-    repl: Option<(LU, LU)>,
+    pub(super) repl: Option<(LU, LU)>,
 }
 
 /// How a block is laid out beyond the ordinary rules.
@@ -66,6 +66,8 @@ pub(crate) struct Flow {
     pub cell_bor: Option<[LU; 4]>,
     /// Lay the box out as if its `height`, `min-height` and `max-height` were `auto` / 0 / `none` (a flex item's content size, flex.rs).
     pub ignore_h: bool,
+    /// The content of a frame root (vertical.rs) is laid out: its geometry is `Layouter::inner_geom`, or the box's own.
+    pub inner: bool,
 }
 
 pub(crate) fn lp_has_percent(l: &Lp) -> bool {
@@ -195,6 +197,10 @@ impl Layouter<'_> {
         let r = self.layout_block(root, vw, Some(vh), Flow { root: true, ..Flow::default() });
         if let Some(o) = self.out.get_mut(root as usize) {
             o.x = r.ml + r.rel.0;
+            // A `vertical-rl` root starts at the right edge of the viewport (css-writing-modes-3 3.1: the initial containing block takes its mode).
+            if self.tree.get(root).froot && matches!(self.tree.get(root).style.text.writing_mode, crate::css::types::WritingMode::VerticalRl | crate::css::types::WritingMode::SidewaysRl) {
+                o.x = vw - o.w;
+            }
             o.y = r.mt.resolve() + r.rel.1;
         }
         self.resolve_pending(None, 0);
@@ -206,6 +212,9 @@ impl Layouter<'_> {
         let tree = self.tree;
         let bx = tree.get(id);
         let is_root = flow.root;
+        if bx.froot && !flow.inner {
+            return self.layout_frame(id, cb_w, cb_h, flow);
+        }
         if matches!(bx.fallback, Some(Display::Table | Display::InlineTable)) {
             return self.layout_table(id, cb_w, cb_h, flow);
         }
@@ -221,11 +230,14 @@ impl Layouter<'_> {
         }
         // The geometry is worked out in a function of its own so that its many temporaries do not
         // sit in this frame while the children (the recursion) are laid out.
-        let g = self.block_geometry(id, cb_w, cb_h, flow);
+        let g = match self.inner_geom.take().filter(|_| flow.inner) {
+            Some(g) => g,
+            None => self.block_geometry(id, cb_w, cb_h, flow),
+        };
 
         // Floats (floats.rs): a block formatting context root has floats of its own, and its position in it is its own
         // corner; any other block lays out at the position `self.pos` its parent guessed for it.
-        let bfc = is_root || establishes_bfc(bx, &bx.style.boxs);
+        let bfc = is_root || flow.inner || establishes_bfc(bx, &bx.style.boxs);
         let saved_pos = self.pos;
         let saved_touched = self.touched;
         let saved_fs = bfc.then(|| std::mem::take(&mut self.fs));

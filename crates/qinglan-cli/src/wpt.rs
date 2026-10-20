@@ -427,8 +427,8 @@ fn classify(src: &str) -> Option<(&'static str, &'static str)> {
     if has(&["mix-blend", "background-blend", "cross-fade(", "image-set(", "element(", "paint(", "-webkit-gradient", "-moz-", "border-image", "color-mix(", "light-dark(", "color(", "currentcolor/", "sibling-index", "anchor("]) {
         return Some(("none", "a feature layer 2 does not do (blend modes, border-image, cross-fade, image-set, element(), color-mix ...)"));
     }
-    if has(&["writing-mode", "direction:rtl", "direction:ltr", "unicode-bidi", "<ruby", "dir=\"rtl\""]) {
-        return Some(("2d", "text features"));
+    if has(&["<rtc", "ruby-align", "ruby-merge", "ruby-overhang"]) {
+        return Some(("2d", "complex ruby (rtc, ruby-align, overhang)"));
     }
     if has(&["<svg", "position:sticky", "overflow:auto", "overflow:scroll", "<input", "<button", "<select", "<textarea"]) {
         return Some(("2e", "svg, scrolling, sticky or form controls"));

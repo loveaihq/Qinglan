@@ -1473,3 +1473,38 @@ gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 
 - **首屏**（同上，毫秒）：zhwiki-rec 129.1 / 136.1 / 135.3 / 121.5 / 127.0（中位数 129.1）；gh-ripgrep 138.2 / 126.0 / 130.7 / 115.7 / 132.5（中位数 130.7），都 ≤ 200。
 - **WPT**（测试平台）：`css/css-writing-modes`（bidi 相关 98 个）83 / 98（84.7%），bug 类 0，15 个 `limit`：12 个是测试按 ezra 窄网页字体写的、盒宽 10em，测试平台 1em 的字形让换行和参考页不同（把盒放宽到 60em 的临时副本里这 12 个都通过，副本里整体 95 / 98）；3 个是 `plaintext` 要在 `<br>` 之后重新定方向（`bidi-plaintext-br-001`、`block-plaintext-004`、`block-plaintext-006`，放宽后仍不过）；`css/CSS2/bidi-text` 69 / 103（67.0%），bug 类 34（上面第一条）；`css/css-text/text-align` 51 / 85（60.0%），bug 类 0（`text-align-last`、justify 细节、plaintext 各有 `limit` 说明）。`--win` 对这些文字密集的页面不适合（字形抗锯齿位置不同，几乎全差几个像素），没有加进 `passing-win.txt`。
 - **真实网页**：阿拉伯文维基“القاهرة”和英文维基 Emoji 条目，和 Edge 对比见 `tests/corpus/RESULTS.md` 最后一节。
+
+## 第 2 层 · 2d-2b 竖排和注音（2026-10-21）
+
+代码：引擎 `layout/vertical.rs`（新：框架、逻辑视图、逻辑→物理换算）、`layout/boxtree.rs`（框架标记、`ruby_pairs`、body 的书写模式传给根）、`layout/block.rs`（`layout_frame` 的入口、`Flow::inner`）、`layout/inline.rs`（字的方向、纵中横、注音的对齐）、`layout/position.rs`（rtl 的静态位置）、`css/`（`writing-mode`、`text-orientation`、`text-combine-upright`、`ruby-position`、`display: ruby-base`、UA 样式）、`paint/`（侧排字形旋转、直立字形的位置）、`textclass.rs`（`is_vertical_upright`）、`platform/mod.rs`（`shape_upright`）；`qinglan-win` 的 `sys/dwrite.rs`（`vert` 特性）和 `platform.rs`。测试：`tests/pages/vertical.html`、`ruby.html`（手算，页首写了推算，`check:` 行可执行）、`crates/qinglan-win/tests/vertical.rs`、WPT 两个目录。
+
+### 先修 2d-2a 的回归：`bad_utf8`
+- 现象：release 版 `hostile` 的 `bad_utf8`（4 MB 随机高位字节）从 `9c490b2` 的 105 MB / 1.96 s 涨到 `ced4dfd` 的 154 MB / 2.6 s，限额 120 MB。2d-2a 当时只跑了 debug 版，看不到。
+- 原因：随机字节里有约 3% 是希伯来文、阿拉伯文（0xD6–0xDF 开头的两字节序列），所以这一页**要**做双向分析（不是快速路径）；分析时 `WinPlatform::bidi_levels` 给每个字符建了一个 `Vec<usize>`（容量 = 文字的**字节数**，3–4 MB 的文字就是 24–32 MB），旁边还有一个同样容量的 `Vec<u16>`。改成：UTF-16 缓冲区按实际单元数分配，层级直接逐字符映射，不要索引数组；`bidi::analyze` 的字符串也一次分够。结果：峰值 154 → 109 MB（限额 120），耗时 2.6–2.75 s（比 105 MB 那时的 1.96 s 慢是因为这一页确实要做双向分析、按层级把文字切成很多小片段整形；限额 5 s 内，没有再优化）。release 版 29 个恶意网页用例全过。
+
+### 竖排（css-writing-modes-3）：怎么做
+- **框架（frame）**：块的书写模式和包含块里内容的书写模式不同（横排页里的竖排块、竖排文字里的表格或图片），这个盒子是**一个框架的根**（正交流，7.3；同时是格式化上下文的根）。框架里面完全用现有的横排代码、按**逻辑**方向排（行内轴当 x，块轴当 y），排完后 `turn_frame` 一次把盒子、行、片段、装饰线、列表标记的位置换成物理的：`vertical-rl` 块轴从右往左（`x' = H - y - h`，H 是框架的块尺寸），`vertical-lr` 从左往右，行内轴都是从上往下，宽高对调。嵌套的框架已经是最终的物理位置，只换它自己的矩形。这样 flex、grid、表格、浮动、绝对定位、外边距合并在竖排里都不用另写一份，缺点是它们按**逻辑**排好再转（见限制）。
+- **样式的逻辑视图**：框架里的盒子的 `style` 是 `logical_view`（`vertical.rs`）：宽和高对调，外边距、内边距、边框宽度/样式/颜色、`top/right/bottom/left`、`overflow-x/y` 按边映射换位（rl：逻辑上下左右 = 物理右下左上；lr：左下右上）；原来的物理样式放进 `Rare::phys`，绘制时用 `LayoutBox::pstyle()`（背景、边框、轮廓、圆角、阴影都按物理边画）。只有页面里有竖排的元素才做这个遍历（`Builder::vertical`），横排页面不付任何代价。框架根自己的 `style` 保持物理的（`froot`、`pf` 记着它所在的框架），它的外边距/尺寸在 `layout_frame` 里按物理数组和两边框架的边映射算。
+- **正交流的尺寸**（7.3）：竖排盒的行内尺寸是物理高度：写了 `height` 就用它，`auto` 时是 fit-content，可用空间 = 包含块的高度（定义了才用），否则是视口高度（再减去自己的外边距、内边距、边框）；块尺寸（物理宽度）是内容决定的，`width: auto` 不再填满。`vertical-rl` 的根元素（或 `body` 的值传给根，见下）的行内尺寸填满视口高度，宽度是内容，放在视口右边（`x = 视口宽 − 宽`），所以第一列在右边；没有横向滚动，超出视口左边的列看不到（记下）。
+- **body 的书写模式传给根**（8）：根是 `html` 且有 `body` 时，根的书写模式取 `body` 的值（`wm-propagation-body-*`）。
+- **字的方向**（5.1）：`text-orientation: mixed` 里 CJK、假名、谚文、注音符号、全角和 CJK 标点符号、emoji 直立（`textclass::is_vertical_upright`，UAX #50 的 U/Tu 的常用部分），其余（拉丁、数字、`…`、`—`）转 90°；`upright` 全直立；`sideways` 和 `sideways-rl/lr` 全转。文字按方向切成片段整形。**直立片段**：DirectWrite 加 `vert` 特性（竖排字形：「」、、。在右上角、ー转向；`GetGlyphs` 的特性数组），整段整形、不走词缓存；每个字形沿行占 1em（`advance = 字号`，原来的宽度放在 `offset_x`，绘制时用它居中），整个片段是 `FragKind::Text { v: 2 }`，绘制时每个字形放进自己的格子，在行的中线上（基线 = 格子中点 + (上升 − 下降)/2）。**侧排片段**（`v: 1`）：照横排整形，绘制时字形遮罩转 90°（`paint/fx.rs::turn_mask`：遮罩的像素按 (u, v) → (−v, u) 重排，不重采样；子像素位置丢掉，沿行用四舍五入）；基线离片段左边的距离换算成物理。`vertical-lr` 里字形顶朝右（块结束侧），所以逻辑视图里字体的上升和下降对调（`font_for`）。`sideways-rl` 是 `vertical-rl` 加 `text-orientation: sideways`；**`sideways-lr`（字形逆时针转、行内方向从下往上）只解析，按 `vertical-lr` 加侧排画**（记下）。
+- **纵中横**（9.1）：`text-combine-upright: all` 的文字项不超过 4 个字符时是一个 1em 的格子（一个单位）：宽度超过 1em 就按比例缩小字号重新整形（`FragKind::Text::fs` 记缩小后的字号），横排画在格子中间；`digits` 只认 2 个 ASCII 数字。超过 4 个字符不合并。每个文字项各自合并（嵌套的行内元素各合各的，规范说整个元素合成一个）。
+- **`direction: rtl` 在竖排里**：框架里照横排的 rtl 排（行内起点在逻辑右边 = 物理下边），双向分析照常（侧排的拉丁/阿拉伯文在从下往上的行里顺序正确）。绝对定位盒的静态位置：`left` 和 `right` 都是 `auto` 且所在块是 rtl 时，静态位置是右边缘（CSS2 10.3.7；竖排里就是下边缘）；flex/grid 的子项有自己的静态位置算法，不改。
+- **绘制**：直立和纵中横不用改光栅器（字形位置由偏移定）；侧排用 `TextRun::rot`，笔尖从 `baseline`（行起点）往下走，`x` 是基线；文字阴影在竖排里不画；装饰线随框架转成竖线（线在逻辑的下面 = 竖排的左边或右边，浏览器放在右边，没有照做）。
+
+### 注音（css-ruby-1 基本部分）
+- `ruby`、`rb`（`display: ruby-base`）、`rt`（`display: ruby-text`、`font-size: 50%`、`line-height: normal`）、`rp`（`display: none`，所以不显示）。箱子树里（`ruby_pairs`）把每一段底字和它后面的 `rt` 做成**一个匿名 `inline-block`**：里面两个块，一个是注音（`rt` 自己的盒），一个是底字（匿名块），按 `ruby-position` 排顺序：`over`（默认）注音在逻辑上方（横排 = 上方；`vertical-rl` 的逻辑上方 = 物理右边），`under` 在下方；`vertical-lr` 的逻辑上方是左边，而注音要在右边，所以 `over` 放在逻辑下方（css-writing-modes-3 6.1）。两个块的 `text-align` 是内部值 `-qinglan-ruby-space`（`ruby-align: space-around`：多余的空间平均分给每个字，两端各半份；单个字就居中），宽度是两者里宽的那个（`inline-block` 的 shrink-to-fit），所以窄的一方居中或疏排。这一对按**底字所在块的基线**对齐（`Rare::ruby`），注音撑高行盒只在超出行距的部分（对原子行内来说就是它的上升）。同一个底字后面的第二个 `rt`、没有底字的 `rt`、`rtc`、`ruby-merge`、`ruby-overhang`、注音溢出到相邻字上、一对注音里的断行：没做。
+- 限制：一对注音是原子行内，行不能在这一对的里面断开（跨多个字的底字不断）；`display: ruby` 的元素本身仍是普通行内盒。
+
+### 没做 / 记下的限制
+- flex、grid、表格在竖排里按**横排**排（它们是 `horizontal_only` 的框架：自己的内容不转，只有它们自己的矩形跟着外面转），它们的子项如果继承了竖排，则是正交的框架，但 flex/grid 算法不按框架的块轴算大小。因此 WPT 里原来靠“竖排被忽略”碰巧通过的 31 个 flex/grid 竖排测试退出通过名单（`notes.txt` 每条有说明，类别 `bug (flex/grid with vertical writing)`）。
+- 正交盒的固有宽度（给 shrink-to-fit 的外层用，如浮动、表格单元格、`inline-block` 里的竖排块）：算 0（`content_widths` 对框架根从外面问时返回 0）；框架根做原子行内时没有基线（放在底外边缘）。
+- 竖排里的百分比高度（按包含块的**物理**高度）、`vertical-align` 的上下方向（不随 lr 翻转）、列表标记（外侧标记仍按横排画）、`text-indent`、`text-align: start/end` 在 `direction: rtl` 里照横排规则；`position: absolute` 在竖排框架里的各种方向组合（WPT `abs-pos-non-replaced-vlr/vrl` 共约 115 个、`sizing-orthog-*`、`available-size-*`、`clip-rect-*`：没有逐个诊断，分家族写在 `notes.txt`；`sizing-orthog-vrl-in-htb-001` 的参考页用竖排根 + 绝对定位，我们的根框架排出来的块尺寸和内边距不对）。
+- 没有 `text-orientation` 的 `sideways` 以外的字形旋转角度、没有 `text-emphasis`、没有 `font-variant-east-asian`、竖排里没有 `letter-spacing` 的特殊处理。
+
+### 数据（release；插电 `BatteryStatus = 2`）
+- **exe**：2,567,168 字节，比 2d-2a 之后的 2,517,504 多 49,664（本步预算 +60 KB = 61,440 内）。
+- **内存**（`qinglan.exe --bench`，zhwiki-rec，1920×1080，5 次新进程，滚到底，Private Bytes）：48,418,816 / 46,473,216 / 46,551,040 / 46,194,688 / 45,338,624，最大 48.42 MB（≤ 50 MB）；gh-ripgrep 22.0–22.8 MB。
+- **首屏：没有合格的数字。** 量的时候另一个会话在编译（9 个 `rustc` 同时跑，另有 `Emulator.exe`），zhwiki-rec 161–663 ms、gh-ripgrep 152–434 ms，都不能和 200 ms 的限额比。竖排和注音的代码在不用它们的页面上不执行：箱子树的框架遍历只在页面里有竖排元素时才做，`font_for` 多一个布尔判断，光栅的 `glyphs_of` 多一个分支；这是推断，不是测量，要在空闲机器上补量。
+- **WPT**（测试平台）：`css/css-writing-modes` 439 / 843（52.1%）（2d-2a 的 98 个加新增的竖排 745 个）；bug 类 388，**没有修**，每个都有一行 `notes.txt`（按家族写的原因，上面“记下的限制”里没有诊断的那些；写明了哪些诊断过：`sizing-orthog-vrl-in-htb-001` 的参考页、`wm-propagation-body-032` 的版面）。`css/css-ruby` 23 / 118（19.5%），失败的 95 个：65 个是 `step 2d`（`rtc`、`ruby-align`、`ruby-overhang`……）、30 个是 `limit (ruby as inline-block pairs)`（每个一行）。`qinglan-cli wpt --check` 通过。自动分类器原来把含 `writing-mode`、`direction`、`<ruby` 的页面都归“后面的步骤”，这一步改成只认 `rtc`、`ruby-align`、`ruby-merge`、`ruby-overhang`。
+- **真实网页**：青空文库（注音）和 vert-tategaki（竖排）对 Edge，见 `tests/corpus/RESULTS.md` 最后一节。

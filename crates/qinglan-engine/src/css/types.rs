@@ -34,7 +34,7 @@ keyword_enum!(Display {
     TableRowGroup = "table-row-group", TableHeaderGroup = "table-header-group", TableFooterGroup = "table-footer-group",
     TableRow = "table-row", TableColumnGroup = "table-column-group", TableColumn = "table-column",
     TableCell = "table-cell", TableCaption = "table-caption", Flex = "flex", InlineFlex = "inline-flex",
-    Grid = "grid", InlineGrid = "inline-grid", Ruby = "ruby", RubyText = "ruby-text",
+    Grid = "grid", InlineGrid = "inline-grid", Ruby = "ruby", RubyText = "ruby-text", RubyBase = "ruby-base",
 } default Inline);
 
 keyword_enum!(Position {
@@ -49,6 +49,7 @@ keyword_enum!(Visibility { Visible = "visible", Hidden = "hidden", Collapse = "c
 keyword_enum!(TextAlign {
     Start = "start", End = "end", Left = "left", Right = "right", Center = "center", Justify = "justify",
     MatchParent = "match-parent", JustifyAll = "justify-all",
+    RubySpace = "-qinglan-ruby-space",
 } default Start);
 keyword_enum!(TextTransform {
     None = "none", Capitalize = "capitalize", Uppercase = "uppercase", Lowercase = "lowercase",
@@ -66,6 +67,24 @@ keyword_enum!(UnicodeBidi {
     Normal = "normal", Embed = "embed", Isolate = "isolate", BidiOverride = "bidi-override", IsolateOverride = "isolate-override",
     Plaintext = "plaintext",
 } default Normal);
+keyword_enum!(WritingMode {
+    HorizontalTb = "horizontal-tb", VerticalRl = "vertical-rl", VerticalLr = "vertical-lr", SidewaysRl = "sideways-rl", SidewaysLr = "sideways-lr",
+} default HorizontalTb);
+keyword_enum!(TextOrientation { Mixed = "mixed", Upright = "upright", Sideways = "sideways" } default Mixed);
+keyword_enum!(TextCombine { None = "none", All = "all", Digits = "digits" } default None);
+keyword_enum!(RubyPosition { Over = "over", Under = "under" } default Over);
+
+impl WritingMode {
+    /// A vertical writing mode (the block axis is horizontal).
+    pub fn vertical(self) -> bool {
+        self != WritingMode::HorizontalTb
+    }
+    /// Blocks stack from left to right (`vertical-lr`, `sideways-lr`); right to left otherwise.
+    pub fn lr(self) -> bool {
+        matches!(self, WritingMode::VerticalLr | WritingMode::SidewaysLr)
+    }
+}
+
 keyword_enum!(FontStyleKind { Normal = "normal", Italic = "italic", Oblique = "oblique" } default Normal);
 keyword_enum!(ListStylePosition { Outside = "outside", Inside = "inside" } default Outside);
 keyword_enum!(BorderCollapse { Separate = "separate", Collapse = "collapse" } default Separate);
@@ -633,6 +652,10 @@ pub enum Value {
     OverflowWrap(OverflowWrap),
     Direction(Direction),
     UnicodeBidi(UnicodeBidi),
+    WritingMode(WritingMode),
+    TextOrientation(TextOrientation),
+    TextCombine(TextCombine),
+    RubyPosition(RubyPosition),
     VerticalAlign(VerticalAlign),
     TextDecorationLine(TextDecorationLine),
     TextDecorationStyle(TextDecorationStyle),
@@ -833,9 +856,13 @@ pub enum PropId {
     Transform,
     TransformOrigin,
     UnicodeBidi,
+    WritingMode,
+    TextOrientation,
+    TextCombineUpright,
+    RubyPosition,
 }
 
-pub const PROP_COUNT: usize = PropId::UnicodeBidi as usize + 1;
+pub const PROP_COUNT: usize = PropId::RubyPosition as usize + 1;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Group {
@@ -899,7 +926,7 @@ impl PropId {
             FontFamily | FontSize | FontWeight | FontStyle | LineHeight | LetterSpacing | WordSpacing => Group::Font,
             Color | TextAlign | TextIndent | TextTransform | WhiteSpaceCollapse | TextWrapMode | WordBreak | OverflowWrap
             | Direction | Visibility | Cursor | ListStyleType | ListStylePosition | TabSize | Quotes | BorderCollapse | BorderSpacing
-            | EmptyCells | CaptionSide | TextShadow => Group::Text,
+            | EmptyCells | CaptionSide | TextShadow | WritingMode | TextOrientation | TextCombineUpright | RubyPosition => Group::Text,
             Content | CounterReset | CounterIncrement | CounterSet => Group::Gen,
             FlexDirection | FlexWrap | Order | FlexGrow | FlexShrink | FlexBasis | JustifyContent | AlignItems | AlignSelf
             | AlignContent | RowGap | ColumnGap | JustifyItems | JustifySelf => Group::Flex,
@@ -1040,6 +1067,10 @@ impl PropId {
             Transform => "transform",
             TransformOrigin => "transform-origin",
             UnicodeBidi => "unicode-bidi",
+            WritingMode => "writing-mode",
+            TextOrientation => "text-orientation",
+            TextCombineUpright => "text-combine-upright",
+            RubyPosition => "ruby-position",
         }
     }
 
@@ -1066,6 +1097,7 @@ pub const ALL_PROPS: [PropId; PROP_COUNT] = {
         AlignItems, AlignSelf, AlignContent, RowGap, ColumnGap, JustifyItems, JustifySelf, GridTemplateColumns, GridTemplateRows,
         GridTemplateAreas, GridAutoColumns, GridAutoRows, GridAutoFlow, GridRowStart, GridColumnStart, GridRowEnd, GridColumnEnd,
         Opacity, BoxShadow, TextShadow, Transform, TransformOrigin, UnicodeBidi,
+        WritingMode, TextOrientation, TextCombineUpright, RubyPosition,
     ]
 };
 

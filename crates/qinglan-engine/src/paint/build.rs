@@ -165,7 +165,7 @@ impl Builder<'_> {
 
     /// The padding box of a box whose border box is `r`.
     fn padding_box(&self, id: BoxId, r: Rect) -> Rect {
-        let bd = &self.res.tree.get(id).style.border;
+        let bd = &self.res.tree.get(id).pstyle().border;
         let b = |i: usize| border_px(bd.width.get(i).copied().unwrap_or(0.0));
         Rect::new(r.x + b(3), r.y + b(0), (r.w - b(1) - b(3)).max0(), (r.h - b(0) - b(2)).max0())
     }
@@ -210,7 +210,7 @@ impl Builder<'_> {
 
     /// Does `id` make a stacking context (the root, or a positioned box with a `z-index`, or a fixed one)?
     fn is_context(&self, id: BoxId) -> bool {
-        id == self.res.tree.root || makes_context(&self.res.tree.get(id).style)
+        id == self.res.tree.root || makes_context(self.res.tree.get(id).pstyle())
     }
 
     /// The positioned boxes of the stacking context `ctx` that go below its flow (`neg`: negative `z-index`) or above it.
@@ -260,7 +260,7 @@ impl Builder<'_> {
     /// A box with an `opacity` below 1 or a `transform` is painted into a group of its own (see [`Group`]); the items it
     /// pushes go to the group and carry a clip chain of their own.
     fn open_group(&mut self, id: BoxId) -> bool {
-        if id == self.res.tree.root || !has_effect(&self.res.tree.get(id).style) {
+        if id == self.res.tree.root || !has_effect(self.res.tree.get(id).pstyle()) {
             return false;
         }
         self.sinks.push((Vec::new(), self.clip));
@@ -269,7 +269,7 @@ impl Builder<'_> {
     }
 
     fn close_group(&mut self, id: BoxId, ax: LU, ay: LU) {
-        let Some(fx) = self.res.tree.get(id).style.misc.fx.clone() else { return };
+        let Some(fx) = self.res.tree.get(id).pstyle().misc.fx.clone() else { return };
         let o = self.res.box_out(id);
         let (x, y) = (ax.to_f32(), ay.to_f32());
         let xf = Transform::translate(x, y).compose(&fx.matrix(o.w.to_f32(), o.h.to_f32())).compose(&Transform::translate(-x, -y));
@@ -362,7 +362,7 @@ impl Builder<'_> {
                 let mut floats = Vec::new();
                 crate::layout::floats::floats_in(&res.tree, id, &mut floats);
                 for c in floats {
-                    if has_effect(&res.tree.get(c).style) {
+                    if has_effect(res.tree.get(c).pstyle()) {
                         continue;
                     }
                     let co = res.box_out(c);
@@ -713,7 +713,7 @@ impl Builder<'_> {
     /// Clip to the padding box of box `id`, rounded by the inner border edge where the box has a radius (css-backgrounds-3 5.3).
     fn clip_box(&mut self, id: BoxId, rect: Rect) -> u32 {
         let pb = self.padding_box(id, rect);
-        let style = &self.res.tree.get(id).style;
+        let style = &self.res.tree.get(id).pstyle();
         let radii = resolve_radii(style.misc.radius.as_deref(), rect.w.to_f32(), rect.h.to_f32());
         let bd = &style.border;
         let bwf: [f32; 4] = std::array::from_fn(|i| border_px(bd.width.get(i).copied().unwrap_or(0.0)).to_f32());
@@ -763,7 +763,7 @@ impl Builder<'_> {
         let keep = open.iter().zip(want).take_while(|(a, b)| a == b).count();
         while open.len() > keep {
             if let Some(b) = open.pop() {
-                let op = self.res.tree.get(b).style.misc.fx.as_deref().map_or(255, |x| x.opacity);
+                let op = self.res.tree.get(b).pstyle().misc.fx.as_deref().map_or(255, |x| x.opacity);
                 self.finish_group(op, Transform::IDENTITY);
             }
         }
@@ -777,9 +777,9 @@ impl Builder<'_> {
     fn fragment(&mut self, f: &Fragment, ax: LU, ay: LU) {
         let res = self.res;
         match f.kind {
-            FragKind::Text { glyphs, decor, asc, .. } => {
-                self.text(f, ax, ay, glyphs, asc);
-                let style = res.tree.get(f.box_id).style.clone();
+            FragKind::Text { glyphs, decor, asc, v, fs, .. } => {
+                self.text(f, ax, ay, glyphs, asc, v, fs);
+                let style = res.tree.get(f.box_id).pstyle().clone();
                 if Self::visible_style(&style) {
                     for di in decor.0..decor.1 {
                         if let Some(d) = res.decorations.get(di as usize) {
@@ -788,16 +788,16 @@ impl Builder<'_> {
                     }
                 }
             }
-            FragKind::Marker { glyphs, asc, .. } => self.text(f, ax, ay, glyphs, asc),
+            FragKind::Marker { glyphs, asc, .. } => self.text(f, ax, ay, glyphs, asc, 0, 0.0),
             FragKind::InlineBox { first, last } => {
-                let style = res.tree.get(f.box_id).style.clone();
+                let style = res.tree.get(f.box_id).pstyle().clone();
                 if Self::visible_style(&style) {
                     let r = Rect::new(ax + f.x, ay + f.y, f.w, f.h);
                     self.decor(f.box_id, &style, r, [true, last, true, first], true);
                 }
             }
             FragKind::Atomic => {
-                if !positioned(&res.tree.get(f.box_id).style) {
+                if !positioned(res.tree.get(f.box_id).pstyle()) {
                     self.paint_box(f.box_id, ax + f.x, ay + f.y);
                 }
             }
@@ -805,9 +805,10 @@ impl Builder<'_> {
         }
     }
 
-    fn text(&mut self, f: &Fragment, ax: LU, ay: LU, glyphs: (u32, u32), asc: LU) {
+    #[allow(clippy::too_many_arguments)]
+    fn text(&mut self, f: &Fragment, ax: LU, ay: LU, glyphs: (u32, u32), asc: LU, v: u8, fs: f32) {
         let res = self.res;
-        let style = &res.tree.get(f.box_id).style;
+        let style = res.tree.get(f.box_id).pstyle();
         let color = style.text.color;
         if !Self::visible_style(style) || (color.a == 0 && style.text.shadow.is_none()) {
             return;
@@ -816,17 +817,43 @@ impl Builder<'_> {
         if gs.is_empty() {
             return;
         }
-        let size = style.font.size;
+        let size = if fs > 0.0 { fs } else { style.font.size };
         let half = LU::from_f32(size * 0.5);
         let (x, top) = (ax + f.x, ay + f.y);
         let bounds = Rect::new(x - half, top - half, f.w + half + half, f.h + half + half);
         let paint = gs.iter().map(|g| PaintGlyph { font: g.font, glyph: g.glyph, advance: g.advance, dx: g.offset_x, dy: g.offset_y });
         let shadows = style.text.shadow.clone();
-        self.push_text(bounds, x, top + asc, size, color, paint, shadows.as_deref().map(Vec::as_slice));
+        match v {
+            0 => self.push_text(bounds, x, top + asc, size, color, paint, shadows.as_deref().map(Vec::as_slice), false),
+            // Sideways (css-writing-modes-3 5.1): the pen runs down the line, `asc` from the left edge is the baseline; no shadows.
+            1 => self.push_text(bounds, x + asc, top, size, color, paint, None, true),
+            // Upright: every glyph in a cell of its own, centred across the line, its baseline `asc` below the middle of the cell
+            // (the pen does not move; the glyphs are placed by their offsets).
+            2 => {
+                let xc = f.w.to_f32() / 2.0;
+                let mid = asc.to_f32();
+                let mut cum = 0.0f32;
+                let placed: Vec<PaintGlyph> = gs
+                    .iter()
+                    .map(|g| {
+                        let p = PaintGlyph { font: g.font, glyph: g.glyph, advance: 0.0, dx: xc - g.offset_x * 0.5, dy: cum + g.advance * 0.5 + mid };
+                        cum += g.advance;
+                        p
+                    })
+                    .collect();
+                self.push_text(bounds, x, top, size, color, placed.into_iter(), None, false);
+            }
+            // `text-combine-upright`: one horizontal cell, centred in the cell.
+            _ => {
+                let w: f32 = gs.iter().map(|g| g.advance).sum();
+                let x0 = x + LU::from_f32((f.w.to_f32() - w) * 0.5);
+                self.push_text(bounds, x0, top + LU::from_f32(f.h.to_f32() * 0.5) + asc, size, color, paint, None, false);
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn push_text(&mut self, bounds: Rect, x: LU, baseline: LU, size: f32, color: Color, glyphs: impl Iterator<Item = PaintGlyph>, shadows: Option<&[Shadow]>) {
+    fn push_text(&mut self, bounds: Rect, x: LU, baseline: LU, size: f32, color: Color, glyphs: impl Iterator<Item = PaintGlyph>, shadows: Option<&[Shadow]>, rot: bool) {
         // A shadow can reach into view from outside the bounds of the text.
         let reach = LU::from_f32(shadows.map_or(0.0, |sh| sh.iter().map(Shadow::px).map(|[dx, dy, b, _]| dx.abs().max(dy.abs()) + b * 1.5 + 1.0).fold(0.0, f32::max)).min(1.0e5));
         let wide = Rect::new(bounds.x - reach, bounds.y - reach, bounds.w + reach + reach, bounds.h + reach + reach);
@@ -846,10 +873,10 @@ impl Builder<'_> {
             let (dx, dy, blur) = (dx.clamp(-1.0e5, 1.0e5), dy.clamp(-1.0e5, 1.0e5), blur.min(1.0e4));
             let g = LU::from_f32(blur * 1.5 + 1.0);
             let b = Rect::new(bounds.x + LU::from_f32(dx) - g, bounds.y + LU::from_f32(dy) - g, bounds.w + g + g, bounds.h + g + g);
-            self.push(b, ItemKind::Text(TextRun { x: x + LU::from_f32(dx), baseline: baseline + LU::from_f32(dy), size, color: col, glyphs, blur }));
+            self.push(b, ItemKind::Text(TextRun { x: x + LU::from_f32(dx), baseline: baseline + LU::from_f32(dy), size, color: col, glyphs, blur, rot }));
         }
         if color.a != 0 {
-            self.push(bounds, ItemKind::Text(TextRun { x, baseline, size, color, glyphs, blur: 0.0 }));
+            self.push(bounds, ItemKind::Text(TextRun { x, baseline, size, color, glyphs, blur: 0.0, rot }));
         }
     }
 
@@ -858,7 +885,7 @@ impl Builder<'_> {
     fn replaced(&mut self, id: BoxId, r: Rect) {
         let res = self.res;
         let bx = res.tree.get(id);
-        let style = bx.style.clone();
+        let style = bx.pstyle().clone();
         if !Self::visible_style(&style) {
             return;
         }
@@ -918,7 +945,7 @@ impl Builder<'_> {
 
     /// Write `text` in the font of box `id` near the top left corner of `r`, clipped to `r`.
     fn label(&mut self, id: BoxId, r: Rect, text: &str) {
-        let style = self.res.tree.get(id).style.clone();
+        let style = self.res.tree.get(id).pstyle().clone();
         let f = &style.font;
         let q = FontQuery { families: &f.family, weight: f.weight, slant: slant_of(f.style), lang: style.text.lang.as_deref() };
         let Some(font) = self.platform.resolve_font(&q) else { return };
@@ -929,7 +956,7 @@ impl Builder<'_> {
         let (x, base) = (r.x + pad, r.y + pad + LU::from_f32(ascent).round_px());
         let prev = self.push_clip(r);
         let bounds = Rect::new(r.x, r.y, r.w, r.h);
-        self.push_text(bounds, x, base, f.size, GREY_TEXT, glyphs, None);
+        self.push_text(bounds, x, base, f.size, GREY_TEXT, glyphs, None, false);
         self.restore(prev);
     }
 

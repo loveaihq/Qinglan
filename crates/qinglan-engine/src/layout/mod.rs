@@ -31,6 +31,7 @@ pub mod position;
 pub mod replaced;
 pub mod table;
 pub mod units;
+pub mod vertical;
 
 use std::rc::Rc;
 
@@ -141,7 +142,11 @@ pub enum FragKind {
     /// shaped into `LayoutResult::glyphs[glyphs.0..glyphs.1]` (advances include letter- and
     /// word-spacing and justification), with the decoration lines `LayoutResult::decorations[decor.0..decor.1]`.
     /// `asc` is the distance from the top of the fragment (the content area) to the baseline.
-    Text { text: u32, start: u32, end: u32, glyphs: (u32, u32), decor: (u32, u32), asc: LayoutUnit },
+    ///
+    /// `v` is the orientation in vertical text (css-writing-modes-3 5): 0 horizontal, 1 sideways (glyphs turned a quarter clockwise,
+    /// the baseline `asc` from the left edge of the fragment), 2 upright (`asc` is the offset of the glyphs' baseline below the
+    /// middle of their cell), 3 `text-combine-upright` (one horizontal cell; `fs` is the font size it was shaped at).
+    Text { text: u32, start: u32, end: u32, glyphs: (u32, u32), decor: (u32, u32), asc: LayoutUnit, v: u8, fs: f32 },
     /// The text of an inside list marker (same fields as `Text`).
     Marker { text: u32, start: u32, end: u32, glyphs: (u32, u32), asc: LayoutUnit },
     /// The forced break itself (zero width).
@@ -402,6 +407,10 @@ pub(crate) struct Layouter<'a> {
     /// The first and last baseline of flex containers (css-flexbox-1 8.5), relative to their border boxes; `LayoutUnit::MIN`
     /// is "none".
     pub flex_base: FxHashMap<BoxId, (LayoutUnit, LayoutUnit)>,
+    /// The geometry `layout_frame` computed for the frame root about to be laid out (vertical.rs).
+    pub inner_geom: Option<block::Geom>,
+    /// The frame root whose content widths are being measured (intrinsic.rs).
+    pub in_frame: BoxId,
 }
 
 impl Layouter<'_> {
@@ -514,6 +523,8 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
         flex_sens: Vec::new(),
         flex_spent: 0,
         flex_base: FxHashMap::default(),
+        inner_geom: None,
+        in_frame: NO_BOX,
     };
     l.prefetch_text();
     l.layout_root();

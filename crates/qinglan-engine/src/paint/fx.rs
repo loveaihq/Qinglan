@@ -276,6 +276,23 @@ impl Ctx<'_> {
         let Some(glyphs) = self.list.glyphs.get(run.glyphs.0 as usize..run.glyphs.1 as usize) else { return };
         let dpr = self.dpr as f32;
         let size = run.size * dpr;
+        if run.rot {
+            // Sideways text: a glyph is turned a quarter clockwise about its pen position, which moves down the line.
+            let px = run.x.to_f32() * dpr - self.sx as f32;
+            let mut pen = run.baseline.to_f32() * dpr - self.sy as f32;
+            let (lo, hi) = (clip.y0 as f32 - 2.0 * size - 4.0, clip.y1 as f32 + 2.0 * size + 4.0);
+            for g in glyphs {
+                let gy = pen + g.dx * dpr;
+                pen += g.advance * dpr;
+                if !(gy > lo && gy < hi) {
+                    continue;
+                }
+                let Some(mask) = self.platform.glyph_mask(crate::platform::FontId(u32::from(g.font)), u32::from(g.glyph), size, 0) else { continue };
+                let r = turn_mask(&mask);
+                f((px - g.dy * dpr).round() as i32 + r.left, gy.round() as i32 + r.top, &r);
+            }
+            return;
+        }
         let mut pen = run.x.to_f32() * dpr - self.sx as f32;
         let base = super::raster::dev(run.baseline, self.dpr) - self.sy;
         // Glyphs this far outside the clip cannot reach into it.
@@ -596,5 +613,31 @@ fn cover_row(b: &IRect, corners: &[(IRect, Rc<Mask>, i32, i32)], y: i32, x0: i32
                 out[(x - x0) as usize] = m.at(x - ox, y - oy);
             }
         }
+    }
+}
+
+/// A glyph mask turned a quarter clockwise about the pen position: the point `(u, v)` (right of the pen, below the baseline)
+/// goes to `(-v, u)`.
+fn turn_mask(m: &GlyphMask) -> GlyphMask {
+    let (w, h) = (m.width as usize, m.height as usize);
+    let turn = |src: &[u8], bpp: usize| -> Vec<u8> {
+        let mut out = vec![0u8; src.len()];
+        for my in 0..h {
+            for mx in 0..w {
+                let (cx, ry) = (h - 1 - my, mx);
+                if let (Some(s), Some(d)) = (src.get((my * w + mx) * bpp..(my * w + mx + 1) * bpp), out.get_mut((ry * h + cx) * bpp..(ry * h + cx + 1) * bpp)) {
+                    d.copy_from_slice(s);
+                }
+            }
+        }
+        out
+    };
+    GlyphMask {
+        left: -(m.top + m.height as i32),
+        top: m.left,
+        width: m.height,
+        height: m.width,
+        alpha: if m.alpha.len() == w * h { turn(&m.alpha, 1) } else { Vec::new() },
+        bgra: if m.bgra.len() == w * h * 4 { turn(&m.bgra, 4) } else { Vec::new() },
     }
 }

@@ -219,6 +219,8 @@ struct Inner {
     web_loader: Option<WebFontLoader>,
     /// Shaping right to left now (set around `shape_uncached`).
     rtl: bool,
+    /// Shaping upright vertical text now (the `vert` feature).
+    vert: bool,
     /// The emoji font (Segoe UI Emoji): not looked for yet / not installed / its id.
     emoji: Option<Option<u32>>,
 }
@@ -264,6 +266,7 @@ impl WinPlatform {
             next_web_id: 0,
             web_loader: None,
             rtl: false,
+            vert: false,
             emoji: None,
         };
         Some(WinPlatform { dw, inner: RefCell::new(inner) })
@@ -802,7 +805,7 @@ impl Inner {
             let (cp, len) = decode_unit(seg, i);
             // A mark or variation selector after the character must be shaped together with it.
             let next_attached = seg.get(i + len..).filter(|r| !r.is_empty()).is_some_and(|rest| char::from_u32(decode_unit(rest, 0).0).is_some_and(is_attached));
-            let simple = !self.rtl && is_context_free(cp) && !next_attached;
+            let simple = !self.rtl && !self.vert && is_context_free(cp) && !next_attached;
             let hit = if simple { seg.get(i..i + len).and_then(|unit| self.context_free_glyph(dw, q, fid, &entry, cp, unit)) } else { None };
             if let Some((glyph, adv_em)) = hit {
                 if pending < i {
@@ -1022,14 +1025,16 @@ impl Inner {
     /// lost, as in Chrome. Runs the platform cannot shape become missing-glyph boxes.
     #[allow(clippy::too_many_arguments)]
     fn shape_words(&mut self, dw: &Factory, q: &QueryInfo, fid: u32, entry: &FontEntry, sub: &[u16], sa: ScriptAnalysis, size: f32, base: usize, map: &[u32], out: &mut Vec<Glyph>) {
-        if self.rtl {
-            // Right to left: the run goes through as a whole (words are not cached; joining and kerning need the context).
+        if self.rtl || self.vert {
+            // Right to left, or upright vertical: the run goes through as a whole (words are not cached; joining and kerning need the
+            // context, and the vertical forms are not the horizontal ones).
             let t = Instant::now();
-            let sh = dw.shape_dir(sub, &entry.face, size, sa, &q.locale, true);
+            let sh = dw.shape_dir(sub, &entry.face, size, sa, &q.locale, self.rtl, self.vert);
             self.add_shape_time(t.elapsed().as_micros() as u64);
             self.stats.shape_calls += 1;
             match sh {
-                Some(sh) => emit_run_rtl(out, fid, &sh, base, sub.len(), map, 1.0),
+                Some(sh) if self.rtl => emit_run_rtl(out, fid, &sh, base, sub.len(), map, 1.0),
+                Some(sh) => emit_run(out, fid, &sh, base, sub.len(), map, 1.0),
                 None => notdef_run(out, fid, base, base + sub.len(), map, size),
             }
             return;
@@ -1220,7 +1225,7 @@ fn notdef_run(out: &mut Vec<Glyph>, fid: u32, from: usize, to: usize, map: &[u32
 
 impl WinPlatform {
     /// `Platform::shape` and `shape_rtl`: `rtl` shapes right to left (the cache keeps the two apart).
-    fn shape_dir(&self, text: &str, query: &FontQuery<'_>, size_px: f32, rtl: bool) -> Vec<Glyph> {
+    fn shape_dir(&self, text: &str, query: &FontQuery<'_>, size_px: f32, rtl: bool, vert: bool) -> Vec<Glyph> {
         if text.is_empty() {
             return Vec::new();
         }
@@ -1228,7 +1233,7 @@ impl WinPlatform {
         let size_bits = size.to_bits();
         let mut inn = self.inner.borrow_mut();
         let qi = inn.query_index(&self.dw, query);
-        let qk = qi | (u32::from(rtl) << 31);
+        let qk = qi | (u32::from(rtl) << 31) | (u32::from(vert) << 30);
         let key = shape_hash(qk, size_bits, text);
         let hit = match inn.shape_cache.get(&key) {
             Some(e) if e.qi == qk && e.size_bits == size_bits && *e.text == *text => Some(Rc::clone(&e.glyphs)),
@@ -1241,8 +1246,10 @@ impl WinPlatform {
         inn.stats.shape_misses += 1;
         let t_miss = Instant::now();
         inn.rtl = rtl;
+        inn.vert = vert;
         let glyphs = inn.shape_uncached(&self.dw, text, qi, size);
         inn.rtl = false;
+        inn.vert = false;
         inn.stats.us_miss += t_miss.elapsed().as_micros() as u64;
         let cost = text.len() + glyphs.len() * GLYPH_COST + 96;
         inn.shape_cache.insert(key, ShapeEntry { qi: qk, size_bits, text: text.into(), glyphs: glyphs.as_slice().into() }, cost);
@@ -1284,11 +1291,15 @@ impl Platform for WinPlatform {
     }
 
     fn shape(&self, text: &str, query: &FontQuery<'_>, size_px: f32) -> Vec<Glyph> {
-        self.shape_dir(text, query, size_px, false)
+        self.shape_dir(text, query, size_px, false, false)
     }
 
     fn shape_rtl(&self, text: &str, query: &FontQuery<'_>, size_px: f32) -> Vec<Glyph> {
-        self.shape_dir(text, query, size_px, true)
+        self.shape_dir(text, query, size_px, true, false)
+    }
+
+    fn shape_upright(&self, text: &str, query: &FontQuery<'_>, size_px: f32) -> Vec<Glyph> {
+        self.shape_dir(text, query, size_px, false, true)
     }
 
     fn bidi_levels(&self, text: &str, rtl: bool) -> Vec<u8> {

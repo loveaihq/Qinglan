@@ -43,7 +43,9 @@ sub { vertical-align: sub; }
 sup { vertical-align: super; }
 sub, sup { line-height: normal; font-size: smaller; }
 ruby { display: ruby; }
-rt { display: ruby-text; }
+rb { display: ruby-base; }
+rt { display: ruby-text; font-size: 50%; line-height: normal; }
+rp { display: none; }
 :link { color: #0000EE; text-decoration: underline; cursor: pointer; }
 mark { background-color: yellow; color: black; }
 abbr[title], acronym[title] { text-decoration: dotted underline; }

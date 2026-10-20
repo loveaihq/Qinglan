@@ -104,6 +104,15 @@ pub fn is_bidi_relevant(c: char) -> bool {
         0x0590..=0x08FF | 0x200E | 0x200F | 0x202A..=0x202E | 0x2066..=0x2069 | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF)
 }
 
+/// Is the character set upright in vertical text with `text-orientation: mixed` (UAX #50 Vertical_Orientation U and Tu, for the
+/// common scripts: CJK, kana, Hangul, Bopomofo, CJK and full-width punctuation and symbols, emoji)? The rest is turned sideways.
+pub fn is_vertical_upright(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x11FF | 0x2460..=0x24FF | 0x25A0..=0x27BF | 0x2E80..=0x33FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xA000..=0xA4CF
+        | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xF900..=0xFAFF | 0xFE10..=0xFE1F | 0xFE30..=0xFE6F | 0xFF01..=0xFF60 | 0xFFE0..=0xFFE6
+        | 0x1B000..=0x1B16F | 0x1F000..=0x1FAFF | 0x20000..=0x3FFFD)
+}
+
 /// The strong direction of a character for "first strong" decisions (`dir=auto`, `unicode-bidi: plaintext`; UAX #9 P2):
 /// `Some(true)` for R and AL letters, `Some(false)` for L, `None` for everything else (digits, marks, neutrals).
 pub fn strong_rtl(c: char) -> Option<bool> {

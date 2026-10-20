@@ -307,6 +307,17 @@ fn joins_previous(c: char) -> bool {
         | 0x3099..=0x309A | 0xA960..=0xA97C | 0xD7B0..=0xD7FF | 0xFE00..=0xFE0F | 0xFE20..=0xFE2F | 0x1F3FB..=0x1F3FF | 0xE0020..=0xE007F | 0xE0100..=0xE01EF)
 }
 
+/// How a character is set in vertical text (css-writing-modes-3 5.1): 2 upright, 1 sideways (a quarter turn clockwise).
+fn vertical_class(t: &crate::css::computed::TextStyle, c: char) -> u8 {
+    use crate::css::types::{TextOrientation, WritingMode};
+    match t.text_orientation {
+        TextOrientation::Upright => 2,
+        TextOrientation::Sideways => 1,
+        TextOrientation::Mixed if matches!(t.writing_mode, WritingMode::SidewaysRl | WritingMode::SidewaysLr) => 1,
+        TextOrientation::Mixed => 1 + u8::from(crate::textclass::is_vertical_upright(c)),
+    }
+}
+
 /// End of the piece of `text` that starts at byte `from` and goes to the platform in one call: the end of the text,
 /// or, for a longer text, about `SHAPE_CHUNK` bytes on, preferably right after a space or line feed within the last
 /// 4 KiB, else at the last place where the next character does not attach to the one before (and that one is not a
@@ -358,6 +369,10 @@ struct Unit {
     brk: bool,
     /// The resolved bidi level (UAX #9); 0 in a paragraph without bidi analysis.
     level: u8,
+    /// In vertical text: 1 sideways, 2 upright, 3 a `text-combine-upright` cell; 0 otherwise.
+    vo: u8,
+    /// The percentage a `text-combine-upright` cell was shrunk to.
+    tcy: u8,
 }
 
 /// What an atomic inline needs besides its width: min-content width (measuring), height above /
@@ -388,6 +403,8 @@ impl Unit {
             edge_start: false,
             brk: false,
             level: 0,
+            vo: 0,
+            tcy: 100,
         }
     }
 }
@@ -514,12 +531,15 @@ enum Align {
     Left,
     Center,
     Right,
+    /// `ruby-align: space-around` (ruby boxes only).
+    Space,
 }
 
 /// `start` and `end` are the left and right side of a left-to-right paragraph and the opposite in a right-to-left one
 /// (css-text-3 7.1); `justify` starts at the start side.
 fn align_of(a: TextAlign, rtl: bool) -> Align {
     match (a, rtl) {
+        (TextAlign::RubySpace, _) => Align::Space,
         (TextAlign::Right, _) | (TextAlign::End, false) | (TextAlign::Start | TextAlign::MatchParent | TextAlign::Justify | TextAlign::JustifyAll, true) => Align::Right,
         (TextAlign::Center, _) => Align::Center,
         _ => Align::Left,
@@ -595,6 +615,8 @@ struct Group {
     /// The byte range of the item's text the units cover.
     lo: u32,
     hi: u32,
+    /// `Unit::level` of the first unit (the orientation, in vertical text).
+    lv: u8,
 }
 
 /// A box taking part in the vertical alignment of one line.
@@ -653,7 +675,9 @@ fn sub_super_offset(size: f32, is_super: bool) -> LU {
 impl Layouter<'_> {
     /// Metrics of the primary font of `style`, cached per font description.
     pub(super) fn font_for(&mut self, style: &ComputedStyle) -> Rc<ResolvedFont> {
-        let key = (Rc::as_ptr(&style.font) as usize, style.text.lang.as_ref().map_or(0, |l| Rc::as_ptr(l) as *const u8 as usize));
+        // In `vertical-lr` the line-over side (where the glyphs' tops point) is the right, the block-end side: the metrics swap.
+        let flip = style.text.writing_mode.lr();
+        let key = (Rc::as_ptr(&style.font) as usize | usize::from(flip), style.text.lang.as_ref().map_or(0, |l| Rc::as_ptr(l) as *const u8 as usize));
         if let Some(r) = self.fonts.get(&key) {
             return r.clone();
         }
@@ -673,12 +697,13 @@ impl Layouter<'_> {
         // Half-leading (css-inline-3 4.2): the part above is rounded down to whole px (like Blink).
         let diff = lh - (asc + desc);
         let lead_top = diff.half().floor_px();
+        let (asc, desc, lead_top, lead_bottom) = if flip { (desc, asc, diff - lead_top, lead_top) } else { (asc, desc, lead_top, diff - lead_top) };
         let r = Rc::new(ResolvedFont {
             size: f.size,
             asc,
             desc,
             lead_top,
-            lead_bottom: diff - lead_top,
+            lead_bottom,
             x_height: LU::from_f32(m.x_height.unwrap_or(0.5 * f.size)),
             zero_adv: LU::from_f32(m.zero_advance.unwrap_or(0.5 * f.size)),
             underline_offset: m.underline_offset,
@@ -1034,29 +1059,82 @@ impl Layouter<'_> {
     /// arrays and the pieces' glyph arrays are the size of a piece, not of a megabyte of text; the arrays that keep the
     /// result are reserved once.
     fn shape_item(&mut self, item: &Item, ii: u32, text: &str, units: &mut Vec<Unit>, levels: Option<&[u8]>) {
-        if text.len() > SHAPE_CHUNK {
+        if text.len() > SHAPE_CHUNK && !item.style.text.writing_mode.vertical() {
             // A little more than one glyph per character (ligature-free text can still come out at 1.01).
             let n = text.chars().count();
             self.glyphs.reserve(n + n / 16);
             units.reserve(n);
         }
+        // `text-combine-upright` (css-writing-modes-3 9.1): up to four characters share one upright cell of 1em; wider text is
+        // shaped smaller to fit, and the cell is a unit of its own that is drawn horizontally.
+        if item.style.text.writing_mode.vertical() && !text.is_empty() {
+            let n = text.chars().count();
+            let digits = text.chars().all(|c| c.is_ascii_digit());
+            let combine = match item.style.text.text_combine {
+                crate::css::types::TextCombine::All => n <= 4,
+                crate::css::types::TextCombine::Digits => digits && n == 2,
+                crate::css::types::TextCombine::None => false,
+            };
+            if combine {
+                let rf = self.font_for(&item.style);
+                let f = &item.style.font;
+                let q = FontQuery { families: &f.family, weight: f.weight, slant: slant_of(f.style), lang: item.style.text.lang.as_deref() };
+                let mut glyphs = self.platform.shape(text, &q, rf.size);
+                let w: f32 = glyphs.iter().map(|g| g.advance).sum();
+                let mut scale = 1.0f32;
+                if w > rf.size && w > 0.0 {
+                    scale = rf.size / w;
+                    glyphs = self.platform.shape(text, &q, rf.size * scale);
+                }
+                let gbase = self.glyphs.len() as u32;
+                self.glyphs.extend(glyphs.iter().map(super::PlacedGlyph::from));
+                let mut u = Unit::new(UnitKind::Normal, ii);
+                u.end = text.len() as u32;
+                u.adv = LU::from_f32(rf.size);
+                u.glyphs = (gbase, self.glyphs.len() as u32);
+                u.first = text.chars().next().unwrap_or('\u{FFFC}');
+                u.last = text.chars().next_back().unwrap_or('\u{FFFC}');
+                u.vo = 3;
+                u.tcy = (scale * 100.0).clamp(1.0, 100.0) as u8;
+                units.push(u);
+                return;
+            }
+        }
+        let vertical = item.style.text.writing_mode.vertical();
         let mut tab_size: Option<LU> = None;
         let (mut a, mut ci) = (0usize, 0usize);
         while a < text.len() {
             let b = shape_cut(text, a);
+            if vertical {
+                // Vertical text (css-writing-modes-3 5.1): a piece is upright or sideways; marks follow their base.
+                let (mut run, mut cur, mut cur_lvl) = (a, 0u8, 0u8);
+                for (n, (off, c)) in text.get(a..b).unwrap_or("").char_indices().enumerate() {
+                    let k = if cur != 0 && joins_previous(c) { cur } else { vertical_class(&item.style.text, c) };
+                    let lvl = levels.and_then(|l| l.get(ci + n)).copied().unwrap_or(0);
+                    if cur != 0 && (k != cur || lvl != cur_lvl) {
+                        self.shape_piece(item, ii, text, (run, a + off), cur_lvl, cur, &mut tab_size, units);
+                        run = a + off;
+                    }
+                    (cur, cur_lvl) = (k, lvl);
+                }
+                self.shape_piece(item, ii, text, (run, b), cur_lvl, cur.max(1), &mut tab_size, units);
+                ci += text.get(a..b).map_or(0, |t| t.chars().count());
+                a = b;
+                continue;
+            }
             match levels {
-                None => self.shape_piece(item, ii, text, (a, b), 0, &mut tab_size, units),
+                None => self.shape_piece(item, ii, text, (a, b), 0, 0, &mut tab_size, units),
                 // A piece is shaped in one direction: it is cut where the level changes.
                 Some(l) => {
                     let mut run = (a, l.get(ci).copied().unwrap_or(0));
                     for (n, (off, _)) in text.get(a..b).unwrap_or("").char_indices().enumerate() {
                         let lvl = l.get(ci + n).copied().unwrap_or(0);
                         if lvl != run.1 {
-                            self.shape_piece(item, ii, text, (run.0, a + off), run.1, &mut tab_size, units);
+                            self.shape_piece(item, ii, text, (run.0, a + off), run.1, 0, &mut tab_size, units);
                             run = (a + off, lvl);
                         }
                     }
-                    self.shape_piece(item, ii, text, (run.0, b), run.1, &mut tab_size, units);
+                    self.shape_piece(item, ii, text, (run.0, b), run.1, 0, &mut tab_size, units);
                 }
             }
             ci += text.get(a..b).map_or(0, |t| t.chars().count());
@@ -1068,13 +1146,27 @@ impl Layouter<'_> {
     /// `level` the piece is shaped right to left and its glyph clusters are stored last to first, so that they are in drawing
     /// order when the units are shown in reverse (the units themselves stay in logical order).
     #[allow(clippy::too_many_arguments)]
-    fn shape_piece(&mut self, item: &Item, ii: u32, text: &str, range: (usize, usize), level: u8, tab_size: &mut Option<LU>, units: &mut Vec<Unit>) {
+    fn shape_piece(&mut self, item: &Item, ii: u32, text: &str, range: (usize, usize), level: u8, vert: u8, tab_size: &mut Option<LU>, units: &mut Vec<Unit>) {
         let Some(piece) = text.get(range.0..range.1) else { return };
         let rf = self.font_for(&item.style);
         let f = &item.style.font;
         let q = FontQuery { families: &f.family, weight: f.weight, slant: slant_of(f.style), lang: item.style.text.lang.as_deref() };
-        let rtl = level % 2 == 1;
-        let mut glyphs = if rtl { self.platform.shape_rtl(piece, &q, rf.size) } else { self.platform.shape(piece, &q, rf.size) };
+        let rtl = level % 2 == 1 && vert != 2;
+        let mut glyphs = if rtl {
+            self.platform.shape_rtl(piece, &q, rf.size)
+        } else if vert == 2 {
+            self.platform.shape_upright(piece, &q, rf.size)
+        } else {
+            self.platform.shape(piece, &q, rf.size)
+        };
+        if vert == 2 {
+            // Upright glyphs advance one em down the line whatever their width (css-writing-modes-3 5.1); the width they have is kept in
+            // `offset_x`, which the painter centres them by.
+            for g in glyphs.iter_mut().filter(|g| g.advance > 0.0) {
+                g.offset_x = g.advance;
+                g.advance = rf.size;
+            }
+        }
         if range.0 > 0 {
             let off = range.0 as u32;
             for g in &mut glyphs {
@@ -1161,6 +1253,7 @@ impl Layouter<'_> {
             u.end = ce;
             u.adv = width;
             u.level = level;
+            u.vo = vert;
             u.glyphs = if rtl {
                 let p = gbase + stored.get(cn).copied().unwrap_or(0);
                 (p, p + (j - i) as u32)
@@ -1273,8 +1366,13 @@ impl Layouter<'_> {
         // (A text field keeps its text's baseline even though its content is clipped; a text area does not.)
         let clipped = o.clip && !bx.force_clip;
         let table = matches!(bx.fallback, Some(crate::css::types::Display::InlineTable | crate::css::types::Display::InlineFlex | crate::css::types::Display::InlineGrid));
-        let baseline = if bx.kind == BoxKind::Replaced || clipped || matches!(bx.control(), Control::TextArea(..)) {
+        let ruby = bx.rare.as_ref().map_or(0, |r| r.ruby);
+        let baseline = if bx.kind == BoxKind::Replaced || bx.froot || clipped || matches!(bx.control(), Control::TextArea(..)) {
             None
+        } else if ruby != 0 {
+            // A ruby pair sits on the baseline of its base, not of the last line (css-ruby-1 3.3).
+            let base = bx.children.get(if ruby == 1 { 0 } else { 1 }).copied();
+            base.and_then(|b| self.last_baseline(b).map(|bl| self.out.get(b as usize).map_or(LU::ZERO, |o| o.y) + bl))
         } else if table {
             // The baseline of an inline-table is that of its first row (CSS2 17.5.1).
             self.first_baseline(id)
@@ -1357,6 +1455,7 @@ impl Layouter<'_> {
         let strut_desc = strut_font.desc + strut_font.lead_bottom;
         let text_align = if bx.style.text.text_align == TextAlign::MatchParent { match_parent(tree, block) } else { bx.style.text.text_align };
         let rtl = prep.base_level == 1;
+        let vp = bx.style.text.writing_mode.vertical();
         let align = align_of(text_align, rtl);
         let mut order: Vec<usize> = Vec::new();
         let mut lvls: Vec<u8> = Vec::new();
@@ -1591,6 +1690,26 @@ impl Layouter<'_> {
                     free = LU::ZERO;
                 }
             }
+            // `ruby-align: space-around` (css-ruby-1 4.1): the room is shared by the characters, half of a share at both ends.
+            let mut ruby_start = LU::ZERO;
+            if matches!(align, Align::Space) && free > LU::ZERO && !rtl {
+                let cells: Vec<usize> = (s..e - hang_n).filter(|&k| prep.units.get(k).is_some_and(|u| u.kind == UnitKind::Normal)).collect();
+                if let Some((_, rest)) = cells.split_last() {
+                    let gap = free.raw() as i64 / cells.len() as i64;
+                    for &k in rest {
+                        if let Some(w) = widths.get_mut(k - s) {
+                            *w += LU::from_raw(gap);
+                        }
+                        if let Some(gi) = prep.units.get(k).map(|u| u.glyphs).filter(|g| g.1 > g.0).map(|g| g.1 as usize - 1)
+                            && let Some(g) = self.glyphs.get_mut(gi)
+                        {
+                            g.advance += LU::from_raw(gap).to_f32();
+                        }
+                    }
+                    ruby_start = LU::from_raw(gap / 2);
+                    free = LU::ZERO;
+                }
+            }
             let offset = if rtl {
                 // Right to left: the text starts at the right edge (less the indent), hanging spaces hang at the left, and a line
                 // that is too long overflows to the left (css-text-3 7.1).
@@ -1601,6 +1720,7 @@ impl Layouter<'_> {
                         Align::Left => LU::ZERO,
                         Align::Center => free.half() - hang,
                         Align::Right => free - hang,
+                        Align::Space => LU::ZERO,
                     }
                 }
             } else {
@@ -1608,6 +1728,7 @@ impl Layouter<'_> {
                     Align::Left => LU::ZERO,
                     Align::Center if free > LU::ZERO => free.half(),
                     Align::Right if free > LU::ZERO => free,
+                    Align::Space => ruby_start,
                     _ => LU::ZERO,
                 }
             };
@@ -1649,18 +1770,18 @@ impl Layouter<'_> {
                 let Some(u) = prep.units.get(s + ki) else { break };
                 let w = widths.get(ki).copied().unwrap_or(LU::ZERO);
                 match groups.last_mut() {
-                    Some(g) if g.item == u.item && prep.units.get(g.z).is_some_and(|p| p.glyphs.1 == u.glyphs.0) => {
+                    Some(g) if g.item == u.item && (!vp || g.lv == u.vo) && prep.units.get(g.z).is_some_and(|p| p.glyphs.1 == u.glyphs.0) => {
                         g.z = s + ki;
                         g.w += w;
                         g.lo = g.lo.min(u.start);
                         g.hi = g.hi.max(u.end);
                     }
-                    _ => groups.push(Group { item: u.item, a: s + ki, z: s + ki, x: gx, w, lo: u.start, hi: u.end }),
+                    _ => groups.push(Group { item: u.item, a: s + ki, z: s + ki, x: gx, w, lo: u.start, hi: u.end, lv: u.vo }),
                 }
                 gx += w;
             }
             if forced && let Some(fu) = prep.units.get(end) {
-                groups.push(Group { item: fu.item, a: end, z: end, x: gx, w: LU::ZERO, lo: 0, hi: 0 });
+                groups.push(Group { item: fu.item, a: end, z: end, x: gx, w: LU::ZERO, lo: 0, hi: 0, lv: 0 });
             }
 
             // Vertical alignment (CSS2 10.8.1): the boxes on this line and their offsets.
@@ -1902,7 +2023,19 @@ impl Layouter<'_> {
                             for sp in &it.decor {
                                 self.push_decoration(sp, &rf, fx, baseline_y, g.w);
                             }
-                            FragKind::Text { text: tid, start: g.lo, end: g.hi, glyphs, decor: (d0, self.decorations.len() as u32), asc: rf.asc }
+                            let (v, fs, asc) = if vp {
+                                // The glyphs' baseline offset from the middle of an upright cell: half of ascent less descent (those of the
+                                // font as it really is, `font_for` swaps them for `vertical-lr`).
+                                let mid = if it.style.text.writing_mode.lr() { (rf.desc - rf.asc).half() } else { (rf.asc - rf.desc).half() };
+                                match ua.vo {
+                                    2 => (2, 0.0, mid),
+                                    3 => (3, rf.size * f32::from(ua.tcy) / 100.0, mid),
+                                    _ => (1, 0.0, rf.asc),
+                                }
+                            } else {
+                                (0, 0.0, rf.asc)
+                            };
+                            FragKind::Text { text: tid, start: g.lo, end: g.hi, glyphs, decor: (d0, self.decorations.len() as u32), asc, v, fs }
                         };
                         self.fragments.push(Fragment { box_id: it.box_id, kind, x: fx, y: baseline_y - rf.asc, w: g.w, h: rf.asc + rf.desc });
                     }
