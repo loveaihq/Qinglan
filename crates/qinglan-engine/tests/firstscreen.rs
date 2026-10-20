@@ -208,3 +208,20 @@ fn flex_and_grid_shells_are_cut_by_the_stop_line() {
         assert!(c.complete >= 3, "{name}: {} boxes fully above the line", c.complete);
     }
 }
+
+#[test]
+fn a_hidden_out_of_flow_box_waits_for_the_full_layout() {
+    // A closed drop-down menu: out of flow and invisible, so the first screen does not lay it out (its shrink-to-fit width
+    // may need all of its text); the partial layout says so, and the full layout has it.
+    let src = "<body><div style=\"position:relative\"><div id=menu style=\"position:absolute;visibility:hidden;width:max-content\">menu text</div><p>short page</p></div>";
+    let part = lay(src, 400.0, 300.0, Some(600.0));
+    let full = lay(src, 400.0, 300.0, None);
+    assert!(part.partial && !full.partial);
+    let hidden: Vec<BoxId> = (0..full.tree.boxes.len() as BoxId).filter(|&id| full.tree.get(id).oof && has_out(&full, id)).collect();
+    assert_eq!(hidden.len(), 1);
+    assert!(full.box_out(hidden[0]).w > LU::ZERO, "the full layout sizes it");
+    assert_eq!(part.box_out(hidden[0]).w, LU::ZERO, "the partial layout leaves it out");
+    // A visible one is laid out at once, and a hidden box with a visible descendant too.
+    let seen = "<body><div style=\"position:relative\"><div style=\"position:absolute;width:max-content\">menu text</div><div style=\"position:absolute;visibility:hidden\"><span style=\"visibility:visible\">shown</span></div></div>";
+    assert!(!lay(seen, 400.0, 300.0, Some(600.0)).partial);
+}

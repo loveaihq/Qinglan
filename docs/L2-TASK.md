@@ -114,3 +114,4 @@
 - 2b-1（flex）完成（2026-10-17）：`css-flexbox` WPT 647 / 951，exe 1,984,000（+56,832，比 2b-1 的 +50 KB 多 6.8 KB，2b 总分配 +100 KB 内），zhwiki-rec 内存最大 46.51 MB，首屏中位数 113 / 170 / 149 毫秒；详见 `docs/decisions.md` "2b-1"。
 
 - 2b-2（grid）完成（2026-10-17）：`css-grid` WPT 554 / 1573，exe 2,138,624（+154,624，**超出 2b 预算 111,624**：grid 实现比分到的 43 KB 大；2c–2e 的体积要重新分配，总上限 2,516,582 还剩 377,958），zhwiki-rec 内存最大 47.86 MB，首屏中位数 146.6 / 167.5 / 146.2 / 34.4 毫秒；首屏优先进入列 flex、行 flex 和 grid；49 页重跑见 `tests/corpus/RESULTS.md` 第 6 节；详见 `docs/decisions.md` "2b-2"。
+- 2b-3（grid 之后的首屏和体积，2026-10-20）：zhwiki-rec 首屏中位数 143.8 → 120.5 毫秒（`qinglan-cli bench`；原因是页面第一次排对，不是 grid 的最小内容宽度；首屏优先不再排看不见的脱离文档流盒子）；exe 2,150,400 → 2,012,160（排序去重、`inline-threshold=45`、`inlinehint-threshold=150`），2b 预算 2,027,000，余 14,840，可算进 2c；详见 `docs/decisions.md` "2b-3"。

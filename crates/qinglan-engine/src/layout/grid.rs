@@ -1106,7 +1106,7 @@ impl Layouter<'_> {
         let nt = g.tr.g(ax).len();
         let span_of = |g: &Grid, i: usize| g.items.get(i).map_or(1, |it| it.sp.v(ax));
         let mut order: Vec<usize> = (0..g.items.len()).filter(|&i| g.items.get(i).is_some_and(|it| it.ok)).collect();
-        order.sort_by_key(|&i| span_of(g, i));
+        crate::sorting::sort_by_u64_key(&mut order, |&i| span_of(g, i) as u64);
         let range_of = |g: &Grid, i: usize| g.items.get(i).map_or((0, 0), |it| (it.st.v(ax) as usize, (it.st.v(ax) as usize + it.sp.v(ax)).min(nt)));
         let has_flex = |g: &Grid, i: usize| {
             let (a, b) = range_of(g, i);
@@ -1269,7 +1269,7 @@ impl Layouter<'_> {
             }
             let floors: i64 = grown.iter().map(|(_, w)| w.floor() as i64).sum();
             let mut rest = (grown.iter().map(|(_, w)| *w).sum::<f64>().round() as i64 - floors).max(0);
-            grown.sort_by(|a, b| (b.1 - b.1.floor()).total_cmp(&(a.1 - a.1.floor())));
+            crate::sorting::sort_by_u64_key(&mut grown, |a| !crate::sorting::f64_key(a.1 - a.1.floor()));
             for (k, want) in grown {
                 if let Some(t) = g.tr.m(ax).get_mut(k) {
                     t.base = want.floor() as i64 + i64::from(rest > 0);
@@ -1437,9 +1437,9 @@ impl Layouter<'_> {
             }
         }
         // 8.5 / 6: the first and last baseline of the container come from its first and last row.
-        let mut by_pos: Vec<&GItem> = g.items.iter().filter(|i| i.ok).collect();
-        by_pos.sort_by_key(|i| (i.st.r, i.st.c));
-        if let (Some(first), Some(last)) = (by_pos.first(), by_pos.last()) {
+        // (`min_by_key` keeps the first of equal items and `max_by_key` the last, like the ends of a stable sort.)
+        let pos = |i: &&GItem| (i.st.r, i.st.c);
+        if let (Some(first), Some(last)) = (g.items.iter().filter(|i| i.ok).min_by_key(pos), g.items.iter().filter(|i| i.ok).max_by_key(pos)) {
             let fb = self.first_baseline(first.id).zip(self.out.get(first.id as usize)).map(|(b, o)| b + o.y);
             let lb = self.last_baseline(last.id).zip(self.out.get(last.id as usize)).map(|(b, o)| b + o.y);
             self.flex_base.insert(id, (fb.unwrap_or(LU::MIN), lb.unwrap_or(LU::MIN)));

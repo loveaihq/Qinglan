@@ -1,7 +1,8 @@
 # Link the C runtime statically so qinglan.exe runs on a clean Windows
 # without the Visual C++ redistributable (hard rule 5: nothing to install).
 #
-# `-inline-threshold=100` (LLVM's default is 225 at opt-level 3): the final LTO pass inlines less. It makes the whole
-# program about 8% smaller; see docs/decisions.md, 2a-3, for the speed it costs.
+# `-inline-threshold=45` (LLVM's default is 225 at opt-level 3) and `-inlinehint-threshold=150` (default 325, for functions
+# marked `#[inline]` and the generic std code): the final LTO pass inlines less. Together they make the whole program about
+# 11% smaller than the defaults; see docs/decisions.md, 2a-3 and 2b-3, for the speed it costs.
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static", "-C", "llvm-args=-inline-threshold=100"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "llvm-args=-inline-threshold=45", "-C", "llvm-args=-inlinehint-threshold=150"]

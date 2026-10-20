@@ -349,6 +349,8 @@ pub(crate) struct Layouter<'a> {
     /// Min-content and max-content widths of boxes (intrinsic.rs).
     pub widths: FxHashMap<BoxId, (LayoutUnit, LayoutUnit)>,
     pub pending: Vec<Pending>,
+    /// First-screen-first left out an invisible out-of-flow box (its layout waits for the full layout).
+    pub deferred_oof: bool,
     pub cb_stack: Vec<BoxId>,
     pub oof_list: Vec<(BoxId, BoxId)>,
     pub scratch: Vec<BoxId>,
@@ -475,6 +477,7 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
         paras: FxHashMap::default(),
         widths: FxHashMap::default(),
         pending: Vec::new(),
+        deferred_oof: false,
         cb_stack: Vec::new(),
         oof_list: Vec::new(),
         scratch: Vec::new(),
@@ -504,7 +507,7 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
     let has_floats = l.has_floats;
     let tables = std::mem::take(&mut l.tinfo);
     let (boxes, mut lines, mut fragments, glyphs, texts, mut decorations, mut markers, oof, work, incomplete, partial) =
-        (l.out, l.lines, l.fragments, l.glyphs, l.texts, l.decorations, l.markers, l.oof_list, l.work, l.exhausted || l.truncated || tree.cut, l.stopped);
+        (l.out, l.lines, l.fragments, l.glyphs, l.texts, l.decorations, l.markers, l.oof_list, l.work, l.exhausted || l.truncated || tree.cut, l.stopped || l.deferred_oof);
     let mut fits = l.fits;
     fits.shrink_to_fit();
     // The arrays grew by doubling; what is kept for the life of the page should not carry the slack.

@@ -18,7 +18,7 @@ use super::block::{Flow, border_px, lp_has_percent, pad_px, resolve_dim, resolve
 use super::boxtree::{BoxId, BoxKind, NO_BOX};
 use super::units::LayoutUnit as LU;
 use super::{Layouter, Pending};
-use crate::css::types::{BoxSizing, Dim};
+use crate::css::types::{BoxSizing, Dim, Visibility};
 
 fn inset(d: &Dim, base: LU) -> Option<LU> {
     match d {
@@ -80,7 +80,28 @@ impl Layouter<'_> {
         self.layout_oof_with(p, Some(rect));
     }
 
+    /// Is `id` and everything in it invisible (`visibility: hidden` all the way down)? Nothing painted, nothing hit.
+    fn all_hidden(&self, id: BoxId) -> bool {
+        let tree = self.tree;
+        let mut todo = vec![id];
+        while let Some(b) = todo.pop() {
+            let bx = tree.get(b);
+            if bx.style.text.visibility == Visibility::Visible {
+                return false;
+            }
+            todo.extend(bx.children.iter().copied());
+        }
+        true
+    }
+
     fn layout_oof_with(&mut self, p: Pending, inline_cb: Option<[LU; 4]>) {
+        // First-screen-first: an out-of-flow box that cannot be seen (a closed drop-down menu: `visibility: hidden`) moves
+        // nothing in the flow, so its layout, which may read all of its text for a shrink-to-fit width, waits for the full
+        // layout; the partial layout is flagged so that one follows.
+        if self.stop_at.is_some() && self.all_hidden(p.id) {
+            self.deferred_oof = true;
+            return;
+        }
         if !self.charge(8) || self.depth >= super::MAX_PARAGRAPH_DEPTH {
             return;
         }

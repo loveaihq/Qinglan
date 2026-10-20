@@ -1175,3 +1175,42 @@ bug 类共 51 条，**没有修完**：每条在 `notes.txt` 里有原因（家�
 
 - 首屏（`qinglan.exe --bench … --replay-delay 80 --width 1920 --height 1080`，5 次新进程，中位数）：zhwiki-rec 500.6 毫秒（791.6 / 553.0 / 490.5 / 500.6 / 498.4），gh-ripgrep 510.5（593.6 / 503.3 / 508.9 / 510.5 / 561.0），gh-rust 450.0（481.9 / 452.1 / 450.0 / 421.8 / 436.6）。**这些数字不能和 2b 的 113/170/149 比**（电池供电，CPU 降频，约 4 倍慢），要插电重量；2b 提交（`61e832f`）和这几个提交没有交替跑过。
 - 内存（zhwiki-rec，滚到底的私有字节，5 次）：47 042 560 / 44 564 480 / 43 106 304 / 43 319 296 / 44 269 568，**最大 47.04 MB**（≤ 50，2b 是 47.86）。内存对降频不敏感，这个数可信。
+
+## 第 2 层 · 2b-3 grid 之后的首屏和体积（2026-10-20）
+
+起点 `24ce177`（`qinglan.exe` 2 150 400 字节；zhwiki-rec 首屏 113 → 147 毫秒）。目标：首屏回到 ≤ 120 毫秒（zhwiki-rec），exe 尽量回到 2b 预算 2 027 000，不删功能，排版结果不变。临时的计时代码只在暂存工作树里，没有提交。
+
+### 1. 首屏：量出来的不是 grid 的最小内容宽度
+
+- **分段计时**（`qinglan-cli bench`，zhwiki-rec，1920×1080）。2b-1（`ad58292`）：解析 21、样式 35、首屏排版 34（其中盒子树 6.5、预取文字 28、`layout_root` 0.7）、光栅 5，合计约 96。2b-2 之后：解析 22、样式 38.5、首屏排版 65（盒子树 7、预取 27、`layout_root` 28）、光栅 10，合计约 138。
+- **原因**：2b-1 时 grid 还不认，维基的边栏堆在文章上面，`layout_root` 不到 1 毫秒就越过了停止线，首屏排版几乎是空的；grid 做对以后页面第一次排对，首屏真的有内容了（光栅 5 → 10，样式 +3.5：flex/grid 属性现在是有效声明）。**grid 的最小内容宽度不是原因**：这一页 `grid_widths` 调用 0 次，列方向的 `contribs` 只有 2 次、0.00 毫秒，行方向 14 次（量行高，带停止线）。所以没有为它加缓存或跳过。
+- **真正的大头**：`.vector-dropdown-content`（语言菜单：`position:absolute; visibility:hidden; height:0; width:max-content`）的 shrink-to-fit 宽度要读它全部文字（约 190 个语言名，冷的字形整形），一次 19–21 毫秒（完整排版时已缓存，1.2 毫秒）。2b-1 时这一步被越过停止线躲掉了，完整排版里才付。
+- **改动**（`layout/position.rs` 的 `layout_oof_with`、`mod.rs` 的 `deferred_oof`）：首屏优先（`stop_at` 有值）时，自己和所有后代的 `visibility` 都不是 `visible` 的脱离文档流盒子不排（看不见、点不到，也不挪动任何文字），记 `deferred_oof`，`LayoutResult::partial` 置位，所以完整排版一定会跟上并排它。有 `visibility: visible` 的后代就照常排。注意不能用 `stopped`：它会让后面的内容都被截掉。完整排版的结果不变。测试 `firstscreen::a_hidden_out_of_flow_box_waits_for_the_full_layout`；原有的"停止线以上逐项相等"测试（含中文维基）不变。
+- **试过没采用**：预取文字的额度 `area/60` 换成 120、240、1000（环境变量临时扫了一遍）：首屏排版和总数都看不出差别（噪声 ±10 毫秒），没改。
+- **结果**（`qinglan-cli bench`，旧 `24ce177` 和新交替跑，5–6 个干净轮次的最小值 / 中位数）：zhwiki-rec 首屏 124.0 / 143.8 → 109.3 / 120.5（−12% / −16%），首屏排版 60.1 / 62.1 → 39.7 / 40.7；gh-ripgrep 首屏 155.1 / 158.9 → 156.2 / 159.8（+1% / +1%）。
+
+### 2. 体积
+
+- **映射**（`/MAP` + v0 符号名，2a 末 `9e8fbf8` 对比现在，`.text`）：+200 KB（grid 排版 63 KB、`layout_block` +25.7 KB（flex/grid 的入口内联进去）、`parse_grid` 23 KB、`core::slice::sort` +22 KB、`parse_prop` +14.5 KB、`cascade` +12.5 KB）；`.rdata` +20 KB，`.pdata` +4 KB。
+- **排序去重**：grid 里 3 处 `sort_by_key`/`sort_by`（每处一整份排序代码，共约 21 KB）改成 `sorting::sort_by_u64_key`（项目的跨度、`fr` 余数的小数部分按 `!f64_key`、基线用的第一项/最后一项改成 `min_by_key`/`max_by_key`，结果等于稳定排序的两端）。2 150 400 → 2 127 872（含上面的首屏改动）。
+- **内联阈值扫描**（`RUSTFLAGS` 带 `+crt-static`，只是实验；最终写进 `.cargo/config.toml`）：`inline-threshold` 100 → 2 127 872；70 → 2 086 400；45 → 2 046 976；35 → 2 051 072（不单调）；45 加 `inlinehint-threshold=150`（默认 325，管 `#[inline]` 函数和泛型的 std 代码）→ **2 012 160**；45 加 150 换成 100 → 1 989 632（整页布局 +4%、解析 +10%，没采用）。最终：`-inline-threshold=45` 加 `-inlinehint-threshold=150`，**2 150 400 → 2 012 160（−138 240；2b 预算 2 027 000，余 14 840）**。`qinglan-cli.exe` 2 418 176 → 2 243 072。
+- 没做：压缩 grid 算法本身的代码（`build_gx` 19 KB、`size_axis` 11 KB、`phase` 7 KB）、`.rdata` 的表。
+
+### 3. 速度和内存（插电；这台机器上另有会话的 cargo 空转和零星的 qpdf，"干净"按 CPU 负载 ≤ 25% 算，数字有噪声）
+
+- 整页布局 / 滚动，旧 → 新（`qinglan-cli bench`，zhwiki-rec 最小值 / 中位数）：整页布局三次测量 −0% / +6%、+10% / +6%、+7% / +1%（安静的那一轮，同一个二进制：+1% / +3%）；滚动中位数 +0% / +0%、+10% / +2%、+2% / +2%；gh-ripgrep 整页布局 −0% / +4%、+1% / +4%、+1% / +2%，滚动中位数 0%。zhwiki-rec 的整页布局最小值有一次到 +7–10%（那几轮旧程序自己也慢了 10%：噪声），**离 5% 的线很近**；若后面要严格守线，退路是去掉 `inlinehint-threshold`（只留 45：2 046 976，同一轮里整页布局 +1% / +2%）。
+- `qinglan.exe --bench` 新进程各 5 次（旧 `24ce177` 和新交替；毫秒，内存十进制 MB）：
+
+```
+zhwiki-rec first-screen-ms            | old: med   175.4 max   337.9 [172.4 153.4 337.9 194.1 175.4] | new: med   129.6 max   304.3 [122.1 116.7 304.3 289.3 129.6]
+zhwiki-rec peak-private-bytes         | old: med    45.2 max    45.7 [44.9 45.7 45.2 45.0 45.2] | new: med    45.4 max    45.9 [44.9 45.9 45.4 45.2 45.6]
+zhwiki-rec private-bytes-after-scroll | old: med    43.8 max    44.3 [43.8 44.0 43.8 43.5 44.3] | new: med    43.9 max    45.9 [43.8 45.9 43.5 43.9 44.6]
+gh-ripgrep first-screen-ms            | old: med   220.6 max   358.2 [160.5 358.2 352.5 220.6 164.6] | new: med   191.3 max   373.6 [152.4 373.6 365.0 191.3 182.2]
+gh-ripgrep peak-private-bytes         | old: med    64.2 max    66.3 [63.1 66.3 64.2 64.8 62.6] | new: med    64.7 max    65.8 [64.7 65.8 65.8 64.6 61.4]
+gh-ripgrep private-bytes-after-scroll | old: med    24.4 max    24.6 [23.7 24.1 24.6 24.4 24.5] | new: med    24.5 max    25.2 [23.9 23.7 25.2 25.0 24.5]
+gh-rust    first-screen-ms            | old: med   181.1 max   324.6 [133.7 298.9 324.6 181.1 142.6] | new: med   173.7 max   308.7 [133.5 300.8 308.7 173.7 149.7]
+gh-rust    peak-private-bytes         | old: med    64.5 max    65.8 [64.5 65.8 65.7 63.6 63.4] | new: med    63.3 max    68.0 [63.2 65.7 63.3 62.6 68.0]
+gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 23.3 22.8 24.9] | new: med    24.2 max    26.6 [24.5 26.6 23.3 22.4 24.2]
+```
+
+- 测试：`cargo test --workspace --no-fail-fast` 328 条（原有）全过，另加 1 条（`firstscreen`），共 329；`qinglan-cli wpt --check` 1965 / 1965；clippy 无警告。
