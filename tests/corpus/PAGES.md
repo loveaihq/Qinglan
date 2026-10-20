@@ -54,3 +54,5 @@
 | yihui | https://yihui.org/ | 静态博客（Hugo，中英） | 2026-10-16 | HTTP 200 |
 | example | https://example.com/ | 极简页面 | 2026-10-16 | HTTP 200 |
 | gnu-gpl3 | https://www.gnu.org/licenses/gpl-3.0.html | 长文本（许可证） | 2026-10-16 | HTTP 200 |
+| arwiki | https://ar.wikipedia.org/wiki/%D8%A7%D9%84%D9%82%D8%A7%D9%87%D8%B1%D8%A9 | 阿拉伯文维基长条目（从右往左，2d-2a） | 2026-10-20 | HTTP 200 |
+| emoji-wiki | https://en.wikipedia.org/wiki/Emoji | 带彩色 emoji 的页面（英文维基 Emoji 条目，2d-2a） | 2026-10-20 | HTTP 200 |

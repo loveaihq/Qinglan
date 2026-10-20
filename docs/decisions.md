@@ -1433,3 +1433,43 @@ gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 
 ### 没做 / 留给后面
 - `font-stretch` 属性；`size-adjust`/`ascent-override` 等描述符；`font-variation-settings`；合成粗体斜体；窗口里字体到达后为 `ex`/`ch` 重算样式；字体集（`ttcf`）的 WOFF2；彩色字体的 `tech()` 之外的（2d-2 做彩色 emoji）。
 - 评审（2d 之后统一做）要看的：`woff2.rs` 的 `reconstruct_glyf`（三元组、复合字形、bbox 位图）、`brotli.rs` 的 `meta_block`（块切换、上下文映射、字典引用）、`fonts/face.rs` 的文本解析（括号和引号嵌套）。
+
+## 第 2 层 · 2d-2a 彩色 emoji 和从右往左（2026-10-20）
+
+代码：引擎 `layout/bidi.rs`（新）、`layout/inline.rs`（双向分析、按层断开整形、行内重排）、`layout/block.rs`（10.3.3、外侧列表标记）、`layout/table.rs`（折叠边框镜像）、`layout/boxtree.rs`、`css/`（`unicode-bidi`、`DeclProp::Logical`、`dir=auto`、UA 样式）、`platform/mod.rs`（`bidi_levels`、`shape_rtl`、`GlyphMask::bgra`）、`platform/test.rs`（测试平台的小型 UAX #9 和彩色字形）、`paint/raster.rs`；`qinglan-win` 的 `sys/dwrite.rs`（`AnalyzeBidi`、`isRightToLeft`、`TranslateColorGlyphRun`）和 `platform.rs`。测试：`crates/qinglan-engine/tests/bidi.rs`、`tests/pages/bidi.html`、`rtl-block.html`（手算，页首注释写了推算，`check:` 行可执行）、`layout/bidi.rs` 单元测试、`crates/qinglan-win/tests/emoji_bidi.rs`；WPT 三个目录。
+
+### 彩色 emoji
+- `IDWriteFactory2::TranslateColorGlyphRun`，槽号按 `dwrite_2.h` 数：26 GetSystemFontFallback、27 CreateFontFallbackBuilder、28 TranslateColorGlyphRun（枚举器 3 MoveNext、4 GetCurrentRun）。Segoe UI Emoji 是 COLR/CPAL。每层用 `CreateGlyphRunAnalysis`（和普通字形一样：三个条纹取平均当灰度）画出覆盖率，平台把各层按调色板颜色从下往上 source-over 叠成**一张预乘 BGRA**（`GlyphMask::bgra`，`alpha` 为空），引擎的 `blend_color` 直接叠到画面上，文字颜色不参与。缓存和普通遮罩同一个 LRU（`GLYPH_CACHE_BYTES`），每项按 `alpha + bgra` 的字节数记。
+- 调色板号 0xFFFF（该层用文字颜色）画黑色：平台不知道文字颜色；Segoe UI Emoji 里没见到用它的。位图（CBDT/sbix）和 OpenType-SVG 彩色字体**没做**，这些字体的字形按普通轮廓画（单色）。彩色字形不画文字阴影（阴影用 `alpha`，是空的）。
+- 每个字体先问有没有彩色层：连续 64 个字形都没有彩色层就不再问（普通字体只多这 64 次调用），出现过一次彩色字形就一直问（Segoe UI Emoji 里也有数字等没有彩色层的字形）。
+- **序列**：ZWJ 序列、肤色、VS16、keycap 整串交给一次 `GetGlyphs`，结果是**一个簇**（所有字形的 `cluster_start..cluster_end` 是整串），布局里是一个单位，不会被换行拆开。Windows 11（build 26300）的 Segoe UI Emoji 把 👨‍👩‍👧 排成同一个簇里的 3 个字形（字体自己叠），不是 1 个字形；画出来就是一个家庭图标，和 Edge 一致（测试 `emoji_sequences_are_one_glyph` 查的是“一个簇、全是 Segoe UI Emoji、有彩色”）。国旗：Windows 的 Segoe UI Emoji 没有国旗字形，两个区域指示符画成字母（Edge 也一样），不处理。
+- **字体选择**：字符后面紧跟 U+FE0F 时先试 Segoe UI Emoji（❤️、1️⃣ 否则会落到 Segoe UI Symbol 的单色字形或 Segoe UI 的 "1"）。后面的 FE0F、20E3、ZWJ 本来就跟前一个字符的字体。
+- **运行切断（1b 审查 R5）**：平台的 `run_cut` 和引擎的 `shape_cut` 的“后面不能断”表加了肤色修饰符 U+1F3FB–1F3FF 和标签字符 U+E0020–E007F（旗帜序列）；以前只有 ZWJ、VS、组合记号。区域指示符对没加（只有超过 8192 单元的单词正好卡在一对中间才会断）。
+
+### 双向文字（UAX #9）
+- **分工**：平台只给层级（`Platform::bidi_levels(text, rtl)`，每个字符一个层级，Windows 用 `IDWriteTextAnalyzer::AnalyzeBidi`）；引擎负责把 CSS 变成字符、重排每一行、对齐。`unicode-bidi` 变成 css-writing-modes-3 2.2 的控制字符（embed → LRE/RLE…PDF，isolate → LRI/RLI…PDI，bidi-override → LRO/RLO…PDF，isolate-override 两者，plaintext → FSI…PDI），行内盒的两端各一个不占位置的 `Ctl` 项；原子行内是 U+FFFC；强制换行是 U+2028（空白类，**所以 `<br>` 不开新的双向段落**，见“没做”）。块自己的 `bidi-override` 包住整个内容；块的 `plaintext` 用第一个强字符定段落方向（`bidi::first_strong`，跳过隔离里面的）。
+- **DirectWrite 实测**（`sys/dwrite.rs` 的 `probe` 测试打印）：`AnalyzeBidi` 认 LRE/RLE/LRO/RLO/PDF 和隔离控制字符，隔离里面的层级对；隔离里的 PDI 本身带里面的层级（标准说是外面的），不影响显示，因为控制字符不出现在单位里。`GetGlyphs(isRightToLeft=true)` 的字形和簇映射仍是**逻辑顺序**（簇映射单调增），括号等镜像字符它自己换成镜像字形（`(` 的字形号等于 LTR 的 `)`），阿拉伯字母的连写字形和 LTR 不同（所以 RTL 一定要用 RTL 标志整形，`shape_rtl`）。右到左的整形不走词缓存和单字缓存，整段 script run 一次整形，缓存键里有方向位。
+- **快速路径**：只有这几种段落才分析：块的 `direction: rtl`、`unicode-bidi: plaintext/bidi-override/isolate-override`、里面有会让从左到右文字重排的盒（rtl 的 embed/isolate、任何 override、plaintext）、文字里有右到左字符或显式控制字符（`textclass::is_bidi_relevant`：U+0590–08FF、FB1D–FDFF、FE70–FEFF、10800 起、200E/F、202A–E、2066–9；先用“有没有 ≥ 0xD6 的字节”过滤，拉丁和中日韩文字不用逐字符查）。其余段落没有任何额外工作；测试 `a_page_without_right_to_left_text_is_not_analysed` 数平台被问了几次（0 次）。
+- **整形和单位**：整形前先有层级，文字按层级切成片段，奇数层用 `shape_rtl`；单位仍是逻辑顺序（换行不变，仍是逻辑的），每个单位记层级。右到左片段的字形数组里，簇**倒着存**（簇内的字形顺序平台已经放成从左到右的绘制顺序），这样一行里按视觉顺序排的单位，字形范围是连续的，一段连续的单位就是一个文字片段（`Group`；不连续就分成两个片段）。片段的 `start..end` 是它覆盖的字节范围（最小到最大）。
+- **一行**：先按逻辑顺序量宽度和断行，再做 L1（行尾的空白、制表符和它前面的空白放回段落层级）和 L2（`bidi::reorder`），按视觉顺序排各组的 x。制表位按逻辑位置算（和浏览器不同，很少见）。两端对齐按逻辑顺序加宽，不受重排影响。
+- **盒的边**：行内盒的起始边在 ltr 盒是左边、rtl 盒是右边（CSS2 9.4.2），`edge_widths` 按盒的 `direction` 取；边这个单位取它所在的嵌入层级（引擎自己按控制字符和文字里的 202A–E、2066–9 记栈）。被重排切开的盒，每一段视觉上连续的部分各画一个盒片段（`Ent::done`），起始边只在含它的那一段、结束边只在含它的那一段画边框；片段里 `first`/`last` 是物理的左/右。
+- **对齐**（css-text-3 7.1）：`start`/`end`/`match-parent` 看段落方向（`match-parent` 按父块的方向把父块的 start/end 换成 left/right）；rtl 时 `text-indent` 在右边；行比盒宽时从起始边对齐，向另一边溢出（rtl 向左，偏移是负的）；悬挂的空格 rtl 时挂在左边。
+- **逻辑属性**（css-logical-1）：解析时仍按 ltr 映射成物理属性，但这些声明记成 `DeclProp::Logical`，层叠时按这个元素自己的 `direction` 决定是不是换成对边（`PropId::mirrored`；`declared_rtl` 先扫一遍这个元素的 `direction`）。涉及 `*-inline-start/end`、`border-inline-start/end` 简写和四个 `border-start-start-radius` 等。UA 样式的列表缩进、`dd` 改成 `padding-inline-start`/`margin-inline-start`，作者写的 `padding-left: 0` 照旧盖得过（同一个物理属性，后者层叠顺序高）。`float`/`clear` 的 `inline-start`/`inline-end` 在样式里按**父元素**的方向变成 left/right。
+- **`dir`、`<bdi>`、`<bdo>`**：UA 样式照 html-rendering 15.3.6：`[dir]:dir(ltr/rtl)`、`bdi:dir(…)`、`bdi, output, [dir=…] { unicode-bidi: isolate }`、`bdo { isolate-override }`、`pre[dir=auto] { plaintext }`；`:dir()` 认 `dir=auto` 和没有 dir 的 `<bdi>`（`direction_of`/`auto_rtl`，HTML 3.2.6.1：后代文字里第一个强字符，跳过 bdi、script、style、textarea 和自己有 dir 的元素）。块级元素的 `unicode-bidi: isolate`（UA 样式里那一长串）**没写**：块容器自己是段落，没有效果，写上每个 div/p/li 都要多算一份 `MiscStyle`（首屏变慢）。`plaintext` 块里的匿名块继承 `plaintext`。
+- **块布局**：10.3.3 过约束时按**包含块**的方向丢掉右（ltr）或左（rtl）外边距（`solve_width` 加了参数）；外侧列表标记在 rtl 项目的右边（标记文字里的单词保持顺序、其余倒过来，“1. ”画成“ .1”）；折叠边框的表格 rtl 时列和边都镜像（边的上下左右按物理边取，`collapse_edges`）；flex 和 grid 在 2b 就认 `direction` 了。
+- **命中测试和链接点击区域**：文字片段的位置本来就是视觉位置（`Fragment::x`），`interact` 按片段的盒找，没有改；一个链接被重排拆成几段时是几个片段，都能点。没有单独的测试（没有选择和光标，第 3 层）。
+
+### 没做 / 记下的限制
+- 被双向重排切开的行内盒，起始边和结束边应该贴在第一个/最后一个视觉片段的物理边上（浏览器的做法，`bidi-001`…、`bidi-box-model-*`、`bidi-005`…`011`）；我们按层级把边当单独的单位排，所以这些边和浏览器不同。WPT `css/CSS2/bidi-text` 因此有 34 个 bug 类失败（每个都有 `notes.txt` 一行）；要改要在 `lay_lines` 里把边从排序里拿出来，重排后再插到对应片段的两端。
+- `plaintext` 的段落在强制换行（`<br>`、`pre` 里的换行）之后重新定方向：没做，整个块一个段落（WPT `bidi-plaintext-br-001`、`text-align-start-016`、`text-align-end-016`，都是 `limit`）。`<br>` 作为 U+2028 也影响换行两边的中性字符怎么归属。
+- `text-align-last` 没有（WPT text-align 里 `-last-` 的 33 个）；`text-align: justify` 在带制表符、软连字符、双向控制字符的行里不完全按 7.3。
+- 绝对定位盒的静态位置、滚动容器的起始位置、`<input>` 的方向、`text-align: start` 之外的 `direction` 相关默认值（表格单元格 `th` 居中等）没有按 rtl 改。竖排（2d-2b）以后在 `direction` 之上再加。
+- 一个词里跨样式边界的连写（`ab<span>c</span>`，阿拉伯文里很常见）：Windows 平台是每个文字项单独整形，所以**样式边界处不连写**（和 Blink 不同，Blink 整个词一起整形）。这在 arwiki 的链接和粗体边界上没有看到问题（阿拉伯文维基正文里链接多在词的边界），但词中间换样式时会断开连写，记为已知限制；要做需要把同一单词的相邻文字项合并整形。
+- `GlyphMask` 的颜色层固定 BGRA 预乘；高 DPI 下按放大后的字号取，所以不糊。
+
+### 数据（release；插电 `BatteryStatus = 2`；Emulator.exe 在跑，CPU 约 9%，没有 cargo/rustc/qpdf）
+- **exe**：见 L2-TASK 进度行（本步预算 +40 KB，上限 2,520,576）。
+- **内存**（`qinglan.exe --bench`，zhwiki-rec，1920×1080，5 次新进程，滚到底，Private Bytes）：46,903,296 / 48,283,648 / 48,119,808 / 46,403,584 / 46,829,568，最大 48.28 MB（46.0 MiB），≤ 50 MB。
+- **首屏**（同上，毫秒）：zhwiki-rec 129.1 / 136.1 / 135.3 / 121.5 / 127.0（中位数 129.1）；gh-ripgrep 138.2 / 126.0 / 130.7 / 115.7 / 132.5（中位数 130.7），都 ≤ 200。
+- **WPT**（测试平台）：`css/css-writing-modes`（bidi 相关 98 个）83 / 98（84.7%），bug 类 0，15 个 `limit`：12 个是测试按 ezra 窄网页字体写的、盒宽 10em，测试平台 1em 的字形让换行和参考页不同（把盒放宽到 60em 的临时副本里这 12 个都通过，副本里整体 95 / 98）；3 个是 `plaintext` 要在 `<br>` 之后重新定方向（`bidi-plaintext-br-001`、`block-plaintext-004`、`block-plaintext-006`，放宽后仍不过）；`css/CSS2/bidi-text` 69 / 103（67.0%），bug 类 34（上面第一条）；`css/css-text/text-align` 51 / 85（60.0%），bug 类 0（`text-align-last`、justify 细节、plaintext 各有 `limit` 说明）。`--win` 对这些文字密集的页面不适合（字形抗锯齿位置不同，几乎全差几个像素），没有加进 `passing-win.txt`。
+- **真实网页**：阿拉伯文维基“القاهرة”和英文维基 Emoji 条目，和 Edge 对比见 `tests/corpus/RESULTS.md` 最后一节。

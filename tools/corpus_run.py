@@ -86,6 +86,8 @@ PAGES = [
     ("yihui", "静态博客（Hugo，中英）", "https://yihui.org/"),
     ("example", "极简页面", "https://example.com/"),
     ("gnu-gpl3", "长文本（许可证）", "https://www.gnu.org/licenses/gpl-3.0.html"),
+    ("arwiki", "阿拉伯文维基长条目（从右往左，2d-2a）", "https://ar.wikipedia.org/wiki/%D8%A7%D9%84%D9%82%D8%A7%D9%87%D8%B1%D8%A9"),
+    ("emoji-wiki", "带彩色 emoji 的页面（英文维基 Emoji 条目，2d-2a）", "https://en.wikipedia.org/wiki/Emoji"),
 ]
 BY_NAME = {p[0]: p for p in PAGES}
 
