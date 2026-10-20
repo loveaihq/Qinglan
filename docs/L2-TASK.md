@@ -74,6 +74,7 @@
 - WPT 子集：`css/css-backgrounds`、`css/css-transforms`（2D）、`css/css-color` 里不依赖还没做的特性的部分。
 
 ## 2d 文字
+为了省用量，2d 分两小步：**2d-1** 网页字体（`@font-face`、自己写的 inflate、Brotli、WOFF2 解码，DirectWrite 从内存加载）；**2d-2** 彩色 emoji、从右往左、竖排、注音。2d 之后做第 2 层的第二次审查，重点是字体解码器（不可信输入）。
 
 - **网页字体 `@font-face`**：TTF、OTF、WOFF（自己写 inflate）、WOFF2（自己写 Brotli 解码器和 WOFF2 的表变换还原）；用 DirectWrite 从内存加载（`IDWriteInMemoryFontFileLoader`）；`unicode-range`、粗细和斜体的范围；`font-display`：最多等 3 秒，超时先用系统字体显示，字体到了再重排。
   - 上限：单个字体解压后 ≤ 8 MB，每页所有网页字体解压后合计 ≤ 16 MB，计入内存；超了就用系统字体。
