@@ -415,3 +415,23 @@ fn a_radius_clips_a_picture_to_the_rounded_edge() {
     expect(&f, &[(20, 20, RED), (0, 0, WHITE), (39, 39, WHITE)]);
     assert!((area(&f, 1) - 1256.64).abs() < 2.0, "{}", area(&f, 1));
 }
+
+#[test]
+fn a_collapsed_cell_places_its_background_from_its_halves_of_the_edges() {
+    // One cell, 4px border all round, no padding, a 20px wide content, collapsed: the edge is 4px, the cell takes 2px of it on
+    // every side (the table the other 2px), so the cell's box is x 2..26 and its padding box (the origin) x 4..24. The
+    // tile is 20px wide, red up to its middle (x 14), blue after, and repeats: x 2..4 is the end of the tile before (blue).
+    let html = "<body style='margin:0'><table style='border-collapse:collapse'><tr><td style='padding:0;border:4px solid transparent;width:20px;height:20px;\
+        background:linear-gradient(to right,red 50%,blue 50%)'></td></tr></table>";
+    let f = paint(html, 40, 40);
+    expect(&f, &[(3, 10, BLUE), (6, 10, RED), (15, 10, BLUE), (23, 10, BLUE), (25, 10, RED), (27, 10, WHITE)]);
+}
+
+#[test]
+fn a_table_with_direction_rtl_puts_its_first_column_on_the_right() {
+    // Cells 30px (red) and 50px (blue) wide, no spacing: the table is 80px wide; in an rtl table the red cell is x 50..80.
+    let html = "<body style='margin:0'><table style='direction:rtl;border-spacing:0'><tr><td style='padding:0;width:30px;height:10px;background:red'></td>\
+        <td style='padding:0;width:50px;height:10px;background:blue'></td></tr></table>";
+    let f = paint(html, 100, 20);
+    expect(&f, &[(5, 5, BLUE), (49, 5, BLUE), (51, 5, RED), (79, 5, RED), (85, 5, WHITE)]);
+}

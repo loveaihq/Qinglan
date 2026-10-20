@@ -227,6 +227,9 @@ pub struct LayoutResult {
     pub stacked: Vec<Positioned>,
     /// Tables that need more than their box (captions, collapsed borders), by box.
     pub tables: FxHashMap<BoxId, TableInfo>,
+    /// The used border widths (top, right, bottom, left) of the cells and tables with collapsed borders: their halves of the
+    /// edges, which the background origin (the padding box) is inset by.
+    pub halves: FxHashMap<BoxId, [LayoutUnit; 4]>,
     pub canvas: Option<Canvas>,
     /// The images the page wants (see [`image`]).
     pub images: Vec<ImageRequest>,
@@ -386,6 +389,8 @@ pub(crate) struct Layouter<'a> {
     pub grids: FxHashMap<BoxId, Rc<table::Grid>>,
     /// The painter's extra data for tables.
     pub tinfo: FxHashMap<BoxId, TableInfo>,
+    /// `LayoutResult::halves`.
+    pub halves: FxHashMap<BoxId, [LayoutUnit; 4]>,
     /// Flex items measured by a throw-away layout, by box: (the content width it was measured at, its border-box height)
     /// (flex.rs). The type is that of `widths`, which keeps the binary from carrying one more hash map.
     pub measured: FxHashMap<BoxId, (LayoutUnit, LayoutUnit)>,
@@ -497,6 +502,7 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
         has_floats: tree.boxes.iter().any(floats::is_float),
         grids: FxHashMap::default(),
         tinfo: FxHashMap::default(),
+        halves: FxHashMap::default(),
         measured: FxHashMap::default(),
         flex_sens: Vec::new(),
         flex_spent: 0,
@@ -506,6 +512,7 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
     l.layout_root();
     let has_floats = l.has_floats;
     let tables = std::mem::take(&mut l.tinfo);
+    let halves = std::mem::take(&mut l.halves);
     let (boxes, mut lines, mut fragments, glyphs, texts, mut decorations, mut markers, oof, work, incomplete, partial) =
         (l.out, l.lines, l.fragments, l.glyphs, l.texts, l.decorations, l.markers, l.oof_list, l.work, l.exhausted || l.truncated || tree.cut, l.stopped || l.deferred_oof);
     let mut fits = l.fits;
@@ -519,7 +526,7 @@ pub fn layout_document_with(doc: &Document, styles: &StyleTree, platform: &dyn P
     let canvas = canvas_background(doc, &tree);
     let (below, above, stacked) = paint_order(&tree);
     let images = tree.images.clone();
-    LayoutResult { tree, boxes, lines, fragments, glyphs, texts, decorations, markers, oof, below, above, stacked, tables, canvas, images, fits, viewport, has_floats, incomplete, work, partial }
+    LayoutResult { tree, boxes, lines, fragments, glyphs, texts, decorations, markers, oof, below, above, stacked, tables, halves, canvas, images, fits, viewport, has_floats, incomplete, work, partial }
 }
 
 /// CSS2 14.2: the root element's background covers the canvas; when it has none (transparent), the

@@ -381,10 +381,17 @@ impl Builder<'_> {
         let bg = &style.misc.bg;
         let bd = &style.border;
         let canvas = id == self.canvas_from;
-        // In the collapsing border model the parts of a table (cells, rows, columns) have no borders of their own: the table
-        // draws the edges, and the background reaches to the middle of them (the border box).
+        // In the collapsing border model the parts of a table have no borders of their own: the table draws the edges, and the
+        // background reaches to the middle of them (the border box). A cell and the table are inset by their halves of the
+        // edges for the padding box (where the image is placed); rows and columns have none.
         let collapsed = style.text.border_collapse == BorderCollapse::Collapse && !matches!(role_of(res.tree.get(id)), Role::Other | Role::Caption);
-        let bw: [LU; 4] = std::array::from_fn(|i| if !collapsed && sides.get(i).copied().unwrap_or(false) { border_px(bd.width.get(i).copied().unwrap_or(0.0)) } else { LU::ZERO });
+        let halves = res.halves.get(&id).filter(|_| collapsed);
+        let bw: [LU; 4] = std::array::from_fn(|i| match (sides.get(i).copied().unwrap_or(false), halves) {
+            (false, _) => LU::ZERO,
+            (true, Some(h)) => h.get(i).copied().unwrap_or(LU::ZERO),
+            (true, None) if collapsed => LU::ZERO,
+            (true, None) => border_px(bd.width.get(i).copied().unwrap_or(0.0)),
+        });
         let pb = Rect::new(r.x + bw[3], r.y + bw[0], (r.w - bw[1] - bw[3]).max0(), (r.h - bw[0] - bw[2]).max0());
         let cb_w = res.box_out(res.tree.layout_parent(id)).w;
         let pad: [LU; 4] = std::array::from_fn(|i| if sides.get(i).copied().unwrap_or(false) { style.boxs.padding.get(i).map_or(LU::ZERO, |l| pad_px(l, cb_w)) } else { LU::ZERO });

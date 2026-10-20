@@ -20,7 +20,7 @@ use super::boxtree::{BoxId, Role, parse_html_int, role_of};
 use super::units::{LayoutUnit as LU, Margin};
 use crate::css::color::Color;
 use crate::css::computed::ComputedStyle;
-use crate::css::types::{BorderCollapse, BorderLineStyle, BoxSizing, CaptionSide, Dim, EmptyCells, Overflow, Position, TableLayout, VerticalAlign, Visibility};
+use crate::css::types::{BorderCollapse, BorderLineStyle, BoxSizing, CaptionSide, Dim, Direction, EmptyCells, Overflow, Position, TableLayout, VerticalAlign, Visibility};
 use crate::css::values::Lp;
 use crate::html::atoms::{Atom, a};
 use crate::html::dom::NodeId;
@@ -651,12 +651,19 @@ impl Layouter<'_> {
         let tw = gw + ex;
         let (sp0, sp1) = (g.sp[0], g.sp[1]);
         let lead_x = if ncols > 0 { sp0 } else { LU::ZERO };
+        // A table with `direction: rtl` lays its columns out from the right (CSS2 17.5.3; separated borders only: the
+        // collapsed edges are not mirrored yet). `cx` is cumulated in painting order; `span` is the x range of columns.
+        let rtl = !g.collapse && style.text.direction == Direction::Rtl;
         let mut cx = vec![lead_x];
         let mut x = lead_x;
-        for w in &colw {
-            x = x + *w + sp0;
+        for i in 0..colw.len() {
+            x = x + colw.get(if rtl { colw.len() - 1 - i } else { i }).copied().unwrap_or(LU::ZERO) + sp0;
             cx.push(x);
         }
+        let span = |c: usize, n: usize| {
+            let (a, b) = if rtl { (ncols.saturating_sub(c + n), ncols.saturating_sub(c)) } else { (c, c + n) };
+            (at(&cx, a), at(&cx, b) - sp0)
+        };
 
         // ---- the cells, and the heights of the rows
         let mut rh = g.row_h.clone();
@@ -665,7 +672,8 @@ impl Layouter<'_> {
         let mut nat: Vec<(LU, LU, u8)> = Vec::with_capacity(g.cells.len());
         for cell in &g.cells {
             let cstyle = &tree.get(cell.id).style;
-            let cw = at(&cx, cell.c + cell.cs) - sp0 - at(&cx, cell.c);
+            let (cx0, cx1) = span(cell.c, cell.cs);
+            let cw = cx1 - cx0;
             let p = |i: usize| cstyle.boxs.padding.get(i).map_or(LU::ZERO, |l| pad_px(l, gw));
             let (hx, vx) = (p(1) + p(3) + cell.bor[1] + cell.bor[3], p(0) + p(2) + cell.bor[0] + cell.bor[2]);
             self.layout_block(cell.id, gw, None, Flow { forced_w: Some((cw - hx).max0()), cell_bor: Some(cell.bor), ..Flow::default() });
@@ -796,8 +804,9 @@ impl Layouter<'_> {
                 _ => LU::ZERO,
             };
             // The cell is as wide as its columns even when its padding is wider.
-            let cw = at(&cx, cell.c + cell.cs) - sp0 - at(&cx, cell.c);
-            self.place(cell.id, at(&cx, cell.c) - lead_x, LU::ZERO, Some(cw), full);
+            let (cx0, cx1) = span(cell.c, cell.cs);
+            let cw = cx1 - cx0;
+            self.place(cell.id, cx0 - lead_x, LU::ZERO, Some(cw), full);
             if shift > LU::ZERO
                 && let Some(&w) = tree.get(cell.id).children.first()
                 && let Some(o) = self.out.get_mut(w as usize)
@@ -807,11 +816,12 @@ impl Layouter<'_> {
         }
         let gh = if nrows > 0 { y } else { LU::ZERO };
         for pass in [true, false] {
-            for &(start, span, bid, group) in &g.specs {
+            for &(start, n, bid, group) in &g.specs {
                 if group != pass {
                     continue;
                 }
-                let (x0, x1) = (gx + at(&cx, start), gx + at(&cx, start + span) - sp0);
+                let (sx0, sx1) = span(start, n);
+                let (x0, x1) = (gx + sx0, gx + sx1);
                 let parent = tree.get(bid).parent;
                 let (px_, py) = match self.out.get(parent as usize) {
                     Some(o) if role_of(tree.get(parent)) == Role::ColGroup => (o.x, o.y),
@@ -859,6 +869,12 @@ impl Layouter<'_> {
         }
         if top_h > LU::ZERO || total_h > top_h + box_h || !segs.is_empty() {
             self.tinfo.insert(id, TableInfo { y: top_h, h: box_h, segs });
+        }
+        if g.edges.is_some() {
+            self.halves.insert(id, g.tbor);
+            for cell in &g.cells {
+                self.halves.insert(cell.id, cell.bor);
+            }
         }
         if let Some(o) = self.out.get_mut(id as usize) {
             o.w = tw;
