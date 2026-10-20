@@ -76,6 +76,7 @@
 ## 2d 文字
 为了省用量，2d 分两小步：**2d-1** 网页字体（`@font-face`、自己写的 inflate、Brotli、WOFF2 解码，DirectWrite 从内存加载）；**2d-2** 彩色 emoji、从右往左、竖排、注音。2d 之后做第 2 层的第二次审查，重点是字体解码器（不可信输入）。
 
+2d-1 之后（2026-10-20）：exe 2,479,616 字节，比 2d-1 的预算多 57 KB；第 2 层上限 2,726,297 还剩 246,681。重新分配：**2d-2a**（彩色 emoji、从右往左）+40 KB，**2d-2b**（竖排、注音）+60 KB，2e +120 KB，余约 25 KB。竖排先只做块和行内排版里的竖排；flex、grid、表格放在竖排里时按横排排（记进 decisions.md）。
 - **网页字体 `@font-face`**：TTF、OTF、WOFF（自己写 inflate）、WOFF2（自己写 Brotli 解码器和 WOFF2 的表变换还原）；用 DirectWrite 从内存加载（`IDWriteInMemoryFontFileLoader`）；`unicode-range`、粗细和斜体的范围；`font-display`：最多等 3 秒，超时先用系统字体显示，字体到了再重排。
   - 上限：单个字体解压后 ≤ 8 MB，每页所有网页字体解压后合计 ≤ 16 MB，计入内存；超了就用系统字体。
   - WOFF/WOFF2 解码器是我们自己写的，**所有边界都按不可信输入处理**；字体本身交给 DirectWrite 解析。
