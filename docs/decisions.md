@@ -1305,5 +1305,5 @@ gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 
 ### 4. 体积
 
 - `fmath.rs`（新）：自己的 `sin_cos`、`pow`、`log2`、`atan2`，替换 C 库的 `sin`/`cos`/`pow`/`atan2f`/`logf`（渐变角度和锥形渐变、圆弧、`lab()`/`oklch()` 的色相和伽马）。映射里这些加起来约 25 KB（`pow` 6 KB、`sin`/`cos`/`_sincos_special`/`__remainder_piby2*` 约 7 KB、`atan2f` 4.7 KB、`sinf`/`cosf`/`logf` 约 5 KB）。测试对照 C 库（误差 < 1e-11、2e-6、1e-9 相对）。
-- `qinglan.exe`：2,196,992（`73c8318`）→ 修回归后 2,199,040（+2,048）→ 去掉 C 库数学、`MiscStyle` 瘦身后 2,179,584 → 加圆环分带和角盒缓存、纯色快路后 **2,182,656**（比 `73c8318` 少 14,336；2c-1 的预算 2,073,600 仍超 109,056，留给后面的步骤扣）。
+- `qinglan.exe`：2,196,992（`73c8318`）→ 修回归后 2,199,040（+2,048）→ 去掉 C 库数学、`MiscStyle` 瘦身后 2,179,584 → 加圆环分带和角盒缓存、纯色快路后 **2,183,168**（比 `73c8318` 少 13,824；2c-1 的预算 2,073,600 仍超 109,568，留给后面的步骤扣）。
 - 没做（调用次数用完）：`css::bg` 的背景长属性共用一个解析器、四种渐变共用代码、`paint::raster::draw` 里的 `bg` 瓦片循环做成非泛型的函数、`hypotf` 320 字节、`fmod` 704 字节。`/MAP` 里 2c-1 新增的大头仍是 `Ctx::draw` 20.6 KB、`decor` 14.2 KB、`parse_background` 6.8 KB、`parse_image` 5.9 KB、`stroke_polys` 3.2 KB。
