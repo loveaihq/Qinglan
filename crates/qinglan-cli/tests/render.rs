@@ -60,7 +60,9 @@ fn render_writes_a_png_of_the_viewport_a_scrolled_view_and_the_whole_page() {
     let bytes = std::fs::read(&png).unwrap();
     assert_eq!(pixel(&bytes, 100, 2040, 50, 2035), [0, 255, 0, 255]);
 
-    let _ = std::fs::remove_dir_all(png.parent().unwrap());
+    // Only this test's own files: the directory is shared with the other tests of this binary, which run in parallel.
+    let _ = std::fs::remove_file(&html);
+    let _ = std::fs::remove_file(&png);
 }
 
 #[test]
