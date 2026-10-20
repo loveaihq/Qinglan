@@ -1468,7 +1468,7 @@ gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 
 - `GlyphMask` 的颜色层固定 BGRA 预乘；高 DPI 下按放大后的字号取，所以不糊。
 
 ### 数据（release；插电 `BatteryStatus = 2`；Emulator.exe 在跑，CPU 约 9%，没有 cargo/rustc/qpdf）
-- **exe**：见 L2-TASK 进度行（本步预算 +40 KB，上限 2,520,576）。
+- **exe**：2,517,504 字节，比 2d-1 之后的 2,479,616 多 37,888（本步预算 +40 KB = 2,520,576，余 3,072；没有单独压）。`wpt --check` 2635 / 2635（原 2435 + 本步新增，`list-marker-symbol-bidi` 和两个 grid 竖排测试退出通过名单，各有 notes 说明）；`cargo clippy --workspace --all-targets` 无警告；`cargo test --workspace` 439 个全过（`hostile` 里的网格计时用例在一次整套运行里因系统时钟跳变失败，单独重跑 31.9 秒通过）。
 - **内存**（`qinglan.exe --bench`，zhwiki-rec，1920×1080，5 次新进程，滚到底，Private Bytes）：46,903,296 / 48,283,648 / 48,119,808 / 46,403,584 / 46,829,568，最大 48.28 MB（46.0 MiB），≤ 50 MB。
 - **首屏**（同上，毫秒）：zhwiki-rec 129.1 / 136.1 / 135.3 / 121.5 / 127.0（中位数 129.1）；gh-ripgrep 138.2 / 126.0 / 130.7 / 115.7 / 132.5（中位数 130.7），都 ≤ 200。
 - **WPT**（测试平台）：`css/css-writing-modes`（bidi 相关 98 个）83 / 98（84.7%），bug 类 0，15 个 `limit`：12 个是测试按 ezra 窄网页字体写的、盒宽 10em，测试平台 1em 的字形让换行和参考页不同（把盒放宽到 60em 的临时副本里这 12 个都通过，副本里整体 95 / 98）；3 个是 `plaintext` 要在 `<br>` 之后重新定方向（`bidi-plaintext-br-001`、`block-plaintext-004`、`block-plaintext-006`，放宽后仍不过）；`css/CSS2/bidi-text` 69 / 103（67.0%），bug 类 34（上面第一条）；`css/css-text/text-align` 51 / 85（60.0%），bug 类 0（`text-align-last`、justify 细节、plaintext 各有 `limit` 说明）。`--win` 对这些文字密集的页面不适合（字形抗锯齿位置不同，几乎全差几个像素），没有加进 `passing-win.txt`。
