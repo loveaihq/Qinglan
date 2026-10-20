@@ -60,6 +60,7 @@
 - 真实网页：维基（Vector 皮肤）、GitHub、MDN、新闻站导航应该接近 Edge。注意中文维基首屏：Vector 用 flex/grid，排版会变重，200 ms 的首屏要守住。
 
 ## 2c 绘制效果
+为了省用量，2c 分两小步：**2c-1** 路径光栅器、背景图和渐变、圆角、边框样式、outline；**2c-2** 阴影、透明度、2D 变形（含点击检测），重跑真实网页对比。
 
 - **路径光栅器**（自己写）：直线和贝塞尔曲线、非零和奇偶填充规则、抗锯齿（按覆盖率）、描边（线宽、端点、连接、斜接上限、虚线）。2e 的 SVG 复用。
 - **背景**：`background-image`（`url()`，多层）、`position`/`size`/`repeat`/`origin`/`clip`；`linear-gradient`、`radial-gradient`、`conic-gradient` 及其 `repeating-` 形式。`background-attachment: fixed` 当 `scroll` 处理（记进 decisions.md）。
