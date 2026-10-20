@@ -665,7 +665,13 @@ pub enum Value {
     Quotes(Quotes),
     /// `counter-reset` / `counter-increment` / `counter-set`: the counters named and their numbers.
     Counters(Rc<Vec<(Rc<str>, i32)>>),
-    /// A property that is parsed and validated but has no effect in layer 1 (`border-radius`, ...).
+    /// A background longhand's list (see [`super::bg::BgVal`]).
+    Bg(Rc<super::bg::BgVal>),
+    /// `border-*-radius`: horizontal and vertical radius.
+    Radius(Lp, Lp),
+    /// `outline-offset`.
+    Length(Lp),
+    /// A property that is parsed and validated but has no effect.
     Ignored,
 }
 
@@ -762,6 +768,17 @@ pub enum PropId {
     BorderTopRightRadius,
     BorderBottomRightRadius,
     BorderBottomLeftRadius,
+    BackgroundImage,
+    BackgroundPositionX,
+    BackgroundPositionY,
+    BackgroundSize,
+    BackgroundRepeat,
+    BackgroundOrigin,
+    BackgroundClip,
+    OutlineWidth,
+    OutlineStyle,
+    OutlineColor,
+    OutlineOffset,
     Content,
     Quotes,
     CounterReset,
@@ -846,8 +863,9 @@ impl PropId {
             GridTemplateColumns | GridTemplateRows | GridTemplateAreas | GridAutoColumns | GridAutoRows | GridAutoFlow | GridRowStart
             | GridColumnStart | GridRowEnd | GridColumnEnd => Group::Grid,
             VerticalAlign | TextDecorationLine | TextDecorationStyle | TextDecorationColor | TextDecorationThickness
-            | BackgroundColor => Group::Misc,
-            BorderTopLeftRadius | BorderTopRightRadius | BorderBottomRightRadius | BorderBottomLeftRadius => Group::Ignored,
+            | BackgroundColor | BorderTopLeftRadius | BorderTopRightRadius | BorderBottomRightRadius | BorderBottomLeftRadius
+            | BackgroundImage | BackgroundPositionX | BackgroundPositionY | BackgroundSize | BackgroundRepeat | BackgroundOrigin
+            | BackgroundClip | OutlineWidth | OutlineStyle | OutlineColor | OutlineOffset => Group::Misc,
         }
     }
 
@@ -928,6 +946,17 @@ impl PropId {
             BorderTopRightRadius => "border-top-right-radius",
             BorderBottomRightRadius => "border-bottom-right-radius",
             BorderBottomLeftRadius => "border-bottom-left-radius",
+            BackgroundImage => "background-image",
+            BackgroundPositionX => "background-position-x",
+            BackgroundPositionY => "background-position-y",
+            BackgroundSize => "background-size",
+            BackgroundRepeat => "background-repeat",
+            BackgroundOrigin => "background-origin",
+            BackgroundClip => "background-clip",
+            OutlineWidth => "outline-width",
+            OutlineStyle => "outline-style",
+            OutlineColor => "outline-color",
+            OutlineOffset => "outline-offset",
             Content => "content",
             Quotes => "quotes",
             CounterReset => "counter-reset",
@@ -982,7 +1011,8 @@ pub const ALL_PROPS: [PropId; PROP_COUNT] = {
         TextIndent, TextTransform, WhiteSpaceCollapse, TextWrapMode, WordBreak, OverflowWrap, Direction, Visibility, Cursor,
         ListStyleType, ListStylePosition, TabSize, VerticalAlign, TextDecorationLine, TextDecorationStyle, TextDecorationColor,
         TextDecorationThickness, BackgroundColor, BorderTopLeftRadius, BorderTopRightRadius, BorderBottomRightRadius,
-        BorderBottomLeftRadius, Content, Quotes, CounterReset, CounterIncrement, CounterSet, BorderCollapse, BorderSpacing,
+        BorderBottomLeftRadius, BackgroundImage, BackgroundPositionX, BackgroundPositionY, BackgroundSize, BackgroundRepeat,
+        BackgroundOrigin, BackgroundClip, OutlineWidth, OutlineStyle, OutlineColor, OutlineOffset, Content, Quotes, CounterReset, CounterIncrement, CounterSet, BorderCollapse, BorderSpacing,
         EmptyCells, CaptionSide, TableLayout, FlexDirection, FlexWrap, Order, FlexGrow, FlexShrink, FlexBasis, JustifyContent,
         AlignItems, AlignSelf, AlignContent, RowGap, ColumnGap, JustifyItems, JustifySelf, GridTemplateColumns, GridTemplateRows,
         GridTemplateAreas, GridAutoColumns, GridAutoRows, GridAutoFlow, GridRowStart, GridColumnStart, GridRowEnd, GridColumnEnd,
@@ -1004,6 +1034,14 @@ pub const fn group_bits(g: Group) -> u128 {
     m
 }
 
+/// The background longhands (the ones that make up [`super::bg::Backgrounds`]).
+pub const BG_BITS: u128 = PropId::BackgroundImage.bit()
+    | PropId::BackgroundPositionX.bit()
+    | PropId::BackgroundPositionY.bit()
+    | PropId::BackgroundSize.bit()
+    | PropId::BackgroundRepeat.bit()
+    | PropId::BackgroundOrigin.bit()
+    | PropId::BackgroundClip.bit();
 pub const BOX_BITS: u128 = group_bits(Group::Box);
 pub const BORDER_BITS: u128 = group_bits(Group::Border);
 pub const FONT_BITS: u128 = group_bits(Group::Font);

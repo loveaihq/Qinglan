@@ -1214,3 +1214,64 @@ gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 
 ```
 
 - 测试：`cargo test --workspace --no-fail-fast` 328 条（原有）全过，另加 1 条（`firstscreen`），共 329；`qinglan-cli wpt --check` 1965 / 1965；clippy 无警告。
+
+
+## 第 2 层 · 2c-1 路径光栅器、背景、渐变、圆角、边框样式、outline（2026-10-20）
+
+代码：引擎新模块 `vector/`（`mod.rs` 路径和变换、`fill.rs` 覆盖率光栅和遮罩、`stroke.rs` 描边）；`css/bg.rs`（背景、渐变、圆角、outline 的值类型和解析）；`paint/gradient.rs`（渐变的解析结果和查表）、`paint/borders.rs`（圆角和各种样式的边框）；`paint/build.rs`、`paint/raster.rs`、`layout/boxtree.rs` 里相应的改动。测试：`vector` 单元 11 条、`paint::gradient` 6 条、`css::bg` 4 条、`tests/backgrounds.rs` 20 条（手算像素和面积）、`tests/paint.rs` 里两条旧边框测试按新行为改过。
+
+### 路径光栅器（`vector/`，任务单 2c）
+
+- **覆盖率**：按字体光栅器（stb_truetype v2、font-rs）的做法，每条边把它在每个像素里"右边的有符号面积"累加进缓冲区，再沿行累加得到覆盖率，所以抗锯齿是精确面积，不是采样。非零规则取绝对值截到 1，奇偶规则取三角波。缓冲区最多 4 MB（按行分带，一带不够就分几带），遮罩（`Mask`）最多 2048×2048 像素；窗口外的部分不算。同方向的形状在同一个像素里部分重叠时覆盖会略微偏多（这个方法的通病），整像素在内部的结果是精确的。
+- **曲线**：二次、三次贝塞尔按容差切成线段（误差界 `0.25·dd/n²` 和 `0.75·dd/n²`，每条曲线最多 128 段）；圆角和椭圆用四段三次贝塞尔（常数 0.5522848）。边框和裁剪用的容差是 0.01 设备像素：0.1 时圆的切点处会浅 2–4%（用面积测试发现）。
+- **描边**：每个线段一个矩形、每个转角一块楔形（斜接、圆、斜切；斜接上限按 SVG 的"斜接长度 / 线宽"）、每个开口端一个端点（平、圆、方），全部同一个绕向，再用非零规则填，就是并集。虚线先把折线切成段再各自描边；数量上限（多边形 13 万、虚线段 3 万）。输入里的非有限数一律丢掉。
+- **变换**：`Transform`（2×3 仿射，`compose`、`apply`）和 `Path::transformed` 是 2c-2（CSS 变形）和 2e（SVG）的接口；路径可以先变换再填或描边。圆角矩形裁剪走专门的快路（见下），不走通用遮罩。
+
+### 圆角和裁剪（`paint/`）
+
+- **半径**（css-backgrounds-3 5.1、5.5）：百分比按边框盒算；任意一边上相邻两个半径之和超过边长时，所有半径按最小比例一起缩小；半径有一个分量是 0 的角是直角。背景的绘制区域取 `background-clip` 的盒子，半径用对应的内边缘（边框宽度、再加 padding 都从半径里减，最小 0）。
+- **裁剪链**：`DisplayList::clips` 仍是矩形；`rounds` 与它平行，记每个裁剪自己的圆角形状和下一个有圆角的裁剪。`overflow` 的裁剪、背景的绘制区域都可以带圆角。光栅时圆角只和矩形差在四个角上：先照矩形画，再对触到的每个角盒，把像素按形状在那里的覆盖率从"之前"拉到"之后"（`之前 + (之后 − 之前)·覆盖率`，等于把这个元素的 alpha 乘上覆盖率再画），所以文字、图片、渐变、边框都一样处理，里面的大块区域完全不付钱。角盒的覆盖率每帧每个角只做一次。
+- `<img>` 的 `border-radius` 把图片裁到圆角的内边缘（头像圆图是网页上最常见的用法）。
+
+### 背景（css-backgrounds-3 2、3）
+
+- **解析**：`background-image`（`url()`、四种渐变和 `repeating-` 形式）、`-position`（含 x、y 分开写和四值语法，边偏移折成"百分比加长度"：`right 10px` 是 100% 和 −10px）、`-size`（`cover`/`contain`/长度）、`-repeat`、`-origin`、`-clip`、`background` 简写（任意顺序、`/` 后接尺寸、颜色只能在最后一层、一个盒子值同时给 origin 和 clip）；多层最多 16 层，各列表按图片层数循环或截断。简写里没写的部分用 `Value::Ignored` 表示初始值（不分配内存，也不为只写了 `background: #fff` 的元素新建 `Backgrounds`：在 GitHub 页面上这一项值几 ms 和 2 MB）。
+- `url()` 在解析时按样式表的地址（`<style>` 和 `style=` 按文档地址）变成绝对地址（`SheetCtx::base`、`ParseEnv::base`）；`var()` 展开出来的 `url()` 仍按原样、请求时按页面地址解析（和 `content: url()` 一样）。
+- **图片请求**：盒子树里有 `url()` 背景的盒子，每层拿一个"文档节点数之后"的编号（和 `content: url()` 的图片同一个计数器，同样的样式每次排版编号相同），进 `LayoutResult::images`；图片头到了就记尺寸（`BgRef::nat`），所以宿主不用改：和 `<img>` 一样请求、探头、解码。头到达时整页重排（背景不占地方，但背景的瓦片大小要用自然尺寸；先不做"只重画"的优化）。图片按瓦片的设备像素大小解码（`ImagePlace::rect`），距离视口多远按 `ImagePlace::span`（背景的绘制区域的纵向范围），懒加载规则不变（离视口 ≤ 2 屏就请求，> 4 屏丢解码结果）。
+- **瓦片**：尺寸按 `cover`/`contain`（图片有比例）、长度、`auto`（图片用自然大小，渐变用定位区域）；`round` 取整数张并拉伸（只有一个方向是 `round`、另一个方向 `auto` 时，另一个方向按图片比例变）；`space` 取整数张、间距平分、从边上开始，装不下两张就不重复；重复的瓦片至少 1 CSS px（Chromium 同；0.2px 的渐变瓦片就是一整块色）。第 k 张瓦片的左边取整到设备像素，宽度是解码时的整数宽度。
+- **画布背景**：根元素（没有就 body）的背景图片也上画布（`canvas_background` 现在把"有背景图"算作有背景）：定位按根元素的盒子，绘制铺满视口和根盒较大的那个，重复照常。
+- **记下的做法**：`background-attachment` 解析后丢掉（`fixed`、`local` 按 `scroll` 画，任务单）；`background-clip: text` 解析后按 `border-box` 画（做文字裁剪要一层离屏，没做）；`border-area` 不认；行内盒断行时每个片段各画一份背景图（不是 `box-decoration-break: slice` 的连续），圆角和边框只在真正的首、尾片段的外侧。
+
+### 渐变（css-images-3 3、css-images-4 3）
+
+- 线性（角度、`to` 边和角：50% 线过另外两个角，css-images-3 3.1.1）、径向（圆、椭圆；`closest/farthest-side/corner`、长度、`at <position>`）、锥形（`from`、`at`；位置可以是角度或百分比，角度按圈的百分比存；单位的 `0` 也认）、三种的 `repeating-`；前缀版本（`-webkit-linear-gradient`）和 `image-set()` 无效。只有一个颜色也有效（整块那个颜色，css-images-4 3.5）。
+- **色标**：两个位置的色标拆成两个；颜色提示（hint）单独一项，只能在两个色标之间。修正（3.5.3）：第一个默认 0、最后一个默认 100%，位置不后退，没位置的一段平分；提示按 `t' = t^(ln 0.5 / ln H)`（`H` 是提示在前后两个色标之间的相对位置，css-images-4 3.5.4），幂用自己写的 `exp2(e·log2 t)` 短多项式（误差 < 2e-3，比 8 位通道的一级小；C 库的 `powf` 就 3.7 KB）。重复渐变的首尾位置相同时没有周期，取最后一个颜色。
+- **插值**：所有颜色在预乘 alpha 的 sRGB 里线性插值（CSS Color 4 12.3：旧语法的颜色就是这样；引擎的颜色解析把 `lab()`、`oklch()` 等都转成 sRGB 了，所以只有这一个空间）。`in <颜色空间> [hue 方式]` 解析后丢掉（记下：`in oklab`、`longer hue` 等的 WPT 测试归 `limit`）。
+- **画法**：每个渐变解析成几何（线性：起点和单位向量；径向：圆心和两个半径；锥形：圆心和起始角）加一张预乘 BGRA 的查表（线性和径向每 0.5 px 一格，最多 4096 格；锥形 1024 格），首尾之外用首尾颜色；画的时候每个像素算一次参数再查表。表里每格取格子中心的颜色，所以硬色标最多糊一格（0.5 px）。
+
+### 边框、边框样式、outline（css-backgrounds-3 4、5；css-ui-3 6）
+
+- 一般的实线矩形边框仍是几个矩形（和以前逐像素一样）；有半径、样式不是 `solid`、或者相邻两边颜色不同时做成一个 `BorderDraw`，光栅时按路径画。
+- **转角连接**（4.3）：每条边只管它的楔形（边框盒外角到内角的四边形），颜色不同的两边在对角线上相接；同色的实线边合在一次填充里画（面积是相加的，所以对角线上没有缝）。有半径时是"圆环 ∩ 楔形"：圆环是外圆角矩形和内圆角矩形的奇偶填充，内半径 = 外半径 − 边框宽度（最小 0）。
+- **样式**：`double`（宽度 ≥ 3 时外、内各三分之一，更窄当 solid）；`groove`/`ridge`（外半、内半各一半，≥ 2 px，明暗对调）；`inset`/`outset`（上、左和下、右明暗相反；明暗的算法照 Chromium：变暗 `v' = max(0, (v − 0.33)/v)`、变亮 `v' = min(1, v + 0.33)/v`，白变 `#ababab`、黑变 `#545454`）；`dashed`（线宽 ≥ 3 时划 2w、隔 w，否则划 3w、隔 2w，Chromium 的比例）、`dotted`（圆端点的点，直径 w、间距 w）；四边相同的虚线、点线沿边框中线画一整圈闭合路径，间距调整到整数个周期；四边不全相同时每条边沿自己的中线画直线，圆角那一段不画（记下），点线的第一个和最后一个点完整在边框盒里。`hidden`、`none` 宽度为 0（计算值里就是）。
+- **outline**：宽度、样式（`auto` 按实线画，`hidden` 无效）、颜色（`invert` 当 `currentcolor`）、`outline-offset`；画在边框盒外面 offset 处，不占地方；有圆角时半径加 offset 和宽度；排到它所在的层叠上下文（`paint_box`）画完之后画（CSS2 附录 E.2 第 10 步），所以盖在后面的兄弟上面。
+
+### 没做、留给后面
+
+- `list-style-image`（属性本身还没有，所以渐变也不能用在它上面）和 `content: <gradient>`：没做；`content: url()` 的图片照旧。
+- `background-clip: text`、`border-area`；`box-decoration-break: clone`；`image()`、`image-set()`、`cross-fade()`、`element()`、`border-image`、`mix-blend-mode`、`background-blend-mode`（任务单"不做"或不在第 2 层）。
+- 渐变的 `in oklab` 等颜色空间；渐变里的 `calc()` 角度和无穷；容器查询单位；相对颜色。
+- 图片到达时整页重排（背景图不改变版面，可以只重画；要做得改 `apply_image` 的 `keeps_box`）。
+- 圆角下 `dashed`/`dotted` 的非四边相同情形、行内盒的 `slice` 连续背景、outline 的圆角只是半径加宽度的近似。
+- 2c-2：`box-shadow`、`text-shadow`、`opacity`、2D 变形（含点击检测）。
+
+### 验收数据（2026-10-20，release，插电 `BatteryStatus = 2`，没有别的 cargo/rustc/qpdf；机器上有 Claude 桌面版等后台程序，数字有噪声）
+
+- **WPT**（`qinglan-cli wpt css/css-backgrounds css/css-images`；只放了不用 2c-2、2d、2e、不在计划里的特性的 reftest，没有 `<script>`，加上它们引用的文件；筛选脚本按这些特性的关键词筛，`css-backgrounds` 的 1007 个 reftest 里留了 212 个，`css-images` 留了 126 个；`tests/wpt` 磁盘占用 21 MB，真实字节约 7 MB）：
+  - `css/css-backgrounds`：198 / 212（93.4%），bug 类 5；失败分类：bug (open) 5，limit (background-attachment) 5，limit (contain) 2，limit (gradient color spaces) 1，limit (relative colors, ::first-line) 1
+  - `css/css-images`：58 / 126（46.0%），bug 类 0；失败分类：limit (calc in gradients) 5，limit (gradient color spaces) 18，limit (relative colors, ::first-line) 1，not planned 44
+  - bug 类每条都有自己的一行在 `tests/wpt/notes.txt`：修掉的有单色标渐变、重复渐变首尾同位、`round` 另一方向保持比例、近零瓦片、`<img>` 圆角裁剪、锥形渐变里的 `0`；没修的 `bug (open)` 5 条（背景图在圆角边缘的重采样差、`background-origin: border-box` 加半透明边框的两条、行内盒断行加圆角的弧、嵌套 overflow 圆角裁剪的弧）写明了"没查"，没有谎称是别的。
+  - `wpt --check`：wpt: 2217 of 2221 listed tests pass。
+- **体积**：`qinglan.exe` 2,196,992 字节，比 2b 结束时的 2,012,160 多 184,832（任务单这一步 ≤ +60 KB，**超出约 125 KB**）。`/MAP` 对比 `.text`（+169 KB，当时）：`css::bg` +29 KB、`paint::raster` +19 KB、`paint::build` +16 KB、`vector::stroke` +8.5 KB、`vector::fill` +4 KB、`paint::borders` +5 KB、`css::cascade`（`compute_backgrounds`）+6 KB、drop glue +4 KB，C 库的 `powf`、`acosf`、`atan2f`、`sinf`、`cosf`、`fmodf` 约 +18 KB（自己写了 `pow`、弧的步长改用平方根、`fmod` 改用 `floor` 之后少了 7 KB，剩下的是 `atan2`、`sin`、`cos`，渐变角度和圆弧用得到）。第 2 层总上限 2,516,582 还剩 319,590 字节，2c-2、2d、2e 的原分配 350 KB 已经装不下：要先定怎么办（砍功能、放宽上限，或者再花一轮减体积）。
+- **内存**（`qinglan.exe --bench`，zhwiki-rec 1920×1080，每次新进程）：滚到底后 Private Bytes 5 次 46.35、46.64、47.13、47.05、48.81 MB，**最大 48.81 MB**（≤ 50 MB；2b-3 是 43.5–45.9）。比旧程序多 2–3 MB 来自 `MiscStyle` 变大（每个样式多 `bg`、四个半径、outline）和规则里的背景值；简写只写颜色时不再分配之后，gh-ripgrep 滚到底 24.2–26.1 MB（和旧程序一样）。
+- **速度**：滚动光栅（`render --full --scroll-bench`，1920×1080，dpr 1，中位数 / 95 分位）：zhwiki-rec 5.0 / 6.9 ms（673 帧，每帧 406 项），gh-ripgrep（圆角多）11.0 / 16.2 ms（109 帧，每帧 121 项、1415 个字形），gohugo 1.5 / 2.2 ms。**首屏**（`qinglan.exe --bench`，5 次新进程交替旧新）：zhwiki-rec 旧 145.1、新 151.3 ms（中位数）；gh-ripgrep 旧 185–216、新 205–230 ms（中位数，两轮之间旧程序自己也差 30 ms，机器当时有噪声），**新程序在 gh-ripgrep 上超过 200 ms 的目标，没能确认是不是噪声**，有一次 598 ms 的偶发慢启动（2-0 已知的 0.5 秒）。原因没查；怀疑是样式计算里 `MiscStyle` 变大和 `border-radius`/`background` 声明变多；要在安静的机器上重量。

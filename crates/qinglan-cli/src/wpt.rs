@@ -405,8 +405,11 @@ fn classify(src: &str) -> Option<(&'static str, &'static str)> {
     if has(&["grid-lanes", "masonry", "subgrid"]) {
         return Some(("none", "subgrid and masonry (grid-lanes) are not planned"));
     }
-    if has(&["gradient", "box-shadow", "border-radius", "opacity:", "transform:", "background-image", "text-shadow", "outline:", "-dashed", ":dashed", ":dotted", "groove", "ridge", "background:url", "mix-blend"]) {
-        return Some(("2c", "painting effects"));
+    if has(&["box-shadow", "text-shadow", "opacity:", "transform:", "transform-origin", "translate:", "rotate:", "scale:", "perspective"]) {
+        return Some(("2c-2", "shadows, opacity and transforms"));
+    }
+    if has(&["mix-blend", "background-blend", "cross-fade(", "image-set(", "element(", "paint(", "-webkit-gradient", "-moz-", "border-image", "color-mix(", "light-dark(", "color(", "currentcolor/", "sibling-index", "anchor("]) {
+        return Some(("none", "a feature layer 2 does not do (blend modes, border-image, cross-fade, image-set, element(), color-mix ...)"));
     }
     if has(&["@font-face", "writing-mode", "direction:rtl", "direction:ltr", "unicode-bidi", "<ruby", "dir=\"rtl\""]) {
         return Some(("2d", "text features"));

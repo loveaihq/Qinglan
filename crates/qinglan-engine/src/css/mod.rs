@@ -4,6 +4,7 @@
 //! (`<style>`, `<link rel=stylesheet>`, `@import`, `style=""`, presentational attributes), loads
 //! them through a [`ResourceLoader`] and computes a style for every element.
 
+pub mod bg;
 pub mod cascade;
 pub mod color;
 mod color_names;
@@ -219,7 +220,7 @@ impl ImportResolver for Resolver<'_> {
             return None;
         };
         *self.sheets += 1;
-        let mut ctx = SheetCtx { atoms: self.atoms, quirks: self.quirks, var_id: self.var_id, block_id: self.block_id, facts: Some(self.facts), env: Some(self.env) };
+        let mut ctx = SheetCtx { atoms: self.atoms, quirks: self.quirks, var_id: self.var_id, block_id: self.block_id, facts: Some(self.facts), env: Some(self.env), base: Some(Rc::new(url.clone())) };
         let sheet = parse_stylesheet(&text, &mut ctx);
         self.chain.push(url);
         Some(Rc::new(sheet))
@@ -262,7 +263,7 @@ pub fn style_document_with(
     // Built-in style sheet.
     let mut ua = RuleSet::new();
     {
-        let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks: false, var_id: &mut var_id, block_id: &mut block_id, facts: None, env: None };
+        let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks: false, var_id: &mut var_id, block_id: &mut block_id, facts: None, env: None, base: None };
         let sheet = parse_stylesheet(UA_CSS, &mut ctx);
         clock.lap(&mut timings.parse_sheets);
         ua.add_sheet(&sheet, Origin::UserAgent, &media_env, &mut NoImports);
@@ -319,8 +320,9 @@ pub fn style_document_with(
     drop(texts);
     clock.lap(&mut timings.parse_sheets);
     for (url, cvs) in urls.into_iter().zip(tokenized) {
+        let sheet_base = url.clone().or_else(|| base.clone()).map(Rc::new);
         let sheet = {
-            let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks, var_id: &mut var_id, block_id: &mut block_id, facts: Some(&doc_facts), env: Some(&media_env) };
+            let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks, var_id: &mut var_id, block_id: &mut block_id, facts: Some(&doc_facts), env: Some(&media_env), base: sheet_base };
             parse_stylesheet_cvs(cvs, &mut ctx)
         };
         clock.lap(&mut timings.parse_sheets);
@@ -355,11 +357,12 @@ pub fn style_document_with(
     }
     let mut style_attrs: Vec<Option<Rc<DeclBlock>>> = vec![None; doc.nodes.len()];
     let mut memo: FxHashMap<String, Rc<DeclBlock>> = FxHashMap::default();
+    let attr_base = base.clone().map(Rc::new);
     for (n, text) in attr_texts {
         let block = match memo.get(&text) {
             Some(b) => b.clone(),
             None => {
-                let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks, var_id: &mut var_id, block_id: &mut block_id, facts: None, env: None };
+                let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks, var_id: &mut var_id, block_id: &mut block_id, facts: None, env: None, base: attr_base.clone() };
                 let b = parse_style_attribute(&text, &mut ctx);
                 memo.insert(text, b.clone());
                 b

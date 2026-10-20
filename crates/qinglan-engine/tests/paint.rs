@@ -78,14 +78,18 @@ fn borders_are_solid_rectangles_over_the_background() {
     let html = "<body style='margin:0'><div style='margin:10px;width:30px;height:20px;border:4px solid #00f;border-bottom-color:#0f0;background:#ff0'></div></body>";
     let f = paint(html, 80, 60);
     // Border box x 10..48, y 10..38; top/bottom borders run the full width, the sides sit between them.
-    expect(&f, &[(10, 10, BLUE), (47, 10, BLUE), (11, 20, BLUE), (44, 20, BLUE), (10, 37, GREEN), (30, 35, GREEN), (20, 20, YELLOW), (20, 9, WHITE), (48, 20, WHITE)]);
+    // Where two sides of different colors meet (bottom left) the border is cut along the diagonal from the outer to the inner
+    // corner: (10,36) is above it, (11,37) below. Sides of one color (top, left, right) have no seam.
+    expect(&f, &[(10, 10, BLUE), (47, 10, BLUE), (11, 20, BLUE), (44, 20, BLUE), (10, 36, BLUE), (11, 37, GREEN), (30, 35, GREEN), (20, 20, YELLOW), (20, 9, WHITE), (48, 20, WHITE)]);
 }
 
 #[test]
-fn dotted_and_double_borders_are_drawn_solid_and_none_is_not_drawn() {
+fn dotted_borders_are_round_dots_and_none_is_not_drawn() {
+    // Outer 16 x 16; the middle line of the 3 px border is a 13 x 13 square of length 52, nine dots 52/9 apart from its
+    // top left corner (1.5, 1.5): a dot of radius 1.5 covers pixel (1,1) and (7,1) completely; (4,1) lies in the gap.
     let html = "<body style='margin:0'><div style='width:10px;height:10px;border:3px dotted #00f'></div><div style='width:10px;height:10px;border:3px none #00f;margin-top:5px'></div></body>";
     let f = paint(html, 40, 60);
-    expect(&f, &[(0, 0, BLUE), (1, 1, BLUE), (7, 7, WHITE), (14, 5, BLUE), (0, 16, WHITE), (0, 20, WHITE)]);
+    expect(&f, &[(1, 1, BLUE), (7, 1, BLUE), (4, 1, WHITE), (7, 7, WHITE), (0, 16, WHITE), (0, 21, WHITE)]);
 }
 
 #[test]

@@ -200,6 +200,18 @@ impl LayoutBox {
     }
 }
 
+/// A `background-image: url()` layer of a box: which layer, the number its image has (past the nodes of the document,
+/// like `content: url()` images) and the pixel size of the picture once its header has been read.
+#[derive(Clone, Copy, Debug)]
+pub struct BgRef {
+    pub layer: u8,
+    pub node: NodeId,
+    pub nat: Option<(u32, u32)>,
+}
+
+/// At most this many background images are requested per page.
+const MAX_BG_IMAGES: usize = 2000;
+
 pub struct BoxTree {
     pub boxes: Vec<LayoutBox>,
     pub root: BoxId,
@@ -211,6 +223,8 @@ pub struct BoxTree {
     /// The `overflow` the viewport uses, propagated from the root element or the `body` (CSS2 11.1.1, css-overflow-3 3.3):
     /// `visible` there means `auto` and `clip` means `hidden`. The element it came from lays out as `overflow: visible`.
     pub viewport_overflow: (Overflow, Overflow),
+    /// The `url()` background layers of the boxes that have any.
+    pub bgs: crate::html::atoms::FxHashMap<BoxId, Vec<BgRef>>,
     dummy: LayoutBox,
 }
 
@@ -326,6 +340,7 @@ struct Builder<'a> {
     gc: Counters,
     /// Images made by `content: url()`, counted so each gets a node number of its own (past the nodes of the document).
     gen_images: u32,
+    bgs: crate::html::atoms::FxHashMap<BoxId, Vec<BgRef>>,
     /// Boxes made for generated content so far, and how many may be made: a quarter of what the document's own node count
     /// leaves under [`MAX_NODES`]. A generated box costs about 600 bytes (box, geometry, shaped text), so a page cannot
     /// ask for several times the memory its node count already allows by putting `::before` and `::after` on every
@@ -360,6 +375,7 @@ pub fn build_box_tree_with(doc: &Document, styles: &StyleTree, env: &BuildEnv<'_
         next_order: 0,
         gc: Counters::new(),
         gen_images: 0,
+        bgs: Default::default(),
         generated: 0,
         gen_cap: MAX_NODES.saturating_sub(doc.nodes.len()) / 4,
         gen_cut: false,
@@ -410,7 +426,7 @@ pub fn build_box_tree_with(doc: &Document, styles: &StyleTree, env: &BuildEnv<'_
         }
     };
     let dummy = LayoutBox::new(BoxKind::Block, NONE, init, true);
-    BoxTree { boxes: b.boxes, root, images: b.images, cut: b.gen_cut, viewport_overflow, dummy }
+    BoxTree { boxes: b.boxes, root, images: b.images, cut: b.gen_cut, viewport_overflow, bgs: b.bgs, dummy }
 }
 
 /// HTML 2.3.4.? "rules for parsing integers" (leading white space, sign, digits; the rest is ignored).
@@ -447,8 +463,35 @@ fn without_overflow(style: &Rc<ComputedStyle>) -> Rc<ComputedStyle> {
 impl Builder<'_> {
     fn new_box(&mut self, kind: BoxKind, node: NodeId, style: Rc<ComputedStyle>, anonymous: bool) -> BoxId {
         let id = self.boxes.len() as BoxId;
+        // Text boxes carry their parent's style; the parent's own box paints the background.
+        if kind != BoxKind::Text && style.misc.bg.has_url {
+            self.register_bgs(id, &style);
+        }
         self.boxes.push(LayoutBox::new(kind, node, style, anonymous));
         id
+    }
+
+    /// Ask for the `url()` backgrounds of box `id`. Each gets a node number of its own, counted like those of
+    /// `content: url()` images, so it is the same on every layout of the same styles.
+    fn register_bgs(&mut self, id: BoxId, style: &ComputedStyle) {
+        let mut refs = Vec::new();
+        for (i, img) in style.misc.bg.images.iter().enumerate() {
+            let crate::css::bg::BgImage::Url(u) = img else { continue };
+            if self.bgs.values().map(Vec::len).sum::<usize>() + refs.len() >= MAX_BG_IMAGES {
+                break;
+            }
+            let node = (self.doc.nodes.len() as u32).saturating_add(self.gen_images);
+            self.gen_images = self.gen_images.saturating_add(1);
+            self.images.push(ImageRequest { node, src: u.to_string(), density: 1.0 });
+            let nat = match self.env.images.get(node) {
+                Some(ImageState::Loaded { width, height }) => Some((width, height)),
+                _ => None,
+            };
+            refs.push(BgRef { layer: i.min(255) as u8, node, nat });
+        }
+        if !refs.is_empty() {
+            self.bgs.insert(id, refs);
+        }
     }
 
     fn box_mut(&mut self, id: BoxId) -> Option<&mut LayoutBox> {

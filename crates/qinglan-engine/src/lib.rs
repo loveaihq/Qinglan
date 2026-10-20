@@ -13,3 +13,4 @@ pub mod platform;
 pub mod sorting;
 pub mod textclass;
 pub mod url;
+pub mod vector;

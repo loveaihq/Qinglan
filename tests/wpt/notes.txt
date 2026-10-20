@@ -412,3 +412,85 @@ css/css-grid/layout-algorithm/grid-min-content-width-percent-height-aspect-ratio
 css/css-grid/layout-algorithm/grid-percent-rows-filled-shrinkwrap-001.html	bug (open)	percentage row tracks / heights against an indefinite container height: treated as `auto` and not resolved again after the rows are sized (css-grid-1 7.2.1, 11.1)
 css/css-grid/layout-algorithm/grid-percent-rows-spanned-shrinkwrap-001.html	bug (open)	percentage row tracks / heights against an indefinite container height: treated as `auto` and not resolved again after the rows are sized (css-grid-1 7.2.1, 11.1)
 css/css-grid/layout-algorithm/grid-track-ignores-max-size-002.html	limit (placeholder boxes)	canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers')
+css/css-backgrounds/background-attachment-350.html	limit (background-attachment)	background-attachment fixed and local are painted as scroll (task 2c: recorded in decisions.md)
+css/css-backgrounds/background-attachment-local-hidden.html	limit (background-attachment)	background-attachment fixed and local are painted as scroll (task 2c: recorded in decisions.md)
+css/css-backgrounds/background-attachment-margin-root-002.html	limit (background-attachment)	background-attachment fixed and local are painted as scroll (task 2c: recorded in decisions.md)
+css/css-backgrounds/background-color-body-propagation-008.html	limit (contain)	`contain: paint` on the root stops the propagation of the body background; `contain` is not implemented
+css/css-backgrounds/background-color-body-propagation-009.html	limit (contain)	`contain: paint` on the root stops the propagation of the body background; `contain` is not implemented
+css/css-backgrounds/background-gradient-interpolation-001.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-backgrounds/background-image-centered-with-border-radius.html	bug (open)	28 pixels differ by up to 63 at the arc where a centered picture meets the rounded edge; not investigated in 2c-1 (picture resampling at the clip edge)
+css/css-backgrounds/background-origin/origin-border-box_with_position.html	bug (open)	the reference mixes a div with background-origin: border-box under a semi-transparent border and an <img> with a radius; not investigated in 2c-1
+css/css-backgrounds/background-origin/origin-padding-box_with_radius.html	bug (open)	the reference mixes a div with background-origin: border-box under a semi-transparent border and an <img> with a radius; not investigated in 2c-1
+css/css-backgrounds/background-origin-006.html	limit (background-attachment)	background-attachment fixed and local are painted as scroll (task 2c: recorded in decisions.md)
+css/css-backgrounds/border-radius-012.html	bug (open)	an inline box with a radius broken over two lines: the arcs differ by anti-aliasing and 1px; not investigated in 2c-1
+css/css-backgrounds/border-radius-clip-002.htm	bug (open)	overflow clip with a radius around positioned / transformed-looking content differs at the arcs; not investigated in 2c-1
+css/css-backgrounds/linear-gradient-currentcolor-first-line.html	limit (relative colors, ::first-line)	relative color syntax / ::first-line backgrounds are not done
+css/css-backgrounds/table-cell-background-local-002.html	limit (background-attachment)	background-attachment fixed and local are painted as scroll (task 2c: recorded in decisions.md)
+css/css-images/conic-gradient-calc-angle-percentage.html	limit (calc in gradients)	calc() with infinity / calc() as a conic angle or stop position is not done; the declaration is dropped
+css/css-images/css-image-fallbacks-and-annotations.html	not planned	the image() function (colors and fallbacks as images) is not done
+css/css-images/css-image-fallbacks-and-annotations002.html	not planned	the image() function (colors and fallbacks as images) is not done
+css/css-images/css-image-fallbacks-and-annotations005.html	not planned	the image() function (colors and fallbacks as images) is not done
+css/css-images/gradient/conic-gradient-001.html	limit (calc in gradients)	calc() with infinity / calc() as a conic angle or stop position is not done; the declaration is dropped
+css/css-images/gradient/display-p3-linear-gradient.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/gradient-decreasing-hue-hsl.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/gradient-decreasing-hue-lch.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/gradient-eval-002.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/gradient-eval-003.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/gradient-eval-004.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/gradient-eval-005.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/gradient-eval-006.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/gradient-eval-007.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/gradient-eval-008.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/gradient-eval-009.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/gradient-increasing-hue-hsl.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/gradient-increasing-hue-lch.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/gradient-infinity-001.html	limit (calc in gradients)	calc() with infinity / calc() as a conic angle or stop position is not done; the declaration is dropped
+css/css-images/gradient/gradient-infinity-002.html	limit (calc in gradients)	calc() with infinity / calc() as a conic angle or stop position is not done; the declaration is dropped
+css/css-images/gradient/gradient-infinity-003.html	limit (calc in gradients)	calc() with infinity / calc() as a conic angle or stop position is not done; the declaration is dropped
+css/css-images/gradient/gradient-single-stop-longer-hue-hsl.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/gradient-single-stop-longer-hue-oklch.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/linear-gradient-relative-currentcolor-stop.html	limit (relative colors, ::first-line)	relative color syntax / ::first-line backgrounds are not done
+css/css-images/gradient/oklab-gradient.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/srgb-linear-gradient.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/gradient/xyz-gradient.html	limit (gradient color spaces)	gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1)
+css/css-images/image-color-background-combined.html	not planned	the image() function (colors and fallbacks as images) is not done
+css/css-images/image-color-background-position.html	not planned	the image() function (colors and fallbacks as images) is not done
+css/css-images/image-color-background-repeat.html	not planned	the image() function (colors and fallbacks as images) is not done
+css/css-images/image-color-background-size.html	not planned	the image() function (colors and fallbacks as images) is not done
+css/css-images/image-color-basic.html	not planned	the image() function (colors and fallbacks as images) is not done
+css/css-images/image-color-layered.html	not planned	the image() function (colors and fallbacks as images) is not done
+css/css-images/image-orientation/image-orientation-background-image.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/image-orientation/image-orientation-background-position.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/image-orientation/image-orientation-background-properties-border-radius.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/image-orientation/image-orientation-background-properties.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/image-orientation/image-orientation-default.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/image-orientation/image-orientation-exif-png-2.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/image-orientation/image-orientation-exif-png-3.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/image-orientation/image-orientation-exif-png.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/image-orientation/image-orientation-from-image-composited.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/image-orientation/image-orientation-from-image-content-images.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/image-orientation/image-orientation-from-image.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/image-orientation/image-orientation-img-object-fit.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/image-rendering-mixed-scaled.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-fit-contain-png-001i.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-fit-contain-png-002i.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-fit-containcontainintrinsicsize-png-001i.tentative.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-fit-containsize-png-001i.tentative.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-fit-cover-png-001i.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-fit-cover-png-002i.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-fit-fill-png-001i.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-fit-fill-png-002i.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-fit-none-png-001i.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-fit-none-png-002i.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-fit-scale-down-png-001i.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-fit-scale-down-png-002i.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-position-png-001i.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-position-png-002i.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-view-box-rect-percentage.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-view-box-rect.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-view-box-xywh-percentage.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/object-view-box-xywh.html	not planned	object-fit, object-position, object-view-box, image-orientation and image-rendering of replaced elements are not in the layer-2 list
+css/css-images/radial-gradient-container-relative-units-001.html	not planned	container query units (cqw ...) are not done (no @container)
+css/css-images/radial-gradient-container-relative-units-002.html	not planned	container query units (cqw ...) are not done (no @container)
+css/css-images/radial-gradient-container-relative-units-003.html	not planned	container query units (cqw ...) are not done (no @container)
+css/css-images/radial-gradient-container-relative-units-004.html	not planned	container query units (cqw ...) are not done (no @container)

@@ -11,10 +11,12 @@ use super::types::*;
 use super::values::{LenUnit, Lp, parse_integer, parse_length, parse_length_percentage, parse_number};
 
 /// Parsing environment.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ParseEnv {
     /// Quirks mode: unitless numbers are lengths (px) for the properties of CSS Quirks 3.
     pub quirks: bool,
+    /// What `url()` values are resolved against (the style sheet); `None`: kept as written.
+    pub base: Option<Rc<crate::url::Url>>,
 }
 
 /// A parsed declaration: a longhand with its specified value.
@@ -67,7 +69,9 @@ pub fn longhands_of(name: &str) -> Option<Vec<PropId>> {
         "font" => vec![FontStyle, FontWeight, FontSize, LineHeight, FontFamily],
         "list-style" => vec![ListStyleType, ListStylePosition],
         "text-decoration" => vec![TextDecorationLine, TextDecorationStyle, TextDecorationColor, TextDecorationThickness],
-        "background" => vec![BackgroundColor],
+        "background" => vec![BackgroundImage, BackgroundPositionX, BackgroundPositionY, BackgroundSize, BackgroundRepeat, BackgroundOrigin, BackgroundClip, BackgroundColor],
+        "background-position" => vec![BackgroundPositionX, BackgroundPositionY],
+        "outline" => vec![OutlineWidth, OutlineStyle, OutlineColor],
         "white-space" => vec![WhiteSpaceCollapse, TextWrapMode],
         "text-wrap" => vec![TextWrapMode],
         "flex" | "-webkit-flex" => vec![FlexGrow, FlexShrink, FlexBasis],
@@ -291,22 +295,13 @@ fn parse_value(name: &str, cvs: &[Cv], env: &ParseEnv) -> Option<Vec<(PropId, Va
             };
             Some(vec![(sd[0], w), (sd[1], s), (sd[2], c)])
         }
-        "border-radius" => {
-            // <length-percentage>{1,4} [ / <length-percentage>{1,4} ]?
-            let slash = items.iter().position(|c| c.is_delim('/'));
-            let (first, second) = match slash {
-                Some(i) => (items.get(..i)?, Some(items.get(i + 1..)?)),
-                None => (items.as_slice(), None),
-            };
-            let ok = |part: &[&Cv]| !part.is_empty() && part.len() <= 4 && part.iter().all(|c| radius_ok(c, q));
-            if !ok(first) || second.is_some_and(|s| !ok(s)) {
-                return None;
-            }
-            Some([BorderTopLeftRadius, BorderTopRightRadius, BorderBottomRightRadius, BorderBottomLeftRadius]
-                .into_iter()
-                .map(|p| (p, Value::Ignored))
-                .collect())
+        "border-radius" => super::bg::parse_radius_shorthand(&items, q),
+        "background-position" => super::bg::parse_position_shorthand(cvs, env),
+        "background-attachment" => {
+            let ok = split_commas(cvs).iter().all(|l| matches!(trim_ws(l), [c] if matches!(c.ident().map(str::to_ascii_lowercase).as_deref(), Some("scroll" | "fixed" | "local"))));
+            ok.then(Vec::new)
         }
+        "outline" => parse_outline(&items, q),
         "overflow" => {
             let vals: Vec<Overflow> = items.iter().map(|c| p_overflow(c)).collect::<Option<Vec<_>>>()?;
             match vals.as_slice() {
@@ -366,7 +361,7 @@ fn parse_value(name: &str, cvs: &[Cv], env: &ParseEnv) -> Option<Vec<(PropId, Va
         "font" => parse_font_shorthand(cvs, q),
         "list-style" => parse_list_style(&items),
         "text-decoration" => parse_text_decoration(&items, q),
-        "background" => parse_background(cvs),
+        "background" => super::bg::parse_background(cvs, env),
         "white-space" => parse_white_space(&items),
         "text-wrap" => {
             let [c] = items.as_slice() else { return None };
@@ -380,7 +375,7 @@ fn parse_value(name: &str, cvs: &[Cv], env: &ParseEnv) -> Option<Vec<(PropId, Va
         }
         _ => {
             let prop = longhand_by_name(name)?;
-            let v = parse_longhand(prop, cvs, &items, q)?;
+            let v = parse_longhand(prop, cvs, &items, env)?;
             Some(vec![(prop, v)])
         }
     }
@@ -478,8 +473,46 @@ fn parse_align(prop: PropId, items: &[&Cv]) -> Option<Value> {
     ok.then_some(Value::Align(AlignValue { kind, safe }))
 }
 
-fn radius_ok(c: &Cv, quirks: bool) -> bool {
-    p_lp(c, quirks, true).is_some()
+/// The `outline` shorthand: width, style and color in any order (css-ui-3 6.4).
+fn parse_outline(items: &[&Cv], q: bool) -> Option<Vec<(PropId, Value)>> {
+    let (mut w, mut s, mut c) = (None, None, None);
+    if items.is_empty() {
+        return None;
+    }
+    for it in items {
+        if w.is_none()
+            && let Some(v) = p_border_width(it, q)
+        {
+            w = Some(v);
+        } else if s.is_none()
+            && let Some(v) = p_outline_style(it)
+        {
+            s = Some(v);
+        } else if c.is_none()
+            && let Some(v) = p_outline_color(it)
+        {
+            c = Some(v);
+        } else {
+            return None;
+        }
+    }
+    Some(vec![
+        (PropId::OutlineWidth, w.unwrap_or(Value::BorderWidth(BorderWidthSpec::Kw(BorderWidthKw::Medium)))),
+        (PropId::OutlineStyle, s.unwrap_or(Value::BorderStyle(BorderLineStyle::None))),
+        (PropId::OutlineColor, c.unwrap_or(Value::Color(ColorValue::CurrentColor))),
+    ])
+}
+
+/// `auto | <border-style>` except `hidden`; `auto` is drawn as `solid` (decisions.md 2c-1).
+fn p_outline_style(c: &Cv) -> Option<Value> {
+    let id = c.ident()?.to_ascii_lowercase();
+    let s = if id == "auto" { BorderLineStyle::Solid } else { BorderLineStyle::from_keyword(&id)? };
+    (s != BorderLineStyle::Hidden).then_some(Value::BorderStyle(s))
+}
+
+/// `<color> | invert`; `invert` is taken as `currentcolor`.
+fn p_outline_color(c: &Cv) -> Option<Value> {
+    if c.is_ident("invert") { Some(Value::Color(ColorValue::CurrentColor)) } else { p_color(c) }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -984,53 +1017,6 @@ fn parse_white_space(items: &[&Cv]) -> Option<Vec<(PropId, Value)>> {
     ])
 }
 
-/// `background`: only the color is kept. The other components are validated loosely.
-fn parse_background(cvs: &[Cv]) -> Option<Vec<(PropId, Value)>> {
-    let layers = split_commas(cvs);
-    let mut color = Value::Color(ColorValue::Color(super::color::Color::TRANSPARENT));
-    let n = layers.len();
-    for (i, layer) in layers.iter().enumerate() {
-        let items: Vec<&Cv> = trim_ws(layer).iter().filter(|c| !c.is_ws()).collect();
-        if items.is_empty() {
-            return None;
-        }
-        let mut layer_color = None;
-        for c in items {
-            if let Some(v) = parse_color_cv(c) {
-                if layer_color.is_some() {
-                    return None;
-                }
-                layer_color = Some(v);
-                continue;
-            }
-            let ok = match c {
-                Cv::Tok(Token::Url(_)) | Cv::Tok(Token::Str(_)) => true,
-                Cv::Func(..) => true,
-                Cv::Tok(Token::Ident(id)) => matches!(
-                    id.to_ascii_lowercase().as_str(),
-                    "none" | "scroll" | "fixed" | "local" | "repeat" | "repeat-x" | "repeat-y" | "no-repeat" | "space" | "round"
-                        | "border-box" | "padding-box" | "content-box" | "text" | "top" | "bottom" | "left" | "right" | "center"
-                        | "auto" | "cover" | "contain"
-                ),
-                Cv::Tok(Token::Delim('/')) => true,
-                Cv::Tok(Token::Number { .. } | Token::Percentage { .. } | Token::Dimension { .. }) => true,
-                _ => false,
-            };
-            if !ok {
-                return None;
-            }
-        }
-        if i + 1 == n {
-            if let Some(c) = layer_color {
-                color = Value::Color(c);
-            }
-        } else if layer_color.is_some() {
-            return None; // only the final layer may have a color
-        }
-    }
-    Some(vec![(PropId::BackgroundColor, color)])
-}
-
 fn parse_font_shorthand(cvs: &[Cv], q: bool) -> Option<Vec<(PropId, Value)>> {
     let items: Vec<&Cv> = cvs.iter().filter(|c| !c.is_ws()).collect();
     // System fonts.
@@ -1118,8 +1104,9 @@ fn parse_font_shorthand(cvs: &[Cv], q: bool) -> Option<Vec<(PropId, Value)>> {
 }
 
 /// A longhand value. `cvs` is the trimmed value, `items` its non-white-space components.
-fn parse_longhand(prop: PropId, cvs: &[Cv], items: &[&Cv], q: bool) -> Option<Value> {
+fn parse_longhand(prop: PropId, cvs: &[Cv], items: &[&Cv], env: &ParseEnv) -> Option<Value> {
     use PropId::*;
+    let q = env.quirks;
     let single = |items: &[&Cv]| -> Option<Cv> { if items.len() == 1 { items.first().map(|c| (*c).clone()) } else { None } };
     let one = single(items);
     let one_ref = one.as_ref();
@@ -1269,13 +1256,17 @@ fn parse_longhand(prop: PropId, cvs: &[Cv], items: &[&Cv], q: bool) -> Option<Va
             Some(Value::TableSpacing(a, b))
         }
         CounterIncrement => parse_counters(items, 1),
-        BorderTopLeftRadius | BorderTopRightRadius | BorderBottomRightRadius | BorderBottomLeftRadius => {
-            if (1..=2).contains(&items.len()) && items.iter().all(|c| radius_ok(c, q)) {
-                Some(Value::Ignored)
-            } else {
-                None
-            }
+        BorderTopLeftRadius | BorderTopRightRadius | BorderBottomRightRadius | BorderBottomLeftRadius => super::bg::parse_radius(items, q),
+        BackgroundImage | BackgroundPositionX | BackgroundPositionY | BackgroundSize | BackgroundRepeat | BackgroundOrigin | BackgroundClip => {
+            super::bg::parse_longhand(prop, cvs, env)
         }
+        OutlineWidth => p_border_width(one_ref?, q),
+        OutlineStyle => p_outline_style(one_ref?),
+        OutlineColor => p_outline_color(one_ref?),
+        OutlineOffset => match p_lp(one_ref?, q, false)? {
+            Lp::Pct(_) => None,
+            l => Some(Value::Length(l)),
+        },
     }
 }
 
@@ -1471,7 +1462,7 @@ mod tests {
         assert_eq!(known("border-top", "solid").len(), 3);
         assert_eq!(known("font", "italic bold 12px/1.5 Arial, sans-serif").len(), 5);
         assert_eq!(known("font", "12px").len(), 0); // family is required
-        assert_eq!(known("background", "url(a.png) no-repeat #fff").len(), 1);
+        assert_eq!(known("background", "url(a.png) no-repeat #fff").len(), 8);
         assert_eq!(known("list-style", "none").len(), 2);
         assert_eq!(known("text-decoration", "underline dotted red").len(), 4);
         assert_eq!(known("overflow", "hidden auto").len(), 2);
@@ -1499,7 +1490,7 @@ mod tests {
     #[test]
     fn quirks_lengths() {
         let mut id = 0;
-        let q = ParseEnv { quirks: true };
+        let q = ParseEnv { quirks: true, base: None };
         assert!(parse_declaration("width", &parse_cvs("100"), &q, &mut id).is_some());
         assert!(parse_declaration("width", &parse_cvs("100"), &ParseEnv::default(), &mut id).is_none());
     }

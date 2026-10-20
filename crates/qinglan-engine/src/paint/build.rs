@@ -4,14 +4,18 @@
 //! or 0 in document order and the positive ones. A positioned box and everything in its flow is painted at its turn
 //! in the context it belongs to, not inside the flow; `position: fixed` boxes (and what they contain) go to the fixed list.
 
-use super::{DisplayList, ImagePlace, ImageSpot, Item, ItemKind, NO_CLIP, PaintGlyph, Rect, TextRun};
+use std::rc::Rc;
+
+use super::{BgDraw, BorderDraw, DisplayList, ImagePlace, ImageSpot, Item, ItemKind, NO_CLIP, PaintGlyph, RRect, Rect, Round, TextRun, gradient};
+use crate::css::bg::{Backgrounds, BgBox, BgImage, BgRepeat, BgSize, Pos1, Rep};
 use crate::css::color::Color;
 use crate::css::computed::{ComputedStyle, slant_of};
-use crate::css::types::{BorderCollapse, Position, Visibility};
+use crate::css::types::{BorderCollapse, BorderLineStyle, Position, Visibility};
+use crate::css::values::Lp;
 use crate::html::atoms::FxHashMap;
-use crate::html::dom::{Document, NodeId};
+use crate::html::dom::{Document, NONE, NodeId};
 use crate::layout::block::{border_px, pad_px};
-use crate::layout::boxtree::{BoxId, BoxKind, NO_BOX, ReplacedKind, Role, role_of};
+use crate::layout::boxtree::{BgRef, BoxId, BoxKind, NO_BOX, ReplacedKind, Role, role_of};
 use crate::layout::units::LayoutUnit as LU;
 use crate::layout::{BoxOut, FragKind, Fragment, LayoutResult, Positioned, makes_context};
 use crate::platform::{FontQuery, Platform};
@@ -37,7 +41,7 @@ fn has_box_out(kind: BoxKind) -> bool {
 /// Build the display list of a layout. `doc` is read for the `checked` and `loading` attributes; the
 /// platform shapes the labels of placeholder boxes.
 pub fn build_display_list(doc: &Document, res: &LayoutResult, platform: &dyn Platform) -> DisplayList {
-    let mut b = Builder { doc, res, platform, list: DisplayList::empty(), clip: NO_CLIP, fixed: false, canvas_from: res.canvas.map_or(NO_BOX, |c| c.from), floats: Vec::new() };
+    let mut b = Builder { doc, res, platform, list: DisplayList::empty(), clip: NO_CLIP, fixed: false, canvas_from: res.canvas.map_or(NO_BOX, |c| c.from), floats: Vec::new(), outlines: Vec::new() };
     b.list.canvas = res.canvas.map(|c| c.color);
     b.list.partial = res.partial;
     let root = res.tree.root;
@@ -60,6 +64,8 @@ struct Builder<'a> {
     canvas_from: BoxId,
     /// Floats met on the way, waiting for the end of their stacking context: (box, page position, clip, fixed).
     floats: Vec<(BoxId, LU, LU, u32, bool)>,
+    /// Outlines met on the way, waiting for the end of their stacking context: (outline, clip, fixed).
+    outlines: Vec<(BorderDraw, u32, bool)>,
 }
 
 impl Builder<'_> {
@@ -97,8 +103,26 @@ impl Builder<'_> {
             Some(c) => c.intersect(&r),
             None => r,
         };
+        let round = self.has_round(self.clip).then(|| Box::new(Round { shape: None, prev: self.clip }));
+        self.list.rounds.push(round);
         self.list.clips.push(merged);
         std::mem::replace(&mut self.clip, (self.list.clips.len() - 1) as u32)
+    }
+
+    fn has_round(&self, clip: u32) -> bool {
+        self.list.rounds.get(clip as usize).is_some_and(Option::is_some)
+    }
+
+    /// Clip further to the rounded rectangle `r` (corner radii in CSS px); a rectangle when no corner is round.
+    fn push_round(&mut self, r: Rect, radii: [(f32, f32); 4]) -> u32 {
+        let prev = self.push_clip(r);
+        if radii.iter().any(|(a, b)| *a > 0.0 && *b > 0.0) {
+            let below = if self.has_round(prev) { prev } else { NO_CLIP };
+            if let Some(slot) = self.list.rounds.get_mut(self.clip as usize) {
+                *slot = Some(Box::new(Round { shape: Some(RRect { rect: r, radii }), prev: below }));
+            }
+        }
+        prev
     }
 
     fn restore(&mut self, prev: u32) {
@@ -209,6 +233,7 @@ impl Builder<'_> {
     /// block tree make that order without a buffer: one for the blocks, one for the lines.
     fn paint_box(&mut self, id: BoxId, ax: LU, ay: LU) {
         let first = self.floats.len();
+        let first_outline = self.outlines.len();
         self.walk(id, ax, ay, false);
         let mut i = first;
         while let Some(&(c, x, y, clip, fixed)) = self.floats.get(i) {
@@ -223,6 +248,7 @@ impl Builder<'_> {
         if self.is_context(id) {
             self.stacked(id, false);
         }
+        self.flush_outlines(first_outline);
     }
 
     /// One walk over the in-flow blocks of a stacking context: `inline` false paints the decoration of the blocks
@@ -250,10 +276,7 @@ impl Builder<'_> {
                 }
             }
         }
-        let prev = o.clip.then(|| {
-            let pb = self.padding_box(id, rect);
-            self.push_clip(pb)
-        });
+        let prev = o.clip.then(|| self.clip_box(id, rect));
         if inline
             && o.marker > 0
             && let Some(m) = res.markers.get(o.marker as usize - 1)
@@ -311,7 +334,7 @@ impl Builder<'_> {
         style.text.visibility == Visibility::Visible
     }
 
-    /// Background and borders of a block-level or atomic box.
+    /// Background, border and outline of a block-level or atomic box.
     fn box_decor(&mut self, id: BoxId, r: Rect) {
         let res = self.res;
         let bx = res.tree.get(id);
@@ -321,37 +344,256 @@ impl Builder<'_> {
         }
         // A table with captions: the background and border are those of the grid box (table.rs).
         let r = res.tables.get(&id).map_or(r, |t| Rect::new(r.x, r.y + t.y, r.w, t.h));
-        if id != self.canvas_from {
-            self.rect(r, style.misc.background_color.resolve(style.text.color));
-        }
         // In the collapsing border model the parts of a table have no borders of their own; the table draws the edges.
-        if style.text.border_collapse != BorderCollapse::Collapse || matches!(role_of(bx), Role::Other | Role::Caption) {
-            self.borders(&style, r, [true; 4]);
+        let borders = style.text.border_collapse != BorderCollapse::Collapse || matches!(role_of(bx), Role::Other | Role::Caption);
+        self.decor(id, &style, r, [true; 4], borders);
+    }
+
+    /// Background, borders and outline of box `id` (or of one fragment of an inline box) whose border box is `r`; `sides`
+    /// says which borders exist (top, right, bottom, left): a box broken over lines has no border, and no rounded
+    /// corner, where it is cut (css-backgrounds-3 `box-decoration-break: slice`, approximated: every fragment gets its
+    /// own copy of the background image).
+    fn decor(&mut self, id: BoxId, style: &Rc<ComputedStyle>, r: Rect, sides: [bool; 4], borders: bool) {
+        let m = &style.misc;
+        let canvas = id == self.canvas_from;
+        let mut radii = resolve_radii(&m.radius, r.w.to_f32(), r.h.to_f32());
+        if !sides[3] {
+            radii[0] = (0.0, 0.0);
+            radii[3] = (0.0, 0.0);
+        }
+        if !sides[1] {
+            radii[1] = (0.0, 0.0);
+            radii[2] = (0.0, 0.0);
+        }
+        let has_img = m.bg.images.iter().any(|i| !matches!(i, BgImage::None));
+        if (m.background_color.resolve(style.text.color).a != 0 && !canvas) || has_img {
+            self.backgrounds(id, style, r, radii, sides);
+        }
+        if borders {
+            self.border_items(style, r, sides, radii);
+        }
+        self.outline(style, r, radii);
+    }
+
+    /// The background color and layers (css-backgrounds-3 2, 3): the color first, then the layers from the last to the first.
+    fn backgrounds(&mut self, id: BoxId, style: &Rc<ComputedStyle>, r: Rect, radii: [(f32, f32); 4], sides: [bool; 4]) {
+        let res = self.res;
+        let bg = &style.misc.bg;
+        let bd = &style.border;
+        let canvas = id == self.canvas_from;
+        // In the collapsing border model the parts of a table (cells, rows, columns) have no borders of their own: the table
+        // draws the edges, and the background reaches to the middle of them (the border box).
+        let collapsed = style.text.border_collapse == BorderCollapse::Collapse && !matches!(role_of(res.tree.get(id)), Role::Other | Role::Caption);
+        let bw: [LU; 4] = std::array::from_fn(|i| if !collapsed && sides.get(i).copied().unwrap_or(false) { border_px(bd.width.get(i).copied().unwrap_or(0.0)) } else { LU::ZERO });
+        let pb = Rect::new(r.x + bw[3], r.y + bw[0], (r.w - bw[1] - bw[3]).max0(), (r.h - bw[0] - bw[2]).max0());
+        let cb_w = res.box_out(res.tree.layout_parent(id)).w;
+        let pad: [LU; 4] = std::array::from_fn(|i| if sides.get(i).copied().unwrap_or(false) { style.boxs.padding.get(i).map_or(LU::ZERO, |l| pad_px(l, cb_w)) } else { LU::ZERO });
+        let content = Rect::new(pb.x + pad[3], pb.y + pad[0], (pb.w - pad[1] - pad[3]).max0(), (pb.h - pad[0] - pad[2]).max0());
+        let bwf = bw.map(LU::to_f32);
+        let bpf: [f32; 4] = std::array::from_fn(|i| bwf.get(i).copied().unwrap_or(0.0) + pad.get(i).map_or(0.0, |p| p.to_f32()));
+        let box_of = |b: BgBox| match b {
+            BgBox::Border | BgBox::Text => (r, radii),
+            BgBox::Padding => (pb, inset_radii(radii, bwf)),
+            BgBox::Content => (content, inset_radii(radii, bpf)),
+        };
+        let n = bg.images.len();
+        let nth_box = |list: &[BgBox], i: usize| Backgrounds::nth(list, i).copied().unwrap_or(BgBox::Border);
+        if !canvas {
+            let color = style.misc.background_color.resolve(style.text.color);
+            if color.a != 0 {
+                let (rect, rad) = box_of(nth_box(&bg.clip, n.saturating_sub(1)));
+                let prev = self.push_round(rect, rad);
+                self.rect(rect, color);
+                self.restore(prev);
+            }
+        }
+        // The background of the root (or the body) belongs to the canvas: positioned by the root element's box, painted over the
+        // whole canvas (CSS2 14.2).
+        let (root_rect, canvas_area) = {
+            let (rx, ry) = res.page_pos(res.tree.root);
+            let ro = res.box_out(res.tree.root);
+            (Rect::new(rx, ry, ro.w, ro.h), Rect::new(LU::ZERO, LU::ZERO, res.viewport.0.max(rx + ro.w), res.viewport.1.max(ry + ro.h)))
+        };
+        let refs = res.tree.bgs.get(&id);
+        for i in (0..n).rev() {
+            let Some(img) = bg.images.get(i) else { continue };
+            let (nat, node) = match img {
+                BgImage::None => continue,
+                BgImage::Gradient(_) => (None, NONE),
+                BgImage::Url(_) => match refs.and_then(|v| v.iter().find(|b| usize::from(b.layer) == i)) {
+                    Some(BgRef { nat: Some(n), node, .. }) => (Some((n.0 as f32, n.1 as f32)), *node),
+                    _ => continue,
+                },
+            };
+            let (clip_rect, clip_rad) = if canvas { (canvas_area, [(0.0, 0.0); 4]) } else { box_of(nth_box(&bg.clip, i)) };
+            let orig = if canvas { root_rect } else { box_of(nth_box(&bg.origin, i)).0 };
+            if clip_rect.is_empty() || !self.visible(&clip_rect) {
+                continue;
+            }
+            let (pw, ph) = (orig.w.to_f32(), orig.h.to_f32());
+            let size = Backgrounds::nth(&bg.size, i).unwrap_or(&BgSize::AUTO);
+            let (tw, th) = match (size, nat) {
+                (BgSize::Cover | BgSize::Contain, Some((nw, nh))) if nw > 0.0 && nh > 0.0 => {
+                    let (sx, sy) = (pw / nw, ph / nh);
+                    let s = if *size == BgSize::Cover { sx.max(sy) } else { sx.min(sy) };
+                    (nw * s, nh * s)
+                }
+                (BgSize::Cover | BgSize::Contain, _) => (pw, ph),
+                (BgSize::Lens(a, b), nat) => {
+                    let (aw, ah) = (a.as_ref().map(|l| l.resolve(pw)), b.as_ref().map(|l| l.resolve(ph)));
+                    match (aw, ah, nat) {
+                        (Some(w), Some(h), _) => (w, h),
+                        (Some(w), None, Some((nw, nh))) if nw > 0.0 => (w, w * nh / nw),
+                        (None, Some(h), Some((nw, nh))) if nh > 0.0 => (h * nw / nh, h),
+                        (None, None, Some((nw, nh))) => (nw, nh),
+                        (Some(w), None, _) => (w, ph),
+                        (None, Some(h), _) => (pw, h),
+                        (None, None, None) => (pw, ph),
+                    }
+                }
+            };
+            if !(tw.is_finite() && th.is_finite() && tw > 0.0 && th > 0.0) {
+                continue;
+            }
+            let rep = Backgrounds::nth(&bg.repeat, i).copied().unwrap_or(BgRepeat(Rep::Repeat, Rep::Repeat));
+            let (px, py) = (Backgrounds::nth(&bg.pos_x, i).unwrap_or(&Pos1::ZERO), Backgrounds::nth(&bg.pos_y, i).unwrap_or(&Pos1::ZERO));
+            // Tile size, offset of the first tile from the positioning area and distance between tiles (0: no repeat), per axis.
+            let axis = |mode: Rep, area: f32, t: f32, pos: &Pos1| -> (f32, f32, f32) {
+                match mode {
+                    Rep::Repeat => (t, pos.resolve(area, t), t),
+                    Rep::NoRepeat => (t, pos.resolve(area, t), 0.0),
+                    Rep::Round => {
+                        let t2 = area / (area / t).round().max(1.0);
+                        (t2, pos.resolve(area, t2), t2)
+                    }
+                    Rep::Space => {
+                        let k = (area / t).floor();
+                        if k >= 2.0 { (t, 0.0, t + (area - k * t) / (k - 1.0)) } else { (t, pos.resolve(area, t), 0.0) }
+                    }
+                }
+            };
+            // With `round` on one axis only and an `auto` size on the other, the other axis keeps the image's ratio (3.5).
+            let (mut tw, mut th) = (tw, th);
+            // A repeating tile is at least one CSS px: a 0.2px tile makes a solid area, as in Chromium.
+            if rep.0 != Rep::NoRepeat {
+                tw = tw.max(1.0);
+            }
+            if rep.1 != Rep::NoRepeat {
+                th = th.max(1.0);
+            }
+            let snap = |a: f32, t: f32| a / (a / t).round().max(1.0);
+            if nat.is_some() && rep.0 == Rep::Round && rep.1 != Rep::Round && matches!(size, BgSize::Lens(_, None)) {
+                let t2 = snap(pw, tw);
+                (tw, th) = (t2, th * t2 / tw);
+            } else if nat.is_some() && rep.1 == Rep::Round && rep.0 != Rep::Round && matches!(size, BgSize::Lens(None, _)) {
+                let t2 = snap(ph, th);
+                (tw, th) = (tw * t2 / th, t2);
+            }
+            let ((tw, ox, sx), (th, oy, sy)) = (axis(rep.0, pw, tw, px), axis(rep.1, ph, th, py));
+            let mut draw = BgDraw { node, grad: u32::MAX, tile: (tw, th), origin: (orig.x.to_f32() + ox, orig.y.to_f32() + oy), step: (sx, sy) };
+            if let BgImage::Gradient(g) = img {
+                let Some(gp) = gradient::resolve(g, tw, th, style.text.color) else { continue };
+                draw.grad = self.list.grads.len() as u32;
+                self.list.grads.push(gp);
+            } else {
+                let tile = Rect::new(LU::ZERO, LU::ZERO, LU::from_f32(tw), LU::from_f32(th));
+                self.list.images.push(ImagePlace { node, rect: tile, span: (clip_rect.y, clip_rect.bottom()), fixed: self.fixed });
+            }
+            let bi = self.list.bgs.len() as u32;
+            self.list.bgs.push(draw);
+            let prev = self.push_round(clip_rect, clip_rad);
+            self.push(clip_rect, ItemKind::Bg(bi));
+            self.restore(prev);
         }
     }
 
-    /// The four border rectangles of a box; `sides` is top, right, bottom, left. Top and bottom run the
-    /// full width, left and right fill what is between them (no mitred corners).
-    fn borders(&mut self, style: &ComputedStyle, r: Rect, sides: [bool; 4]) {
+    /// The borders of a box. Plain solid ones are rectangles (top and bottom run the full width, left and right fill what
+    /// is between them); a radius, another style or two neighbouring sides of different colors make a [`BorderDraw`].
+    #[allow(clippy::indexing_slicing)] // the indices are the sides 0..4 of arrays of four
+    fn border_items(&mut self, style: &ComputedStyle, r: Rect, sides: [bool; 4], radii: [(f32, f32); 4]) {
         let bd = &style.border;
-        let w = |i: usize| {
-            if sides.get(i).copied().unwrap_or(false) { border_px(bd.width.get(i).copied().unwrap_or(0.0)) } else { LU::ZERO }
-        };
-        let col = |i: usize| bd.color.get(i).map_or(Color::TRANSPARENT, |c| c.resolve(style.text.color));
-        let (t, rt, b, l) = (w(0), w(1), w(2), w(3));
+        let w: [LU; 4] = std::array::from_fn(|i| if sides.get(i).copied().unwrap_or(false) { border_px(bd.width.get(i).copied().unwrap_or(0.0)) } else { LU::ZERO });
+        let col: [Color; 4] = std::array::from_fn(|i| bd.color.get(i).map_or(Color::TRANSPARENT, |c| c.resolve(style.text.color)));
+        let st: [BorderLineStyle; 4] = std::array::from_fn(|i| bd.style.get(i).copied().unwrap_or(BorderLineStyle::None));
+        let (t, rt, b, l) = (w[0], w[1], w[2], w[3]);
+        if t + rt + b + l == LU::ZERO {
+            return;
+        }
+        let radius = radii.iter().any(|(a, c)| *a > 0.0 && *c > 0.0);
+        let solid = (0..4).all(|i| w[i] == LU::ZERO || st[i] == BorderLineStyle::Solid);
+        let joined = (0..4).all(|i| {
+            let j = (i + 1) % 4;
+            w[i] == LU::ZERO || w[j] == LU::ZERO || col[i] == col[j]
+        });
+        if radius || !solid || !joined {
+            if (0..4).any(|i| w[i] > LU::ZERO && col[i].a != 0) {
+                self.border_item(BorderDraw { rect: r, w, color: col, style: st, radii });
+            }
+            return;
+        }
         if t > LU::ZERO {
-            self.rect(Rect::new(r.x, r.y, r.w, t), col(0));
+            self.rect(Rect::new(r.x, r.y, r.w, t), col[0]);
         }
         if b > LU::ZERO {
-            self.rect(Rect::new(r.x, r.bottom() - b, r.w, b), col(2));
+            self.rect(Rect::new(r.x, r.bottom() - b, r.w, b), col[2]);
         }
         let mid = (r.h - t - b).max0();
         if l > LU::ZERO {
-            self.rect(Rect::new(r.x, r.y + t, l, mid), col(3));
+            self.rect(Rect::new(r.x, r.y + t, l, mid), col[3]);
         }
         if rt > LU::ZERO {
-            self.rect(Rect::new(r.right() - rt, r.y + t, rt, mid), col(1));
+            self.rect(Rect::new(r.right() - rt, r.y + t, rt, mid), col[1]);
         }
+    }
+
+    fn border_item(&mut self, b: BorderDraw) {
+        let bounds = b.rect;
+        if bounds.is_empty() || !self.visible(&bounds) {
+            return;
+        }
+        let i = self.list.borders.len() as u32;
+        self.list.borders.push(b);
+        self.push(bounds, ItemKind::Border(i));
+    }
+
+    /// `outline` (css-ui-3 6): outside the border box by `outline-offset`, painted on top of the stacking context
+    /// (CSS2 E.2 step 10), so it is queued until the context is done.
+    fn outline(&mut self, style: &ComputedStyle, r: Rect, radii: [(f32, f32); 4]) {
+        let o = &style.misc.outline;
+        let color = o.color.resolve(style.text.color);
+        if o.width <= 0.0 || o.style == BorderLineStyle::None || color.a == 0 {
+            return;
+        }
+        let w = border_px(o.width);
+        let grow = LU::from_f32(o.offset.clamp(-1.0e5, 1.0e5)) + w;
+        let rect = Rect::new(r.x - grow, r.y - grow, (r.w + grow + grow).max0(), (r.h + grow + grow).max0());
+        let g = grow.to_f32();
+        let radii = radii.map(|(a, b)| if a > 0.0 && b > 0.0 { (a + g, b + g) } else { (0.0, 0.0) });
+        let d = BorderDraw { rect, w: [w; 4], color: [color; 4], style: [o.style; 4], radii };
+        self.outlines.push((d, self.clip, self.fixed));
+    }
+
+    fn flush_outlines(&mut self, first: usize) {
+        if self.outlines.len() <= first {
+            return;
+        }
+        let queued: Vec<_> = self.outlines.drain(first..).collect();
+        let saved = (self.clip, self.fixed);
+        for (b, clip, fixed) in queued {
+            (self.clip, self.fixed) = (clip, fixed);
+            self.border_item(b);
+        }
+        (self.clip, self.fixed) = saved;
+    }
+
+    /// Clip to the padding box of box `id`, rounded by the inner border edge where the box has a radius (css-backgrounds-3 5.3).
+    fn clip_box(&mut self, id: BoxId, rect: Rect) -> u32 {
+        let pb = self.padding_box(id, rect);
+        let style = &self.res.tree.get(id).style;
+        let radii = resolve_radii(&style.misc.radius, rect.w.to_f32(), rect.h.to_f32());
+        let bd = &style.border;
+        let bwf: [f32; 4] = std::array::from_fn(|i| border_px(bd.width.get(i).copied().unwrap_or(0.0)).to_f32());
+        self.push_round(pb, inset_radii(radii, bwf))
     }
 
     fn lines(&mut self, o: &BoxOut, ax: LU, ay: LU) {
@@ -385,8 +627,7 @@ impl Builder<'_> {
                 let style = res.tree.get(f.box_id).style.clone();
                 if Self::visible_style(&style) {
                     let r = Rect::new(ax + f.x, ay + f.y, f.w, f.h);
-                    self.rect(r, style.misc.background_color.resolve(style.text.color));
-                    self.borders(&style, r, [true, last, true, first]);
+                    self.decor(f.box_id, &style, r, [true, last, true, first], true);
                 }
             }
             FragKind::Atomic => {
@@ -447,8 +688,15 @@ impl Builder<'_> {
         match bx.replaced() {
             Some(ReplacedKind::Image) => {
                 if bx.image().is_some() && !content.is_empty() && self.visible(&content) {
+                    // A radius clips the picture to the rounded inner edge (css-backgrounds-3 5.4).
+                    let radii = resolve_radii(&style.misc.radius, r.w.to_f32(), r.h.to_f32());
+                    let inner = inset_radii(radii, [t.to_f32(), rt.to_f32(), bt.to_f32(), l.to_f32()]);
+                    let prev = inner.iter().any(|(a, b)| *a > 0.0 && *b > 0.0).then(|| self.push_round(content, inner));
                     self.push(content, ItemKind::Image { node: bx.node });
-                    self.list.images.push(ImagePlace { node: bx.node, rect: content, fixed: self.fixed });
+                    self.list.images.push(ImagePlace { node: bx.node, rect: content, span: (content.y, content.bottom()), fixed: self.fixed });
+                    if let Some(p) = prev {
+                        self.restore(p);
+                    }
                 }
             }
             Some(ReplacedKind::Placeholder(name)) => {
@@ -550,13 +798,14 @@ impl Builder<'_> {
             }
         }
         let lazy_atom = self.doc.atoms.lookup("loading");
+        let bg_owner: FxHashMap<NodeId, BoxId> = res.tree.bgs.iter().flat_map(|(b, v)| v.iter().map(move |r| (r.node, *b))).collect();
         res.images
             .iter()
             .enumerate()
             .map(|(i, r)| {
                 let lazy = lazy_atom.and_then(|a| self.doc.attr(r.node, a)).is_some_and(|v| v.trim().eq_ignore_ascii_case("lazy"));
                 let always = ImageSpot { top: LU::MIN, bottom: LU::MAX, lazy };
-                let Some(Some(bid)) = found.get(i).copied() else { return always };
+                let Some(bid) = found.get(i).copied().flatten().or_else(|| bg_owner.get(&r.node).copied()) else { return always };
                 if self.in_fixed(bid) {
                     return always;
                 }
@@ -572,4 +821,30 @@ impl Builder<'_> {
             })
             .collect()
     }
+}
+
+/// css-backgrounds-3 5.1, 5.5: the radii of a border box of `w` x `h` (percentages resolved against it), all scaled down by the
+/// smallest ratio side / (sum of the two radii on it) when some pair would overlap. A corner with a zero radius is square.
+fn resolve_radii(r: &[(Lp, Lp); 4], w: f32, h: f32) -> [(f32, f32); 4] {
+    let mut out = [(0.0f32, 0.0f32); 4];
+    for (o, (a, b)) in out.iter_mut().zip(r.iter()) {
+        *o = (a.resolve(w).max(0.0), b.resolve(h).max(0.0));
+    }
+    let [tl, tr, br, bl] = out;
+    let mut f = 1.0f32;
+    for (side, sum) in [(w, tl.0 + tr.0), (w, bl.0 + br.0), (h, tl.1 + bl.1), (h, tr.1 + br.1)] {
+        if sum > side && sum > 0.0 {
+            f = f.min(side.max(0.0) / sum);
+        }
+    }
+    out.map(|(a, b)| if a > 0.0 && b > 0.0 { (a * f, b * f) } else { (0.0, 0.0) })
+}
+
+/// The radii of an inner edge: each reduced by the widths `d` (top, right, bottom, left) next to the corner, at least 0 (5.3).
+fn inset_radii(r: [(f32, f32); 4], d: [f32; 4]) -> [(f32, f32); 4] {
+    let [t, rt, b, l] = d;
+    let [tl, tr, br, bl] = r;
+    let s = |v: f32, d: f32| (v - d).max(0.0);
+    let fix = |(a, b): (f32, f32)| if a > 0.0 && b > 0.0 { (a, b) } else { (0.0, 0.0) };
+    [fix((s(tl.0, l), s(tl.1, t))), fix((s(tr.0, rt), s(tr.1, t))), fix((s(br.0, rt), s(br.1, b))), fix((s(bl.0, l), s(bl.1, b)))]
 }

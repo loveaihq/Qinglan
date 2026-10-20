@@ -94,7 +94,7 @@ mod tests {
 
     fn parse(doc: &mut Document, facts: Option<&DocFacts>, env: Option<&MediaEnv>) -> Stylesheet {
         let (mut v, mut b) = (0, 0);
-        let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks: false, var_id: &mut v, block_id: &mut b, facts, env };
+        let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks: false, var_id: &mut v, block_id: &mut b, facts, env, base: None };
         parse_stylesheet(SHEET, &mut ctx)
     }
 
@@ -135,7 +135,7 @@ mod tests {
         let mut doc = parse_document("<body class='A'>".to_string());
         let facts = DocFacts::collect(&doc);
         let (mut v, mut b) = (0, 0);
-        let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks: true, var_id: &mut v, block_id: &mut b, facts: Some(&facts), env: None };
+        let mut ctx = SheetCtx { atoms: &mut doc.atoms, quirks: true, var_id: &mut v, block_id: &mut b, facts: Some(&facts), env: None, base: None };
         let s = parse_stylesheet(".a{color:red} .zz{color:red}", &mut ctx);
         assert_eq!(count(&s.rules).0, 2, ".a matches class A in quirks mode");
     }

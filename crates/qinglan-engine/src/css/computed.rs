@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
+use super::bg::{Backgrounds, BgImage, BgSize, BgVal, Pos1};
 use super::color::{Color, ColorValue};
 use super::syntax::Cv;
 use super::types::*;
@@ -103,6 +104,19 @@ pub struct MiscStyle {
     pub text_decoration_color: ColorValue,
     pub text_decoration_thickness: Option<Lp>,
     pub background_color: ColorValue,
+    pub bg: Rc<Backgrounds>,
+    /// `border-top-left-radius`, top-right, bottom-right, bottom-left: horizontal and vertical radius.
+    pub radius: [(Lp, Lp); 4],
+    pub outline: Outline,
+}
+
+/// The outline longhands (css-ui-3 6). The width is 0 when the style is `none`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Outline {
+    pub width: f32,
+    pub style: BorderLineStyle,
+    pub color: ColorValue,
+    pub offset: f32,
 }
 
 /// Generated content (CSS2 12.2, 12.4): `content` and the counter properties. None of them is inherited.
@@ -273,7 +287,15 @@ impl TextStyle {
 
 impl MiscStyle {
     pub fn initial() -> MiscStyle {
+        MiscStyle::with_bg(Rc::new(Backgrounds::initial()))
+    }
+
+    /// The initial style with the (shared) initial backgrounds.
+    fn with_bg(bg: Rc<Backgrounds>) -> MiscStyle {
         MiscStyle {
+            bg,
+            radius: [(Lp::ZERO, Lp::ZERO), (Lp::ZERO, Lp::ZERO), (Lp::ZERO, Lp::ZERO), (Lp::ZERO, Lp::ZERO)],
+            outline: Outline { width: 0.0, style: BorderLineStyle::None, color: ColorValue::CurrentColor, offset: 0.0 },
             vertical_align: VerticalAlign::Baseline,
             text_decoration_line: TextDecorationLine::NONE,
             text_decoration_style: TextDecorationStyle::Solid,
@@ -821,7 +843,7 @@ pub fn compute_misc(parent: &Rc<MiscStyle>, init_rc: &Rc<MiscStyle>, d: &Declare
     if !d.touches(MISC_BITS) {
         return init_rc.clone();
     }
-    let mut m = MiscStyle::initial();
+    let mut m = MiscStyle::with_bg(init_rc.bg.clone());
     match pick(d, PropId::VerticalAlign) {
         Pick::Inherit => m.vertical_align = parent.vertical_align.clone(),
         Pick::Initial => {}
@@ -863,7 +885,125 @@ pub fn compute_misc(parent: &Rc<MiscStyle>, init_rc: &Rc<MiscStyle>, d: &Declare
         Pick::Value(Value::Color(v)) => m.background_color = *v,
         Pick::Value(_) => {}
     }
+    if d.touches(BG_BITS) {
+        m.bg = compute_backgrounds(&parent.bg, &init_rc.bg, d, ctx);
+    }
+    let radii = [PropId::BorderTopLeftRadius, PropId::BorderTopRightRadius, PropId::BorderBottomRightRadius, PropId::BorderBottomLeftRadius];
+    for (i, p) in radii.into_iter().enumerate() {
+        let Some(dst) = m.radius.get_mut(i) else { continue };
+        match pick(d, p) {
+            Pick::Inherit => *dst = parent.radius.get(i).cloned().unwrap_or((Lp::ZERO, Lp::ZERO)),
+            Pick::Value(Value::Radius(a, b)) => *dst = (a.compute(ctx), b.compute(ctx)),
+            _ => {}
+        }
+    }
+    if d.touches(PropId::OutlineWidth.bit() | PropId::OutlineStyle.bit() | PropId::OutlineColor.bit() | PropId::OutlineOffset.bit()) {
+        let o = &mut m.outline;
+        o.style = match pick(d, PropId::OutlineStyle) {
+            Pick::Inherit => parent.outline.style,
+            Pick::Value(Value::BorderStyle(s)) => *s,
+            _ => BorderLineStyle::None,
+        };
+        o.width = if o.style == BorderLineStyle::None {
+            0.0
+        } else {
+            match pick(d, PropId::OutlineWidth) {
+                Pick::Inherit => parent.outline.width,
+                Pick::Value(Value::BorderWidth(BorderWidthSpec::Kw(k))) => match k {
+                    BorderWidthKw::Thin => 1.0,
+                    BorderWidthKw::Medium => 3.0,
+                    BorderWidthKw::Thick => 5.0,
+                },
+                Pick::Value(Value::BorderWidth(BorderWidthSpec::Lp(l))) => match l.compute(ctx) {
+                    Lp::Len(v, _) => v.max(0.0),
+                    _ => 0.0,
+                },
+                _ => 3.0,
+            }
+        };
+        o.color = match pick(d, PropId::OutlineColor) {
+            Pick::Inherit => parent.outline.color,
+            Pick::Value(Value::Color(c)) => *c,
+            _ => ColorValue::CurrentColor,
+        };
+        o.offset = match pick(d, PropId::OutlineOffset) {
+            Pick::Inherit => parent.outline.offset,
+            Pick::Value(Value::Length(l)) => l.compute(ctx).as_px().unwrap_or(0.0),
+            _ => 0.0,
+        };
+    }
     Rc::new(m)
+}
+
+/// The background longhands (not inherited; `inherit` copies the parent's list).
+fn compute_backgrounds(parent: &Rc<Backgrounds>, init: &Rc<Backgrounds>, d: &Declared<'_>, ctx: &LenCtx) -> Rc<Backgrounds> {
+    // `background: <color>` and the like leave every list initial: share the initial one.
+    let real = [PropId::BackgroundImage, PropId::BackgroundPositionX, PropId::BackgroundPositionY, PropId::BackgroundSize, PropId::BackgroundRepeat, PropId::BackgroundOrigin, PropId::BackgroundClip]
+        .into_iter()
+        .any(|p| matches!(pick(d, p), Pick::Inherit | Pick::Value(Value::Bg(_))));
+    if !real {
+        return init.clone();
+    }
+    let mut b = Backgrounds::initial();
+    match pick(d, PropId::BackgroundImage) {
+        Pick::Inherit => b.images = parent.images.clone(),
+        Pick::Value(Value::Bg(v)) => {
+            if let BgVal::Images(l) = &**v {
+                b.images = l
+                    .iter()
+                    .map(|i| match i {
+                        BgImage::Gradient(g) => BgImage::Gradient(Rc::new(g.compute(ctx))),
+                        o => o.clone(),
+                    })
+                    .collect();
+            }
+        }
+        _ => {}
+    }
+    for (p, x) in [(PropId::BackgroundPositionX, true), (PropId::BackgroundPositionY, false)] {
+        let dst = if x { &mut b.pos_x } else { &mut b.pos_y };
+        match pick(d, p) {
+            Pick::Inherit => *dst = if x { parent.pos_x.clone() } else { parent.pos_y.clone() },
+            Pick::Value(Value::Bg(v)) => {
+                if let BgVal::Pos(l) = &**v {
+                    *dst = l.iter().map(|p| p.compute(ctx)).collect();
+                }
+            }
+            _ => {}
+        }
+    }
+    match pick(d, PropId::BackgroundSize) {
+        Pick::Inherit => b.size = parent.size.clone(),
+        Pick::Value(Value::Bg(v)) => {
+            if let BgVal::Sizes(l) = &**v {
+                b.size = l.iter().map(|s| s.compute(ctx)).collect();
+            }
+        }
+        _ => {}
+    }
+    match pick(d, PropId::BackgroundRepeat) {
+        Pick::Inherit => b.repeat = parent.repeat.clone(),
+        Pick::Value(Value::Bg(v)) => {
+            if let BgVal::Repeats(l) = &**v {
+                b.repeat = l.clone();
+            }
+        }
+        _ => {}
+    }
+    for (p, origin) in [(PropId::BackgroundOrigin, true), (PropId::BackgroundClip, false)] {
+        let dst = if origin { &mut b.origin } else { &mut b.clip };
+        match pick(d, p) {
+            Pick::Inherit => *dst = if origin { parent.origin.clone() } else { parent.clip.clone() },
+            Pick::Value(Value::Bg(v)) => {
+                if let BgVal::Boxes(l) = &**v {
+                    *dst = l.clone();
+                }
+            }
+            _ => {}
+        }
+    }
+    b.has_url = b.images.iter().any(|i| matches!(i, BgImage::Url(_)));
+    Rc::new(b)
 }
 
 /// `content` and the counter properties (not inherited: a missing or `inherit`-less declaration is the initial value).
@@ -1082,6 +1222,23 @@ impl ComputedStyle {
         add(PropId::TextDecorationColor, colors(m.text_decoration_color));
         add(PropId::TextDecorationThickness, m.text_decoration_thickness.as_ref().map_or("auto".into(), Lp::to_css));
         add(PropId::BackgroundColor, colors(m.background_color));
+        let list = |it: Vec<String>| it.join(", ");
+        for (p, r) in [PropId::BorderTopLeftRadius, PropId::BorderTopRightRadius, PropId::BorderBottomRightRadius, PropId::BorderBottomLeftRadius].into_iter().zip(m.radius.iter()) {
+            add(p, if r.0 == r.1 { r.0.to_css() } else { format!("{} {}", r.0.to_css(), r.1.to_css()) });
+        }
+        let bg = &m.bg;
+        add(PropId::BackgroundImage, list(bg.images.iter().map(BgImage::to_css).collect()));
+        add(PropId::BackgroundPositionX, list(bg.pos_x.iter().map(Pos1::to_css).collect()));
+        add(PropId::BackgroundPositionY, list(bg.pos_y.iter().map(Pos1::to_css).collect()));
+        add(PropId::BackgroundSize, list(bg.size.iter().map(BgSize::to_css).collect()));
+        add(PropId::BackgroundRepeat, list(bg.repeat.iter().map(|r| r.to_css()).collect()));
+        add(PropId::BackgroundOrigin, list(bg.origin.iter().map(|b| b.to_css().to_string()).collect()));
+        add(PropId::BackgroundClip, list(bg.clip.iter().map(|b| b.to_css().to_string()).collect()));
+        let o = &m.outline;
+        add(PropId::OutlineWidth, px(o.width));
+        add(PropId::OutlineStyle, o.style.keyword().into());
+        add(PropId::OutlineColor, colors(o.color));
+        add(PropId::OutlineOffset, px(o.offset));
         let g = &self.gen_;
         add(PropId::Content, g.content.to_css());
         add(PropId::Quotes, t.quotes.to_css());

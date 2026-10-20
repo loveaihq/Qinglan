@@ -528,7 +528,9 @@ fn canvas_background(doc: &Document, tree: &BoxTree) -> Option<Canvas> {
     let bg_of = |id: BoxId| -> Option<Color> {
         let s = &tree.get(id).style;
         let c = s.misc.background_color.resolve(s.text.color);
-        (c.a != 0).then_some(c)
+        // A background image alone also takes the canvas (its color is then transparent).
+        let image = s.misc.bg.images.iter().any(|i| !matches!(i, crate::css::bg::BgImage::None));
+        (c.a != 0 || image).then_some(c)
     };
     let root = tree.root;
     if let Some(color) = bg_of(root) {

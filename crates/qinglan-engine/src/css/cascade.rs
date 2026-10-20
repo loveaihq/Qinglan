@@ -1225,7 +1225,7 @@ fn resolve_var_decl(doc: &Document, vd: &VarDecl, custom: &Rc<CustomProps>) -> O
     let mut budget = MAX_VAR_VALUE;
     let toks = substitute(doc, &vd.tokens, &mut |n| custom.get(&n).cloned(), &mut budget, 0)?;
     let mut id = 0u32;
-    let parsed = parse_declaration(&vd.prop, &toks, &ParseEnv { quirks: doc.quirks == crate::html::dom::QuirksMode::Quirks }, &mut id)?;
+    let parsed = parse_declaration(&vd.prop, &toks, &ParseEnv { quirks: doc.quirks == crate::html::dom::QuirksMode::Quirks, base: None }, &mut id)?;
     Some(Rc::new(parsed))
 }
 

@@ -32,6 +32,8 @@ pub struct SheetCtx<'a> {
     /// The environment media queries are evaluated in. With one, `@media` blocks that do not apply are skipped
     /// without parsing their rules (the rule index would skip them anyway). `None`: keep every block.
     pub env: Option<&'a super::media::MediaEnv>,
+    /// The address of the sheet (the document for `<style>` and `style=`): `url()` values are made absolute against it.
+    pub base: Option<Rc<crate::url::Url>>,
 }
 
 pub struct StyleRule {
@@ -169,7 +171,7 @@ fn style_rule(r: RawRule, ctx: &mut SheetCtx<'_>) -> Option<StyleRule> {
 
 /// Parse the contents of a declaration block into declarations (invalid ones are dropped).
 pub fn parse_declaration_block(cvs: Vec<Cv>, ctx: &mut SheetCtx<'_>) -> Rc<DeclBlock> {
-    let env = ParseEnv { quirks: ctx.quirks };
+    let env = ParseEnv { quirks: ctx.quirks, base: ctx.base.clone() };
     let mut decls = Vec::new();
     for d in parse_declaration_list(cvs) {
         if d.name.starts_with("--") {
@@ -270,7 +272,7 @@ fn parse_import(prelude: &[Cv], ctx: &mut SheetCtx<'_>) -> Option<ImportRule> {
 fn supports_declaration(inner: &[Cv], ctx: &mut SheetCtx<'_>) -> bool {
     let decls = parse_declaration_list(inner.to_vec());
     let [d] = decls.as_slice() else { return false };
-    let env = ParseEnv { quirks: false };
+    let env = ParseEnv { quirks: false, base: None };
     let mut tmp = 0u32;
     if d.name.starts_with("--") {
         return true;
@@ -396,7 +398,7 @@ mod tests {
     fn parse(text: &str) -> (Stylesheet, Interner) {
         let mut atoms = Interner::new();
         let (mut v, mut b) = (0, 0);
-        let mut ctx = SheetCtx { atoms: &mut atoms, quirks: false, var_id: &mut v, block_id: &mut b, facts: None, env: None };
+        let mut ctx = SheetCtx { atoms: &mut atoms, quirks: false, var_id: &mut v, block_id: &mut b, facts: None, env: None, base: None };
         let s = parse_stylesheet(text, &mut ctx);
         (s, atoms)
     }

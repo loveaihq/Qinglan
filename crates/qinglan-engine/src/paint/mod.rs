@@ -15,12 +15,15 @@
 //! Choices: all border styles are drawn solid, each side is a rectangle (no mitred corners), all decoration
 //! styles are single solid lines, text is blended in sRGB space with the platform's grayscale mask.
 
+mod borders;
 pub mod build;
 pub mod decode;
+pub mod gradient;
 pub mod images;
 pub mod raster;
 
 use crate::css::color::Color;
+use crate::css::types::BorderLineStyle;
 use crate::html::dom::NodeId;
 use crate::layout::units::LayoutUnit as LU;
 
@@ -60,6 +63,46 @@ impl Rect {
     }
 }
 
+/// A rounded rectangle in page coordinates; radii in CSS px (horizontal, vertical) for the top-left, top-right,
+/// bottom-right and bottom-left corner.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RRect {
+    pub rect: Rect,
+    pub radii: [(f32, f32); 4],
+}
+
+/// The rounded part of a clip: its own shape (if any) and the nearest clip below it that has rounded parts. The
+/// rectangle of every clip is in [`DisplayList::clips`] (already the intersection with all the clips below).
+#[derive(Clone, Debug)]
+pub struct Round {
+    pub shape: Option<RRect>,
+    pub prev: u32,
+}
+
+/// One background layer, resolved: where its tiles are and how big they are (CSS px, page coordinates).
+#[derive(Clone, Copy, Debug)]
+pub struct BgDraw {
+    /// The image (`NONE` for a gradient).
+    pub node: NodeId,
+    /// `DisplayList::grads[i]` or `u32::MAX`.
+    pub grad: u32,
+    pub tile: (f32, f32),
+    /// The top left corner of tile (0, 0).
+    pub origin: (f32, f32),
+    /// The distance between tiles; 0: this axis does not repeat.
+    pub step: (f32, f32),
+}
+
+/// A border or outline: the outer rectangle, the widths (top, right, bottom, left), colors, styles and outer radii (CSS px).
+#[derive(Clone, Copy, Debug)]
+pub struct BorderDraw {
+    pub rect: Rect,
+    pub w: [LU; 4],
+    pub color: [Color; 4],
+    pub style: [BorderLineStyle; 4],
+    pub radii: [(f32, f32); 4],
+}
+
 /// "No clip" in [`Item::clip`].
 pub const NO_CLIP: u32 = u32::MAX;
 
@@ -93,6 +136,10 @@ pub enum ItemKind {
     /// The image of this DOM node, stretched over `Item::bounds`.
     Image { node: NodeId },
     Text(TextRun),
+    /// A background layer: `DisplayList::bgs[i]`, drawn in `Item::bounds` (the painting area).
+    Bg(u32),
+    /// A border or outline that is not a plain solid rectangle: `DisplayList::borders[i]`.
+    Border(u32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -109,6 +156,8 @@ pub struct Item {
 pub struct ImagePlace {
     pub node: NodeId,
     pub rect: Rect,
+    /// The page rows the image is drawn in (for the distance to the viewport); for `<img>` the rows of `rect`.
+    pub span: (LU, LU),
     /// In the fixed list (always near).
     pub fixed: bool,
 }
@@ -129,6 +178,11 @@ pub struct DisplayList {
     pub fixed: Vec<Item>,
     pub fixed_below: usize,
     pub clips: Vec<Rect>,
+    /// Parallel to `clips`: `Some` where the clip or one below it is rounded.
+    pub rounds: Vec<Option<Box<Round>>>,
+    pub bgs: Vec<BgDraw>,
+    pub grads: Vec<gradient::GradPaint>,
+    pub borders: Vec<BorderDraw>,
     pub glyphs: Vec<PaintGlyph>,
     /// The canvas background colour (None: white).
     pub canvas: Option<Color>,
@@ -148,6 +202,10 @@ impl DisplayList {
             fixed: Vec::new(),
             fixed_below: 0,
             clips: Vec::new(),
+            rounds: Vec::new(),
+            bgs: Vec::new(),
+            grads: Vec::new(),
+            borders: Vec::new(),
             glyphs: Vec::new(),
             canvas: None,
             height: LU::ZERO,
@@ -169,6 +227,20 @@ impl DisplayList {
 
     pub fn clip_rect(&self, clip: u32) -> Option<Rect> {
         self.clips.get(clip as usize).copied()
+    }
+
+    /// The rounded shapes that clip `clip` (its own and those of the clips below it), innermost first.
+    pub fn round_shapes(&self, clip: u32) -> Vec<(u32, RRect)> {
+        let mut out = Vec::new();
+        let mut c = clip;
+        for _ in 0..64 {
+            let Some(Some(r)) = self.rounds.get(c as usize) else { break };
+            if let Some(s) = r.shape {
+                out.push((c, s));
+            }
+            c = r.prev;
+        }
+        out
     }
 }
 
