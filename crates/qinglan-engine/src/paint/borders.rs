@@ -106,6 +106,27 @@ fn fill(frame: &mut Frame, polys: &[Poly], rule: FillRule, color: Color, clip: &
     fill_polys(polys, rule, *clip, &mut |y, x0, cov| blend_row(frame, y, x0, cov, px, clip));
 }
 
+/// Fill the ring between the outer rectangle `o` and the inner one `i` (`outer` is the rounded outer edge). Only the bands along
+/// the edges can be covered: the rows of the two top and two bottom corners, and between them a strip on each side. Each band
+/// is filled on its own (the bands do not overlap, so no pixel is blended twice), so a big box costs its perimeter and not
+/// its area (a scroll frame of a GitHub page went from 5 to 12 ms with the area).
+fn fill_ring(frame: &mut Frame, ring: &[Poly], color: Color, clip: &IRect, (o, i, outer): (&IRect, &IRect, &RR)) {
+    let reach = |a: (f32, f32), b: (f32, f32)| a.1.max(b.1).ceil() as i32;
+    let [tl, tr, br, bl] = outer.r;
+    let ty = (o.y0 + reach(tl, tr).max(i.y0 - o.y0)).min(o.y1);
+    let by = (o.y1 - reach(br, bl).max(o.y1 - i.y1)).max(ty);
+    let small = i64::from(o.x1 - o.x0) * i64::from(o.y1 - o.y0) < 16_384;
+    if small || i.x1 - i.x0 < 2 || i.y1 - i.y0 < 2 || by <= ty {
+        return fill(frame, ring, FillRule::EvenOdd, color, clip);
+    }
+    for (x0, y0, x1, y1) in [(o.x0, o.y0, o.x1, ty), (o.x0, by, o.x1, o.y1), (o.x0, ty, i.x0, by), (i.x1, ty, o.x1, by)] {
+        let band = clip.intersect(&IRect { x0, y0, x1, y1 });
+        if !band.is_empty() {
+            fill(frame, ring, FillRule::EvenOdd, color, &band);
+        }
+    }
+}
+
 fn fill_mask(frame: &mut Frame, m: &Mask, color: Color, clip: &IRect) {
     let px = premul(color);
     for y in m.rect.y0..m.rect.y1 {
@@ -180,7 +201,7 @@ pub(super) fn draw_border(frame: &mut Frame, b: &BorderDraw, dpr: f64, sy: i32, 
     if st0 == BorderLineStyle::Solid && same(&|s| b.style[s] == st0 && b.color[s] == c0) {
         let mut ring = outer.polys();
         ring.extend(inner.polys());
-        return fill(frame, &ring, FillRule::EvenOdd, c0, clip);
+        return fill_ring(frame, &ring, c0, clip, (&o, &i, &outer));
     }
     let dashed = |s: BorderLineStyle| matches!(s, BorderLineStyle::Dashed | BorderLineStyle::Dotted);
     if dashed(st0) && active.len() == 4 && same(&|s| b.style[s] == st0 && b.color[s] == c0 && wd[s] == w0) {
@@ -278,5 +299,28 @@ fn pattern(len: f32, w: f32, dotted: bool, closed: bool) -> (Vec<f32>, Cap) {
     } else {
         let n = ((len + gap) / period).floor().max(1.0);
         if n <= 1.0 { (Vec::new(), Cap::Butt) } else { (vec![dash, ((len - n * dash) / (n - 1.0)).max(0.0)], cap) }
+    }
+}
+
+#[cfg(test)]
+mod ring_tests {
+    use super::*;
+
+    #[test]
+    fn the_banded_ring_is_the_same_as_filling_the_whole_box() {
+        for (w, h, r, bw) in [(300, 100, (12.0f32, 12.0f32), 2), (400, 90, (30.0, 20.0), 1), (200, 200, (100.0, 100.0), 5), (500, 60, (8.0, 8.0), 3), (260, 80, (3.0, 40.0), 4)] {
+            let o = IRect { x0: 7, y0: 5, x1: 7 + w, y1: 5 + h };
+            let outer = RR { x0: 7.0, y0: 5.0, x1: (7 + w) as f32, y1: (5 + h) as f32, r: [r, (r.0 / 2.0, r.1), (r.0, r.1 / 3.0), (2.0, 2.0)] }.fit();
+            let inner = outer.inset([bw as f32; 4]);
+            let i = IRect { x0: o.x0 + bw, y0: o.y0 + bw, x1: o.x1 - bw, y1: o.y1 - bw };
+            let mut ring = outer.polys();
+            ring.extend(inner.polys());
+            let clip = IRect { x0: 0, y0: 0, x1: w + 20, y1: h + 20 };
+            let color = Color::rgb(200, 30, 60);
+            let (mut a, mut b) = (Frame::new(clip.x1 as u32, clip.y1 as u32), Frame::new(clip.x1 as u32, clip.y1 as u32));
+            fill(&mut a, &ring, FillRule::EvenOdd, color, &clip);
+            fill_ring(&mut b, &ring, color, &clip, (&o, &i, &outer));
+            assert!(a.data == b.data, "{w}x{h} radius {r:?} border {bw}: the banded ring differs");
+        }
     }
 }

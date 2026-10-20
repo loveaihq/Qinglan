@@ -7,6 +7,9 @@
 //! way). Images are drawn 1:1 when the decoded bitmap has exactly the size of the destination rectangle (the
 //! normal case: they are decoded at display size) and bilinearly scaled otherwise.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use super::borders::RR;
@@ -112,8 +115,22 @@ struct Ctx<'a> {
     sy: i32,
     bounds: IRect,
     stats: RasterStats,
-    /// Coverage of the corner boxes of rounded clips, made when first needed in this frame: (clip, corner, mask).
-    corner_cache: Vec<(u32, usize, Mask)>,
+    /// Coverage of the corner boxes of rounded clips, found when first needed in this frame: (clip, corner, mask, where the
+    /// mask's origin is on the frame).
+    corner_cache: Vec<(u32, usize, Rc<Mask>, i32, i32)>,
+}
+
+/// A corner box up to this many pixels on a side has its coverage kept from frame to frame.
+const KEPT_CORNER: i32 = 64;
+const KEPT_CORNERS: usize = 512;
+/// Corner (0..4), the two radii (bits), box width and height.
+type CornerMasks = HashMap<(u8, u32, u32, i32, i32), Rc<Mask>>;
+
+thread_local! {
+    /// The coverage of one rounded corner over its corner box, from the top left of the box. It depends on the corner's radii
+    /// and box only, not on where the shape is: scrolling moves it by whole pixels, so a page's few distinct radii are
+    /// rasterized once instead of once per shape per frame. Key: corner, the two radii (bits), box width and height.
+    static CORNERS: RefCell<CornerMasks> = RefCell::new(HashMap::new());
 }
 
 /// Draw the viewport into `frame`: the canvas, the fixed items below the flow, the items of the list that touch
@@ -200,13 +217,13 @@ impl Ctx<'_> {
         self.draw(frame, it, &r, &clip);
         for (reg, before, cidx, k, rr) in saved {
             let Some(mi) = self.corner_mask(cidx, k, &rr) else { continue };
-            let Some(mask) = self.corner_cache.get(mi).map(|c| &c.2) else { continue };
+            let Some((mask, ox, oy)) = self.corner_cache.get(mi).map(|c| (Rc::clone(&c.2), c.3, c.4)) else { continue };
             let w = (reg.x1 - reg.x0) as usize;
             let stride = frame.width as usize * 4;
             for (ry, y) in (reg.y0..reg.y1).enumerate() {
                 let Some(row) = frame.data.get_mut(y as usize * stride..(y as usize + 1) * stride) else { continue };
                 for (rx, x) in (reg.x0..reg.x1).enumerate() {
-                    let cov = i32::from(mask.at(x, y));
+                    let cov = i32::from(mask.at(x - ox, y - oy));
                     if cov == 255 {
                         continue;
                     }
@@ -279,9 +296,39 @@ impl Ctx<'_> {
         if let Some(i) = self.corner_cache.iter().position(|c| c.0 == cidx && c.1 == k) {
             return Some(i);
         }
-        let win = corner_boxes(rr).get(k)?.intersect(&self.bounds);
-        let m = Mask::from_polys(&rr.polys(), FillRule::NonZero, win)?;
-        self.corner_cache.push((cidx, k, m));
+        let cb = *corner_boxes(rr).get(k)?;
+        let (bw, bh) = (cb.x1 - cb.x0, cb.y1 - cb.y0);
+        let kept = bw <= KEPT_CORNER && bh <= KEPT_CORNER;
+        let entry = if kept {
+            let radius = rr.r.get(k).copied().unwrap_or((0.0, 0.0));
+            let key = (k as u8, radius.0.to_bits(), radius.1.to_bits(), bw, bh);
+            let found = CORNERS.with(|c| c.borrow().get(&key).cloned());
+            let mask = match found {
+                Some(m) => m,
+                None => {
+                    // The box itself as a rectangle with only this corner rounded.
+                    let mut r = [(0.0, 0.0); 4];
+                    if let Some(dst) = r.get_mut(k) {
+                        *dst = radius;
+                    }
+                    let local = RR { x0: 0.0, y0: 0.0, x1: bw as f32, y1: bh as f32, r };
+                    let m = Rc::new(Mask::from_polys(&local.polys(), FillRule::NonZero, IRect { x0: 0, y0: 0, x1: bw, y1: bh })?);
+                    CORNERS.with(|c| {
+                        let mut c = c.borrow_mut();
+                        if c.len() >= KEPT_CORNERS {
+                            c.clear();
+                        }
+                        c.insert(key, Rc::clone(&m));
+                    });
+                    m
+                }
+            };
+            (cidx, k, mask, cb.x0, cb.y0)
+        } else {
+            let win = cb.intersect(&self.bounds);
+            (cidx, k, Rc::new(Mask::from_polys(&rr.polys(), FillRule::NonZero, win)?), 0, 0)
+        };
+        self.corner_cache.push(entry);
         Some(self.corner_cache.len() - 1)
     }
 
