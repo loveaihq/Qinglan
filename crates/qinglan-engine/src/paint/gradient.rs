@@ -44,7 +44,7 @@ impl GradPaint {
                 let (a, b) = ((x - cx) / rx, (y - cy) / ry);
                 (a * a + b * b).sqrt() * rx
             }
-            Geom::Conic { cx, cy, from } => wrap((x - cx).atan2(cy - y) / std::f32::consts::TAU - from, 1.0),
+            Geom::Conic { cx, cy, from } => wrap(crate::fmath::atan2(x - cx, cy - y) / std::f32::consts::TAU - from, 1.0),
         };
         self.lookup(s)
     }
@@ -76,14 +76,7 @@ fn wrap(x: f32, m: f32) -> f32 {
 /// `t^e` for `0 < t < 1`: `exp2(e * log2(t))` with short polynomials, good to about 1e-3, below one level of an 8-bit
 /// channel. (The C library's `powf` alone is 3.7 KB of the executable.)
 fn pow_unit(t: f32, e: f32) -> f32 {
-    let bits = t.max(1.0e-30).to_bits();
-    let ex = ((bits >> 23) & 0xff) as i32 - 127;
-    let m = f32::from_bits((bits & 0x007f_ffff) | 0x3f80_0000); // 1 <= m < 2
-    // ln(m) = 2 atanh(z), z = (m - 1) / (m + 1) <= 1/3: four terms are good to 1e-5.
-    let z = (m - 1.0) / (m + 1.0);
-    let z2 = z * z;
-    let ln_m = 2.0 * z * (1.0 + z2 * (1.0 / 3.0 + z2 * (0.2 + z2 / 7.0)));
-    let l = ex as f32 + ln_m * std::f32::consts::LOG2_E;
+    let l = crate::fmath::log2(t);
     let y = (e * l).clamp(-100.0, 100.0);
     let yi = y.floor();
     let yf = y - yi;
@@ -122,7 +115,7 @@ fn color_at(stops: &[Fixed], s: f32) -> Rgba {
         } else if a.hint >= 1.0 - 1.0e-6 {
             0.0
         } else {
-            pow_unit(t, -std::f32::consts::LN_2 / a.hint.ln())
+            pow_unit(t, -1.0 / crate::fmath::log2(a.hint).min(-1.0e-6))
         };
     }
     let mut out = [0.0; 4];
@@ -142,7 +135,8 @@ pub fn resolve(g: &Gradient, w: f32, h: f32, text: Color) -> Option<GradPaint> {
             let (dx, dy) = match *dir {
                 LinearDir::Angle(a) => {
                     let r = a.to_radians();
-                    (r.sin(), -r.cos())
+                    let (s, c) = crate::fmath::sin_cos(f64::from(r));
+                    (s as f32, -c as f32)
                 }
                 // The "magic corners": the 50% line passes through the other two corners (css-images-3 3.1.1).
                 LinearDir::To(hx, vy) => {

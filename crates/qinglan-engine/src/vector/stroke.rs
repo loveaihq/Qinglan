@@ -80,7 +80,8 @@ fn arc(c: Pt, r: f32, a0: f32, sweep: f32, tol: f32) -> Vec<Pt> {
     (0..=n)
         .map(|i| {
             let a = a0 + sweep * i as f32 / n as f32;
-            Pt::new(c.x + r * a.cos(), c.y + r * a.sin())
+            let (s, co) = crate::fmath::sin_cos(f64::from(a));
+            Pt::new(c.x + r * co as f32, c.y + r * s as f32)
         })
         .collect()
 }
@@ -175,7 +176,7 @@ fn cap(p: Pt, u: V, hw: f32, kind: Cap, tol: f32, out: &mut Vec<Poly>) {
             let (a, b) = (at(p, nrm, hw), at(p, nrm, -hw));
             push(out, vec![a, at(a, u, hw), at(b, u, hw), b]);
         }
-        Cap::Round => push(out, arc(p, hw, nrm.1.atan2(nrm.0), -std::f32::consts::PI, tol)),
+        Cap::Round => push(out, arc(p, hw, crate::fmath::atan2(nrm.1, nrm.0), -std::f32::consts::PI, tol)),
     }
 }
 
@@ -199,8 +200,8 @@ fn join(v: Pt, d0: V, d1: V, hw: f32, s: &Stroke, tol: f32, out: &mut Vec<Poly>)
     let b = at(v, n1, side * hw);
     match s.join {
         Join::Round => {
-            let a0 = (a.y - v.y).atan2(a.x - v.x);
-            let a1 = (b.y - v.y).atan2(b.x - v.x);
+            let a0 = crate::fmath::atan2(a.y - v.y, a.x - v.x);
+            let a1 = crate::fmath::atan2(b.y - v.y, b.x - v.x);
             let mut sweep = a1 - a0;
             while sweep > std::f32::consts::PI {
                 sweep -= std::f32::consts::TAU;

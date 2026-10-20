@@ -321,7 +321,7 @@ fn mat3(m: &[[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
 fn gamma_srgb(v: f64) -> f64 {
     let sign = if v < 0.0 { -1.0 } else { 1.0 };
     let a = v.abs();
-    if a > 0.0031308 { sign * (1.055 * a.powf(1.0 / 2.4) - 0.055) } else { 12.92 * v }
+    if a > 0.0031308 { sign * (1.055 * crate::fmath::pow(a, 1.0 / 2.4) - 0.055) } else { 12.92 * v }
 }
 
 fn xyz_d65_to_srgb(xyz: [f64; 3], alpha: f64) -> Color {
@@ -394,7 +394,10 @@ fn parse_lab_like(items: &[Cv], polar: bool, ok: bool) -> Option<Color> {
     let (x, y) = if polar {
         let c = scalar(*args.get(1)?, c_ref)?.max(0.0);
         let h = hue_deg(*args.get(2)?)?;
-        (c * h.to_radians().cos(), c * h.to_radians().sin())
+        {
+            let (s, co) = crate::fmath::sin_cos(h.to_radians());
+            (c * co, c * s)
+        }
     } else {
         (scalar(*args.get(1)?, ab_ref)?, scalar(*args.get(2)?, ab_ref)?)
     };
