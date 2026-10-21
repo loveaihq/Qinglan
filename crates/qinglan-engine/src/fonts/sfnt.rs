@@ -70,7 +70,8 @@ pub fn assemble(flavor: u32, mut tables: Vec<Table>) -> Result<Vec<u8>, FontErro
         out.extend_from_slice(&(t.data.len() as u32).to_be_bytes());
         offset += (t.data.len() + 3) & !3;
     }
-    for t in &tables {
+    // Each table goes when it is written, so that the tables and the file are not both whole at the end.
+    for t in tables {
         out.extend_from_slice(&t.data);
         out.resize((out.len() + 3) & !3, 0);
     }

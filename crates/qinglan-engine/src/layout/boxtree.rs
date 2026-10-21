@@ -367,6 +367,9 @@ struct Builder<'a> {
     generated: usize,
     gen_cap: usize,
     gen_cut: bool,
+    /// The styles of the boxes of a ruby pair, one set for each (style of the `ruby`, style of its `rt`): a page of
+    /// 100,000 `<ruby>` elements makes them once, not 100,000 times (about 8 KB of styles for each pair).
+    ruby_styles: crate::html::atoms::FxHashMap<(usize, usize), RubyStyles>,
     /// The element whose `overflow` went to the viewport (`NONE`: none did).
     vp_source: NodeId,
     images: Vec<ImageRequest>,
@@ -378,6 +381,18 @@ struct Builder<'a> {
     /// Some element uses a vertical writing mode (the frames of vertical.rs are only worked out then).
     vertical: bool,
 }
+
+/// The styles of the three boxes a ruby pair is made of, and the two styles they were made from (kept so that the
+/// pointers that are the key of the cache stay the ones of these styles).
+struct RubyStyles {
+    _from: (Rc<ComputedStyle>, Rc<ComputedStyle>),
+    annotation: Rc<ComputedStyle>,
+    base: Rc<ComputedStyle>,
+    pair: Rc<ComputedStyle>,
+}
+
+/// Most sets of ruby styles kept; a page that gives every `ruby` a style of its own starts over when it is full.
+const MAX_RUBY_STYLES: usize = 1024;
 
 /// Build the box tree of a styled document (no image sizes known).
 pub fn build_box_tree(doc: &Document, styles: &StyleTree) -> BoxTree {
@@ -400,6 +415,7 @@ pub fn build_box_tree_with(doc: &Document, styles: &StyleTree, env: &BuildEnv<'_
         generated: 0,
         gen_cap: MAX_NODES.saturating_sub(doc.nodes.len()) / 4,
         gen_cut: false,
+        ruby_styles: Default::default(),
         vp_source: NONE,
         images: Vec::new(),
         video: doc.atoms.lookup("video"),
@@ -1127,22 +1143,46 @@ impl Builder<'_> {
                 out.push(k);
                 continue;
             }
+            // The pairs count with the generated boxes (a pair is about four boxes and a few kilobytes of text and
+            // geometry): past the allowance the base and the annotation stay plain inline boxes, one after the other.
+            if self.generated >= self.gen_cap {
+                self.gen_cut = true;
+                out.append(&mut base);
+                out.push(k);
+                continue;
+            }
+            let first_box = self.boxes.len();
             let Some((node, rt_style, rt_kids)) = self.boxes.get(k as usize).map(|b| (b.node, b.style.clone(), b.children.clone())) else { continue };
-            let ann = self.new_box(BoxKind::Block, node, with_align(&rt_style, TextAlign::RubySpace), false);
+            let key = (Rc::as_ptr(style) as usize, Rc::as_ptr(&rt_style) as usize);
+            if !self.ruby_styles.contains_key(&key) {
+                if self.ruby_styles.len() >= MAX_RUBY_STYLES {
+                    self.ruby_styles.clear();
+                }
+                let anon = self.anon_style(style);
+                let mut cs = (*anon).clone();
+                let mut bs = (*cs.boxs).clone();
+                bs.display = Display::InlineBlock;
+                cs.boxs = Rc::new(bs);
+                let made = RubyStyles {
+                    _from: (style.clone(), rt_style.clone()),
+                    annotation: with_align(&rt_style, TextAlign::RubySpace),
+                    base: with_align(&anon, TextAlign::RubySpace),
+                    pair: Rc::new(cs),
+                };
+                self.ruby_styles.insert(key, made);
+            }
+            let Some((ann_style, base_style, pair_style)) = self.ruby_styles.get(&key).map(|r| (r.annotation.clone(), r.base.clone(), r.pair.clone())) else { continue };
+            let ann = self.new_box(BoxKind::Block, node, ann_style, false);
             self.finish_block(ann, rt_kids.into_iter().map(Out::Inline).collect());
-            let anon = self.anon_style(style);
-            let bb = self.new_box(BoxKind::Block, NONE, with_align(&anon, TextAlign::RubySpace), true);
+            let bb = self.new_box(BoxKind::Block, NONE, base_style, true);
             self.finish_block(bb, std::mem::take(&mut base).into_iter().map(Out::Inline).collect());
-            let mut cs = (*anon).clone();
-            let mut bs = (*cs.boxs).clone();
-            bs.display = Display::InlineBlock;
-            cs.boxs = Rc::new(bs);
-            let pair = self.new_box(BoxKind::InlineBlock, NONE, Rc::new(cs), true);
+            let pair = self.new_box(BoxKind::InlineBlock, NONE, pair_style, true);
             self.finish_block(pair, if annotation_last { vec![Out::Block(bb), Out::Block(ann)] } else { vec![Out::Block(ann), Out::Block(bb)] });
             if let Some(p) = self.box_mut(pair) {
                 p.rare_mut().ruby = if annotation_last { 1 } else { 2 };
             }
             out.push(pair);
+            self.generated = self.generated.saturating_add(self.boxes.len().saturating_sub(first_box));
         }
         out.extend(base);
         out

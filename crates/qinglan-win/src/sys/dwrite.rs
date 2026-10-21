@@ -37,6 +37,11 @@ const IID_IDWRITEFACTORY5: Guid = Guid { d1: 0x958d_b99a, d2: 0xbe2a, d3: 0x4f09
 const IID_IDWRITETEXTANALYSISSOURCE: Guid = Guid { d1: 0x688e_1a58, d2: 0x5094, d3: 0x47c8, d4: [0xad, 0xc8, 0xfb, 0xce, 0xa6, 0x0a, 0xe9, 0x2b] };
 const IID_IDWRITETEXTANALYSISSINK: Guid = Guid { d1: 0x5810_cd44, d2: 0x0ca0, d3: 0x4701, d4: [0xb3, 0xfa, 0xbe, 0xc5, 0x18, 0x2a, 0xe4, 0xf6] };
 
+/// The pixels of all the layers of one colour glyph together (one byte each): more and the glyph is drawn in one colour.
+const MAX_COLOR_LAYER_PIXELS: usize = 16 << 20;
+/// The pixels of the box around the layers of one colour glyph (16 bytes each while they are composed).
+const MAX_COLOR_PIXELS: i64 = 1 << 20;
+
 #[link(name = "dwrite")]
 unsafe extern "system" {
     fn DWriteCreateFactory(factory_type: u32, iid: *const Guid, factory: *mut *mut c_void) -> HRESULT;
@@ -1228,6 +1233,9 @@ impl Factory {
             color: [f32; 4],
         }
         let mut found: Vec<Layer> = Vec::new();
+        // The pixels of all the layers together (a byte each, three while one is being read) are limited; a glyph
+        // that needs more is drawn in one colour by the caller.
+        let mut layer_pixels = 0usize;
         for _ in 0..64 {
             let mut has: BOOL = 0;
             // SAFETY: live enumerator, valid out pointer.
@@ -1258,6 +1266,10 @@ impl Factory {
             if !hr_ok(hr) || w <= 0 || h <= 0 || w > 2048 || h > 2048 {
                 continue;
             }
+            layer_pixels += (w * h) as usize;
+            if layer_pixels > MAX_COLOR_LAYER_PIXELS {
+                return None;
+            }
             let mut rgb = vec![0u8; (w * h * 3) as usize];
             // SAFETY: `rgb` holds exactly 3 bytes for each pixel of `rect`, the size passed.
             let hr = unsafe { vcall!(analysis, create_alpha_texture, 1, &rect, rgb.as_mut_ptr(), rgb.len() as u32) };
@@ -1272,7 +1284,7 @@ impl Factory {
         let (l, t) = (found.iter().map(|y| y.rect.left).min()?, found.iter().map(|y| y.rect.top).min()?);
         let (r, b) = (found.iter().map(|y| y.rect.right).max()?, found.iter().map(|y| y.rect.bottom).max()?);
         let (w, h) = (i64::from(r) - i64::from(l), i64::from(b) - i64::from(t));
-        if w <= 0 || h <= 0 || w > 2048 || h > 2048 {
+        if w <= 0 || h <= 0 || w > 2048 || h > 2048 || w * h > MAX_COLOR_PIXELS {
             return None;
         }
         let (w, h) = (w as usize, h as usize);

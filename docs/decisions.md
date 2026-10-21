@@ -145,6 +145,9 @@
 | 网页字体：字体文件的表数（`MAX_TABLES`） | 128 | 拒绝这个字体 |
 | 网页字体：每页 `@font-face` 规则 / 每页取的字面 / 取字体的请求 | 256 / 32 / 128 | 多的规则丢掉；其余字面不下载；`src` 里后面的不再试 |
 | 网页字体：每个字面的 `unicode-range` 范围数 / `src` 条数 | 512 / 16 | 多的丢掉 |
+| 网页字体：Brotli 一个流的准备工作量（前缀码、上下文映射、逆移到前；`brotli.rs` 的 `Work`，一个单位约写一个字节） | 1M 单位 + 输入每字节 16 单位 | 这个流作废（`TooLarge`），字体不用 |
+| 网页字体：彩色字形各层的像素合计 / 合成用的外框 | 16 Mpx / 1 Mpx（`dwrite.rs`） | 这个字形按单色画 |
+| 注音对（`ruby_pairs`，每对约 4 个盒子） | 和生成的盒子共用同一个额度（`gen_cap`） | 后面的底字和 `rt` 当普通行内，页面标记“不完整” |
 
 ### 1a 审查后的补充（2026-10-15）
 
@@ -1508,3 +1511,24 @@ gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 
 - **首屏：没有合格的数字。** 量的时候另一个会话在编译（9 个 `rustc` 同时跑，另有 `Emulator.exe`），zhwiki-rec 161–663 ms、gh-ripgrep 152–434 ms，都不能和 200 ms 的限额比。竖排和注音的代码在不用它们的页面上不执行：箱子树的框架遍历只在页面里有竖排元素时才做，`font_for` 多一个布尔判断，光栅的 `glyphs_of` 多一个分支；这是推断，不是测量，要在空闲机器上补量。
 - **WPT**（测试平台）：`css/css-writing-modes` 439 / 843（52.1%）（2d-2a 的 98 个加新增的竖排 745 个）；bug 类 388，**没有修**，每个都有一行 `notes.txt`（按家族写的原因，上面“记下的限制”里没有诊断的那些；写明了哪些诊断过：`sizing-orthog-vrl-in-htb-001` 的参考页、`wm-propagation-body-032` 的版面）。`css/css-ruby` 23 / 118（19.5%），失败的 95 个：65 个是 `step 2d`（`rtc`、`ruby-align`、`ruby-overhang`……）、30 个是 `limit (ruby as inline-block pairs)`（每个一行）。`qinglan-cli wpt --check` 通过。自动分类器原来把含 `writing-mode`、`direction`、`<ruby` 的页面都归“后面的步骤”，这一步改成只认 `rtc`、`ruby-align`、`ruby-merge`、`ruby-overhang`。
 - **真实网页**：青空文库（注音）和 vert-tategaki（竖排）对 Edge，见 `tests/corpus/RESULTS.md` 最后一节。
+
+## 第 2 层 · 2c/2d 审查修复（2026-10-21，提交 A：`Fix 2c/2d review findings: decoders and amplification`）
+
+起点 `b7a437a`。代码：`fonts/brotli.rs`、`fonts/woff2.rs`、`fonts/sfnt.rs`、`layout/boxtree.rs`、`qinglan-win/src/sys/dwrite.rs`、`qinglan-cli/src/bench.rs`。测试：`tests/fonts.rs`（+1）、`woff2.rs` 里的单元测试（+1）、`tests/hostile.rs`（+4）。
+
+### R1 Brotli 的准备工作量（`brotli.rs`）
+- 原因：上下文映射逆移到前时对每一项做 `mtf.remove(i); mtf.insert(0, v)`，每项移动整个 256 字节的表；一个约 82 字节的元块（256 个字面块类型，1 个 16,384 项的上下文映射，一整段零）要 0.7 ms，984 KB 的字体（12,000 个这样的元块）8.5 s。
+- 改成 `mtf[..=i].rotate_right(1)`，代价是 `i`，不是表长。另外给每个流一个**准备工作量预算**（`Work`）：前缀码（字母表大小 + 256 的查找表）、上下文映射（每项 1 单位）、逆移到前（每项再加 `i`）都要花，预算是 1M 单位 + 输入每字节 16 单位；用完就是 `TooLarge`。真字体的上下文映射用 RLE 和逆移到前编得很小，每字节输入花不了几个单位；上面那个 82 字节的元块要 17,000 多单位，所以 12,000 个元块在几百个之后就停了（约 40–50 ms）。块切换不单独计：每次切换至少吃 2 位输入，代价是 O(1)。
+- **发现：`qinglan-cli bench` 根本不取网页字体**，所以 `hostile.rs` 里原来三个字体用例（`woff2_1gb`、`brotli_bomb`、`zlib_bomb`）一直没有碰到解码器（页面 30–50 ms、8 MB）。`bench` 现在在首屏之后调 `load_fonts`（和窗口一样，首屏的数字不变；没有 `@font-face` 的页面什么也不做），并打印 `web-fonts: N declared, M loaded, K failed`；`hostile.rs` 的字体用例核对这一行，保证字体真的被取了、送进了解码器、被拒了。
+- 新用例：`brotli_maps_3000`、`brotli_maps_12000`（984 KB）、`brotli_maps_32_faces`（一页 32 个不同文件的这种字体，共 32 MB）。修之前这个流在 release 里要 8.5 s（`mtf12000.woff2`，审查的重现）。
+
+### R3 注音对（`boxtree.rs::ruby_pairs`）
+- 每对注音原来要 3 个盒子加约 10 份新样式（`with_align` 复制一份 `ComputedStyle` 和 `TextStyle`，`anon_style` 两次，匿名 `inline-block` 的 `BoxStyle`），10 万个 `<ruby>` 的 `layout` 峰值 356 MB。现在：(a) 按（`ruby` 的样式，`rt` 的样式）两个指针缓存一套三个样式（`ruby_styles`，最多 1024 套，满了清空；缓存里留着两个原样式的 `Rc`，指针不会被别的样式占用）；(b) 每对（含被丢下的 `rt` 盒，共约 4 个盒子）计入生成盒子的额度（`generated` / `gen_cap`，和 `::before`/`::after` 同一个），额度用完，后面的底字和 `rt` 就是普通行内盒（`rt` 紧跟在底字后面，字号 50%），`gen_cut` 置位，页面“不完整”。
+- 结果（10 万个 `<ruby>字<rt>注音</rt></ruby>`，40 万个文档节点，额度只剩 2.5 万个盒子）：`layout` 2.68 s / 356 MB → 0.91 s / 156 MB；`hostile.rs` 的整条流水线（`bench`）0.77 s / 185 MB（限额 200）。
+
+### R5 WOFF2 的临时拷贝（`woff2.rs`、`sfnt.rs`）
+- 重建出的 `glyf`、`loca` 原来在 `raw`（Brotli 的输出）和 `rebuilt` 都还在的时候又 `clone` 一份，没变换的表又 `to_vec`，再加上 `assemble` 写出的整个文件：最坏时 `raw` 8 + 重建 8 + 表 16 + 文件 8 MB。现在：重建的表 `mem::take` 移走不复制；复制没变换的表之前先核对“重建的 glyf+loca + 没变换的表”不超过 8 MB（`TooLarge`）；表都拿到手之后先放掉 `raw`，再 `assemble`；`assemble` 写完一张表就放掉一张；`glyf` 按变换后大小的 1.5 倍一次分够（`Vec` 的翻倍在 8 MB 上会要 16 MB）。最坏的峰值是 `raw`（≤ 8）+ 表（≤ 8）= 16 MB，然后是表（≤ 8）+ 文件（≤ 8）= 16 MB，也就是上限的 2 倍。**没有测量**（要造一个 8 MB 的 `glyf` 变换流，这一轮没做）。
+
+### R6 两处
+- `woff2.rs`：`encode_points` 里相邻两点的差（坐标本身在 i16 里，差可以到 ±65535）原来 `as i16` 截断，字形悄悄变形；现在装不下就是 `Corrupt("coordinate delta out of range")`（单元测试：差 60,000 拒绝，20,000 通过）。
+- `dwrite.rs::rasterize_color`：各层像素合计上限 16 Mpx（`MAX_COLOR_LAYER_PIXELS`，每层 1 字节，量的时候另有 3 倍的临时纹理），合成的外框上限 1 Mpx（`MAX_COLOR_PIXELS`，累加器每像素 16 字节，原来 2048×2048 就是 64 MB）；超了返回 `None`，调用者按单色画这个字形。

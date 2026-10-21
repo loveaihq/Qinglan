@@ -4,6 +4,11 @@
 //! Brotli bomb costs at most `limit` bytes of memory and the time to produce them. Every command consumes input
 //! bits or, for the cheapest ones (a copy by a one-symbol code), produces at least two bytes of counted output.
 //!
+//! The work of setting up a meta-block (prefix codes, context maps with their move-to-front undone) is counted too
+//! (`Work`): a stream may spend `WORK_BASE` plus `WORK_PER_INPUT_BYTE` per byte of input, so a font of many tiny
+//! meta-blocks that each ask for a 16,384-entry context map is stopped after a few milliseconds instead of costing
+//! time proportional to the number of meta-blocks (an 82-byte meta-block can ask for about 17,000 units).
+//!
 //! The static dictionary (RFC 7932 appendix A, 122,784 bytes) is stored deflate-compressed in the executable
 //! (`brotli_dict.z`, 58,898 bytes) and inflated the first time a stream refers to it.
 
@@ -45,9 +50,27 @@ const CL_ORDER: [usize; 18] = [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12,
 const CLCL_LEN: [u8; 16] = [2, 2, 2, 3, 2, 2, 2, 4, 2, 2, 2, 3, 2, 2, 2, 4];
 const CLCL_VAL: [u8; 16] = [0, 4, 3, 2, 0, 4, 3, 1, 0, 4, 3, 2, 0, 4, 3, 5];
 
+/// Setup work a stream may spend without any input: about 1 ms.
+const WORK_BASE: usize = 1 << 20;
+/// More setup work for every byte of input: 16 units is about 30 ns, so a stream costs a few tens of microseconds
+/// per KB at the most. A real font spends a few units per byte (a context map entry is written for about every
+/// bit that describes it).
+const WORK_PER_INPUT_BYTE: usize = 16;
+
+/// What is left of a stream's setup work. One unit is about the cost of writing one byte.
+struct Work(usize);
+
+impl Work {
+    fn spend(&mut self, units: usize) -> Result<(), FontError> {
+        self.0 = self.0.checked_sub(units).ok_or(FontError::TooLarge)?;
+        Ok(())
+    }
+}
+
 /// Decode a whole Brotli stream. The output may not be longer than `limit`.
 pub fn decompress(input: &[u8], limit: usize) -> Result<Vec<u8>, FontError> {
-    let mut d = Decoder { br: BitReader::new(input), out: Vec::new(), limit, window: 0, rb: [4, 11, 15, 16] };
+    let work = Work(WORK_BASE.saturating_add(input.len().saturating_mul(WORK_PER_INPUT_BYTE)));
+    let mut d = Decoder { br: BitReader::new(input), out: Vec::new(), limit, window: 0, rb: [4, 11, 15, 16], work };
     d.run()?;
     Ok(d.out)
 }
@@ -60,6 +83,7 @@ struct Decoder<'a> {
     window: usize,
     /// The last four distances, the latest first.
     rb: [usize; 4],
+    work: Work,
 }
 
 /// One of the three kinds of blocks (literals, commands, distances) of a meta-block.
@@ -75,12 +99,12 @@ struct Blocks {
 }
 
 impl Blocks {
-    fn read(br: &mut BitReader<'_>) -> Result<Blocks, FontError> {
+    fn read(br: &mut BitReader<'_>, work: &mut Work) -> Result<Blocks, FontError> {
         let ntypes = varlen(br)?;
         let mut b = Blocks { ntypes, types: None, counts: None, cur: 0, last: 0, last2: 1, left: 1 << 24 };
         if ntypes >= 2 {
-            b.types = Some(prefix_code(br, ntypes + 2)?);
-            b.counts = Some(prefix_code(br, 26)?);
+            b.types = Some(prefix_code(br, work, ntypes + 2)?);
+            b.counts = Some(prefix_code(br, work, 26)?);
             b.left = block_count(br, b.counts.as_ref())?;
         }
         Ok(b)
@@ -133,7 +157,9 @@ fn varlen(br: &mut BitReader<'_>) -> Result<usize, FontError> {
 }
 
 /// A prefix code over `alphabet` symbols (RFC 7932 3.4 and 3.5).
-fn prefix_code(br: &mut BitReader<'_>, alphabet: usize) -> Result<Huff, FontError> {
+fn prefix_code(br: &mut BitReader<'_>, work: &mut Work, alphabet: usize) -> Result<Huff, FontError> {
+    // The lengths, and the lookup table that is built from them.
+    work.spend(alphabet + 256)?;
     let hskip = br.read(2)?;
     if hskip == 1 {
         return simple_code(br, alphabet);
@@ -254,13 +280,14 @@ fn simple_code(br: &mut BitReader<'_>, alphabet: usize) -> Result<Huff, FontErro
 }
 
 /// A context map (RFC 7932 7.3): `size` entries naming one of the returned number of trees.
-fn context_map(br: &mut BitReader<'_>, size: usize) -> Result<(usize, Vec<u8>), FontError> {
+fn context_map(br: &mut BitReader<'_>, work: &mut Work, size: usize) -> Result<(usize, Vec<u8>), FontError> {
     let ntrees = varlen(br)?;
+    work.spend(size)?;
     if ntrees == 1 {
         return Ok((1, vec![0; size]));
     }
     let rle_max = if br.read(1)? == 1 { br.read(4)? as usize + 1 } else { 0 };
-    let code = prefix_code(br, ntrees + rle_max)?;
+    let code = prefix_code(br, work, ntrees + rle_max)?;
     let mut map: Vec<u8> = Vec::with_capacity(size);
     while map.len() < size {
         let s = code.decode(br)? as usize;
@@ -280,10 +307,11 @@ fn context_map(br: &mut BitReader<'_>, size: usize) -> Result<(usize, Vec<u8>), 
         let mut mtf: Vec<u8> = (0..=255u8).collect();
         for v in map.iter_mut() {
             let i = usize::from(*v);
-            let val = at(&mtf, i)?;
-            *v = val;
-            mtf.remove(i);
-            mtf.insert(0, val);
+            // Move entry `i` to the front: the cost is `i`, not the length of the list, and it is paid for.
+            work.spend(i)?;
+            let front = mtf.get_mut(..=i).ok_or(FontError::Corrupt("index out of range"))?;
+            front.rotate_right(1);
+            *v = at(&mtf, 0)?;
         }
     }
     Ok((ntrees, map))
@@ -386,30 +414,30 @@ impl Decoder<'_> {
     }
 
     fn meta_block(&mut self, mlen: usize) -> Result<(), FontError> {
-        let (br, out, rb, window) = (&mut self.br, &mut self.out, &mut self.rb, self.window);
-        let mut lit_b = Blocks::read(br)?;
-        let mut cmd_b = Blocks::read(br)?;
-        let mut dist_b = Blocks::read(br)?;
+        let (br, out, rb, window, work) = (&mut self.br, &mut self.out, &mut self.rb, self.window, &mut self.work);
+        let mut lit_b = Blocks::read(br, work)?;
+        let mut cmd_b = Blocks::read(br, work)?;
+        let mut dist_b = Blocks::read(br, work)?;
         let npostfix = br.read(2)?;
         let ndirect = (br.read(4)? as usize) << npostfix;
         let mut modes = Vec::with_capacity(lit_b.ntypes);
         for _ in 0..lit_b.ntypes {
             modes.push(br.read(2)? as u8);
         }
-        let (nlit_trees, lit_map) = context_map(br, lit_b.ntypes * 64)?;
-        let (ndist_trees, dist_map) = context_map(br, dist_b.ntypes * 4)?;
+        let (nlit_trees, lit_map) = context_map(br, work, lit_b.ntypes * 64)?;
+        let (ndist_trees, dist_map) = context_map(br, work, dist_b.ntypes * 4)?;
         let mut lit_codes = Vec::with_capacity(nlit_trees);
         for _ in 0..nlit_trees {
-            lit_codes.push(prefix_code(br, 256)?);
+            lit_codes.push(prefix_code(br, work, 256)?);
         }
         let mut cmd_codes = Vec::with_capacity(cmd_b.ntypes);
         for _ in 0..cmd_b.ntypes {
-            cmd_codes.push(prefix_code(br, 704)?);
+            cmd_codes.push(prefix_code(br, work, 704)?);
         }
         let dist_alphabet = 16 + ndirect + (48usize << npostfix);
         let mut dist_codes = Vec::with_capacity(ndist_trees);
         for _ in 0..ndist_trees {
-            dist_codes.push(prefix_code(br, dist_alphabet)?);
+            dist_codes.push(prefix_code(br, work, dist_alphabet)?);
         }
 
         let mut remaining = mlen;

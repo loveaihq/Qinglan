@@ -123,6 +123,14 @@ pub fn run(cx: Ctx<'_>, url: &Url, a: &BenchArgs) -> ExitCode {
     let mem_first = memory();
     drop((first, list));
 
+    // The web fonts, which the window fetches after the first screen: decoded and registered here too, so that the hostile
+    // font files of `tests/hostile.rs` reach the decoders (a page without `@font-face` does no work here).
+    blocking::load_fonts(&mut *loader, &mut res, &opened.doc, &styled, platform, SHEET_TIMEOUT);
+    let (faces, faces_ready, faces_failed) = res.fonts.counts();
+    if faces > 0 {
+        println!("web-fonts: {faces} declared, {faces_ready} loaded, {faces_failed} failed");
+    }
+
     // The whole page, with every image (as the window's bench does), until no size changes.
     let mut sizes = ImageSizes::new();
     let mut store = ImageStore::new();

@@ -132,14 +132,23 @@ pub fn decode(data: &[u8]) -> Result<Vec<u8>, FontError> {
         (Some((true, _)), _) | (_, Some((true, _))) => return Err(FontError::Corrupt("glyf and loca must both be transformed")),
         _ => None,
     };
+    // The tables that go into the font are about to be copied out of `raw`: they have to fit before anything is
+    // copied (the rebuilt `glyf` and `loca` are moved, not copied), so that `raw` and the tables together stay
+    // under two times the limit, and `raw` goes before the file is written, so that the tables and the file do too.
+    let rebuilt_len = rebuilt.as_ref().map_or(0, |g| g.glyf.len() + g.loca.len());
+    let plain_len: usize = entries.iter().filter(|e| !e.transformed).map(|e| e.stream_len).sum();
+    if rebuilt_len.saturating_add(plain_len) > MAX_FONT_BYTES {
+        return Err(FontError::TooLarge);
+    }
+    let mut rebuilt = rebuilt;
     let mut tables = Vec::with_capacity(entries.len());
     for (e, s) in entries.iter().zip(&slices) {
         let data = if !e.transformed {
             s.to_vec()
         } else if e.tag == *b"glyf" {
-            rebuilt.as_ref().map(|g| g.glyf.clone()).ok_or(FontError::Corrupt("glyf"))?
+            rebuilt.as_mut().map(|g| std::mem::take(&mut g.glyf)).ok_or(FontError::Corrupt("glyf"))?
         } else if e.tag == *b"loca" {
-            rebuilt.as_ref().map(|g| g.loca.clone()).ok_or(FontError::Corrupt("loca"))?
+            rebuilt.as_mut().map(|g| std::mem::take(&mut g.loca)).ok_or(FontError::Corrupt("loca"))?
         } else {
             // hmtx: the advances come from the stream, the side bearings may come from the glyph outlines.
             let g = rebuilt.as_ref().ok_or(FontError::Unsupported("hmtx transform without a glyf transform"))?;
@@ -149,6 +158,9 @@ pub fn decode(data: &[u8]) -> Result<Vec<u8>, FontError> {
         };
         tables.push(Table { tag: e.tag, data });
     }
+    drop(rebuilt);
+    drop(slices);
+    drop(raw);
     assemble(flavor, tables)
 }
 
@@ -185,7 +197,9 @@ fn reconstruct_glyf(t: &[u8]) -> Result<Glyf, FontError> {
     let bitmap = bbox.take(4 * num_glyphs.div_ceil(32))?;
     let bit = |m: &[u8], i: usize| m.get(i >> 3).is_some_and(|b| b & (0x80 >> (i & 7)) != 0);
 
-    let mut glyf: Vec<u8> = Vec::new();
+    // The glyf table is about one and a half times its transform: allocated once, so that growing it never asks for
+    // twice the limit (and never holds the old and the new buffer when it is full-sized).
+    let mut glyf: Vec<u8> = Vec::with_capacity((t.len() / 2 * 3).min(MAX_FONT_BYTES));
     let mut offsets: Vec<usize> = Vec::with_capacity(num_glyphs + 1);
     let mut xmin: Vec<i16> = Vec::with_capacity(num_glyphs);
     offsets.push(0);
@@ -245,7 +259,7 @@ fn reconstruct_glyf(t: &[u8]) -> Result<Glyf, FontError> {
             }
             glyf.extend_from_slice(&(ilen as u16).to_be_bytes());
             glyf.extend_from_slice(code);
-            encode_points(&mut glyf, &xy, &on, bit(overlap, i));
+            encode_points(&mut glyf, &xy, &on, bit(overlap, i))?;
         } else if ncont == -1 {
             if !have_bbox {
                 return Err(FontError::Corrupt("composite glyph without a bounding box"));
@@ -340,7 +354,7 @@ fn triplet(f: u8, glyph: &mut Rd<'_>) -> Result<(i32, i32), FontError> {
 }
 
 /// The flags and coordinates of a simple glyph in the `glyf` table's own encoding (OpenType glyf, simple glyph).
-fn encode_points(out: &mut Vec<u8>, xy: &[(i32, i32)], on: &[bool], overlap: bool) {
+fn encode_points(out: &mut Vec<u8>, xy: &[(i32, i32)], on: &[bool], overlap: bool) -> Result<(), FontError> {
     let mut flags: Vec<u8> = Vec::with_capacity(xy.len());
     let mut xs: Vec<u8> = Vec::new();
     let mut ys: Vec<u8> = Vec::new();
@@ -358,7 +372,9 @@ fn encode_points(out: &mut Vec<u8>, xy: &[(i32, i32)], on: &[bool], overlap: boo
             f |= 0x02 | if dx > 0 { 0x10 } else { 0 };
             xs.push(dx.unsigned_abs() as u8);
         } else {
-            xs.extend_from_slice(&(dx as i16).to_be_bytes());
+            // The coordinates are in the 16-bit range but their difference need not be: a delta that does not fit
+            // cannot be written in a glyf table.
+            xs.extend_from_slice(&i16::try_from(dx).map_err(|_| FontError::Corrupt("coordinate delta out of range"))?.to_be_bytes());
         }
         if dy == 0 {
             f |= 0x20;
@@ -366,7 +382,7 @@ fn encode_points(out: &mut Vec<u8>, xy: &[(i32, i32)], on: &[bool], overlap: boo
             f |= 0x04 | if dy > 0 { 0x20 } else { 0 };
             ys.push(dy.unsigned_abs() as u8);
         } else {
-            ys.extend_from_slice(&(dy as i16).to_be_bytes());
+            ys.extend_from_slice(&i16::try_from(dy).map_err(|_| FontError::Corrupt("coordinate delta out of range"))?.to_be_bytes());
         }
         flags.push(f);
     }
@@ -386,6 +402,7 @@ fn encode_points(out: &mut Vec<u8>, xy: &[(i32, i32)], on: &[bool], overlap: boo
     }
     out.extend_from_slice(&xs);
     out.extend_from_slice(&ys);
+    Ok(())
 }
 
 /// Undo the `hmtx` transform (WOFF2 5.4).
@@ -413,4 +430,32 @@ fn reconstruct_hmtx(t: &[u8], num_glyphs: usize, num_hm: usize, xmin: &[i16]) ->
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A transformed `glyf` table of one glyph: one contour of two points, the first at x = -30000 and the second `dx`
+    /// to the right of it (the triplet encoding can say a delta up to 65535; the glyf table itself can only say 16 bits).
+    fn glyph_with_second_delta(dx: u16) -> Vec<u8> {
+        let mut t = vec![0, 0, 0, 0, 0, 1, 0, 1];
+        for size in [2u32, 1, 2, 9, 0, 4, 0] {
+            t.extend_from_slice(&size.to_be_bytes());
+        }
+        t.extend_from_slice(&[0, 1]); // one contour
+        t.push(2); // two points
+        t.extend_from_slice(&[124, 125]); // 4-byte triplets: the first one negative, the second positive
+        t.extend_from_slice(&[0x75, 0x30, 0, 0]); // x = -30000, y = 0
+        t.extend_from_slice(&dx.to_be_bytes());
+        t.extend_from_slice(&[0, 0, 0]); // dy = 0, no instructions
+        t.extend_from_slice(&[0, 0, 0, 0]); // the bounding box bitmap: none given
+        t
+    }
+
+    #[test]
+    fn a_delta_that_does_not_fit_in_16_bits_is_corrupt_not_truncated() {
+        assert!(reconstruct_glyf(&glyph_with_second_delta(20_000)).is_ok());
+        assert!(matches!(reconstruct_glyf(&glyph_with_second_delta(60_000)), Err(FontError::Corrupt("coordinate delta out of range"))));
+    }
 }

@@ -275,3 +275,60 @@ fn brotli_one_symbol_codes_and_bombs() {
     assert_eq!(brotli::decompress(&bomb, 1_000_000), Err(FontError::TooLarge));
     assert!(start.elapsed() < Duration::from_secs(5), "{:?}", start.elapsed());
 }
+
+/// A Brotli stream of `blocks` meta-blocks of one byte each that ask for the most setup work an 82-byte meta-block can: 256
+/// literal block types, a 16,384-entry literal context map (one run of zeros) with the move-to-front transform undone.
+fn brotli_context_maps(blocks: usize) -> Vec<u8> {
+    let (mut bytes, mut n) = (Vec::<u8>::new(), 0usize);
+    let mut put = |value: u64, count: usize| {
+        for i in 0..count {
+            if n.is_multiple_of(8) {
+                bytes.push(0);
+            }
+            if i < 64 && (value >> i) & 1 == 1 {
+                let last = bytes.len() - 1;
+                bytes[last] |= 1 << (n % 8);
+            }
+            n += 1;
+        }
+    };
+    put(0, 1);
+    for _ in 0..blocks {
+        for (v, c) in [(0, 1), (0, 2), (0, 16), (0, 1), (1, 1), (7, 3), (127, 7), (1, 2), (0, 2), (0, 9), (1, 2), (0, 2), (0, 5), (3, 2)] {
+            put(v, c);
+        }
+        for (v, c) in [(0, 1), (0, 1), (0, 2), (0, 4)] {
+            put(v, c);
+        }
+        for _ in 0..256 {
+            put(0, 2);
+        }
+        for (v, c) in [(1, 1), (0, 3), (1, 1), (13, 4), (1, 2), (0, 2), (14, 4), (0, 14), (1, 1), (0, 1)] {
+            put(v, c);
+        }
+        for _ in 0..2 {
+            for (v, c) in [(1, 2), (0, 2), (65, 8)] {
+                put(v, c);
+            }
+        }
+        for (v, c) in [(1, 2), (0, 2), (8, 10), (1, 2), (0, 2), (0, 6)] {
+            put(v, c);
+        }
+    }
+    put(1, 1);
+    put(1, 1);
+    bytes
+}
+
+#[test]
+fn brotli_setup_work_is_limited_by_the_input() {
+    // 20 meta-blocks are a stream like any other: 20 bytes out.
+    assert_eq!(brotli::decompress(&brotli_context_maps(20), MAX_FONT_BYTES).unwrap(), vec![b'A'; 20]);
+    // 12,000 of them (984 KB) used to cost 8.5 s; the work budget (a megaunit and 16 per input byte) stops the stream
+    // after a few hundred, and what it does until then is linear.
+    let stream = brotli_context_maps(12_000);
+    assert!(stream.len() < 1_000_000);
+    let started = Instant::now();
+    assert!(matches!(brotli::decompress(&stream, MAX_FONT_BYTES), Err(FontError::TooLarge)));
+    assert!(started.elapsed() < Duration::from_secs(2), "took {:?}", started.elapsed());
+}

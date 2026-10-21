@@ -37,10 +37,12 @@ struct Case {
     extra: Vec<(String, &'static str, Vec<u8>)>,
     /// Peak private bytes allowed; `PEAK_LIMIT` unless the case sets less.
     peak_limit: u64,
+    /// Web fonts that must have been fetched, handed to the decoders and refused (the bench prints `web-fonts:`); 0: not checked.
+    fonts_failed: usize,
 }
 
 fn page(item: &'static str, html: impl Into<Vec<u8>>) -> Case {
-    Case { item, html: html.into(), content_type: "text/html; charset=utf-8", extra: Vec::new(), peak_limit: PEAK_LIMIT }
+    Case { item, html: html.into(), content_type: "text/html; charset=utf-8", extra: Vec::new(), peak_limit: PEAK_LIMIT, fonts_failed: 0 }
 }
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -111,6 +113,10 @@ fn run(case: Case, test: &str) {
     assert!(cfg!(debug_assertions) || wall <= TIME_LIMIT, "{}: took {wall:?}", case.item);
     assert!(peak <= limit, "{}: peak {peak} bytes (limit {limit})", case.item);
     assert!(stdout.lines().any(|l| l.starts_with("scroll-frames: ")), "{}: bench did not get to the scroll\n{stdout}\n{stderr}", case.item);
+    if case.fonts_failed > 0 {
+        let want = format!("web-fonts: {0} declared, 0 loaded, {0} failed", case.fonts_failed);
+        assert!(stdout.lines().any(|l| l == want), "{}: expected `{want}`\n{stdout}\n{stderr}", case.item);
+    }
 }
 
 fn lcg(seed: &mut u64) -> u8 {
@@ -483,6 +489,7 @@ fn font_case(item: &'static str, mime: &'static str, font: Vec<u8>) -> Case {
                 <p>Hello, web font. The quick brown fox jumps over the lazy dog.</p>";
     let mut c = page(item, html);
     c.extra.push(("/f.font".to_string(), mime, font));
+    c.fonts_failed = 1;
     c
 }
 
@@ -535,4 +542,113 @@ fn zlib_bomb_in_a_woff() {
     let len = f.len() as u32;
     f[8..12].copy_from_slice(&len.to_be_bytes());
     run(font_case("web font: zlib bomb (100 MB from 650 KB)", "font/woff", f), "zlib_bomb");
+}
+
+// ---- 2c/2d review: decoders and amplification ---------------------------------------------------------------------------
+
+/// A Brotli stream of `blocks` meta-blocks of one byte each, every one of them asking for what costs most to set up: 256
+/// literal block types (so a 16,384-entry literal context map) whose map is one run of zeros with the move-to-front
+/// transform undone, in about 82 bytes. Before the work budget and the O(i) move-to-front, a block cost 0.7 ms: 12,000 of
+/// them (a 984 KB font) took 8.5 s.
+fn brotli_context_maps(blocks: usize) -> Vec<u8> {
+    let mut b = Bits::new();
+    b.put(0, 1); // WBITS 16
+    for _ in 0..blocks {
+        b.put(0, 1); // ISLAST
+        b.put(0, 2); // 4 nibbles
+        b.put(0, 16); // one byte
+        b.put(0, 1); // ISUNCOMPRESSED
+        b.put(1, 1); // NBLTYPESL = 256
+        b.put(7, 3);
+        b.put(127, 7);
+        b.put(1, 2); // block type code: simple, one symbol
+        b.put(0, 2);
+        b.put(0, 9);
+        b.put(1, 2); // block count code: simple, one symbol
+        b.put(0, 2);
+        b.put(0, 5);
+        b.put(3, 2); // the first literal block: 4 symbols
+        b.put(0, 1); // NBLTYPESI = 1
+        b.put(0, 1); // NBLTYPESD = 1
+        b.put(0, 2); // NPOSTFIX
+        b.put(0, 4); // NDIRECT
+        for _ in 0..256 {
+            b.put(0, 2); // context mode
+        }
+        b.put(1, 1); // NTREESL = 2
+        b.put(0, 3);
+        b.put(1, 1); // RLEMAX = 14
+        b.put(13, 4);
+        b.put(1, 2); // the code of the map: simple, one symbol, 14 = a run
+        b.put(0, 2);
+        b.put(14, 4);
+        b.put(0, 14); // the run: 16,384 zeros
+        b.put(1, 1); // IMTF
+        b.put(0, 1); // NTREESD = 1
+        for _ in 0..2 {
+            b.put(1, 2); // two literal codes: one symbol, 'A'
+            b.put(0, 2);
+            b.put(65, 8);
+        }
+        b.put(1, 2); // the command code: one symbol
+        b.put(0, 2);
+        b.put(8, 10);
+        b.put(1, 2); // the distance code: one symbol
+        b.put(0, 2);
+        b.put(0, 6);
+    }
+    b.put(1, 1); // ISLAST
+    b.put(1, 1); // ISLASTEMPTY
+    b.bytes
+}
+
+fn base128(mut v: usize) -> Vec<u8> {
+    let mut out = vec![(v & 0x7F) as u8];
+    v >>= 7;
+    while v != 0 {
+        out.push((v & 0x7F) as u8 | 0x80);
+        v >>= 7;
+    }
+    out.reverse();
+    out
+}
+
+fn woff2_of_context_maps(blocks: usize) -> Vec<u8> {
+    let stream = brotli_context_maps(blocks);
+    let mut directory = vec![0u8]; // flags 0: cmap
+    directory.extend(base128(blocks));
+    woff2_with(blocks as u32, &directory, &stream)
+}
+
+#[test]
+fn brotli_context_maps_3000_blocks() {
+    run(font_case("web font: 3,000 Brotli meta-blocks with 16K-entry context maps", "font/woff2", woff2_of_context_maps(n(3000))), "brotli_maps_3000");
+}
+
+#[test]
+fn brotli_context_maps_12000_blocks() {
+    run(font_case("web font: 12,000 Brotli meta-blocks with 16K-entry context maps (984 KB)", "font/woff2", woff2_of_context_maps(n(12000))), "brotli_maps_12000");
+}
+
+#[test]
+fn brotli_context_maps_in_32_faces() {
+    // The most faces a page fetches, each a different file of the 12,000-block font: 32 MB of fonts.
+    let font = woff2_of_context_maps(n(12000));
+    let (mut css, mut body) = (String::new(), String::new());
+    for i in 0..32 {
+        write!(css, "@font-face {{ font-family: h{i}; src: url(/f{i}.font) }} .c{i} {{ font-family: h{i}, serif; font-size: 24px }} ").unwrap();
+        write!(body, "<p class=c{i}>Hello, web font {i}.</p>").unwrap();
+    }
+    let mut c = page("web font: 32 faces of 12,000 Brotli meta-blocks each", format!("<!doctype html><title>x</title><style>{css}</style>{body}"));
+    for i in 0..32 {
+        c.extra.push((format!("/f{i}.font"), "font/woff2", font.clone()));
+    }
+    c.fonts_failed = 32;
+    run(c, "brotli_maps_32_faces");
+}
+
+#[test]
+fn ruby_100k_pairs() {
+    let html = format!("<!doctype html><meta charset=utf-8><p style=\"width:800px\">{}</p>", "<ruby>字<rt>注音</rt></ruby>".repeat(n(100_000)));
+    run(page("ruby: 100,000 pairs", html), "ruby_100k");
 }
