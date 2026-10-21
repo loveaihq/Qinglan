@@ -287,7 +287,7 @@ impl Builder<'_> {
             }
             self.paint_box(id, x, y);
         } else {
-            self.positioned_in_scopes(id, p.position, x, y);
+            self.positioned_in_scopes(id, p.position, x, y, saved.0);
         }
         (self.fixed, self.clip) = saved;
     }
@@ -295,10 +295,12 @@ impl Builder<'_> {
     /// A positioned box on a page with scopes: it is painted inside the panes of the scopes it is in that the painting so far is
     /// not in, each clipped by the ancestors' clips of its level.
     #[inline(never)]
-    fn positioned_in_scopes(&mut self, id: BoxId, pos: Position, x: LU, y: LU) {
+    fn positioned_in_scopes(&mut self, id: BoxId, pos: Position, x: LU, y: LU, in_fixed: bool) {
         let levels = self.ancestor_levels(id, pos);
-        // A fixed box is not in what scrolls; it goes to the fixed list, past the panes that are open.
-        let detached = self.fixed.then(|| (std::mem::take(&mut self.sinks), std::mem::take(&mut self.frames), std::mem::replace(&mut self.frame, NO_SCOPE)));
+        // A fixed box is not in what scrolls; it goes to the fixed list, past the panes (and groups) that are open. Inside a fixed
+        // box (`in_fixed`: the painting is already in the fixed list) the groups that are open are its own (an opacity or a transform
+        // on it or on something between), and what it holds stays in them.
+        let detached = (self.fixed && !in_fixed).then(|| (std::mem::take(&mut self.sinks), std::mem::take(&mut self.frames), std::mem::replace(&mut self.frame, NO_SCOPE)));
         let target = if self.fixed {
             NO_SCOPE
         } else {
@@ -487,7 +489,7 @@ impl Builder<'_> {
         };
         self.ext.push((view.x, view.y));
         self.pane_clip.push(NO_CLIP);
-        self.list.scopes.push(Scope { node: b.node, parent, view, ext: (view.right().to_f32(), view.bottom().to_f32()), kind, off: Cell::new((0.0, 0.0)) });
+        self.list.scopes.push(Scope { node: b.node, parent, view, ext: (view.right().to_f32(), view.bottom().to_f32()), kind, off: Cell::new((0.0, 0.0)), fixed: self.in_fixed(i) });
         (self.list.scopes.len() - 1) as u32
     }
 

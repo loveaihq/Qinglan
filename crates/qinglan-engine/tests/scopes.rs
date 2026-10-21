@@ -88,13 +88,13 @@ fn the_bar_is_a_thumb_over_the_right_edge_that_moves_with_the_offset() {
     assert_eq!((at(&f, 94, 90), at(&f, 94, 10)), (THUMB, BLUE));
     // Dragging the thumb 30 px (it was taken at 10 px from its start): 30 / (100 - 33.3) * 200 = 90 px.
     l.list.set_scroll(l.list.scopes[0].node, 0.0, 0.0);
-    let Some(Press::Thumb { scope, axis, grab }) = l.list.bar_press((94.0, 10.0)) else { panic!("no thumb") };
+    let Some(Press::Thumb { scope, axis, grab }) = l.list.bar_press((94.0, 10.0), (94.0, 10.0)) else { panic!("no thumb") };
     assert_eq!((scope, axis), (0, 1));
-    l.list.bar_drag(scope, axis, grab, (94.0, 40.0));
+    l.list.bar_drag(scope, axis, grab, (94.0, 40.0), (94.0, 40.0));
     assert!((l.list.scopes[0].off.get().1 - 90.0).abs() < 1.0, "{:?}", l.list.scopes[0].off.get());
     // A press on the track below the thumb pages 87.5 px.
     l.list.set_scroll(l.list.scopes[0].node, 0.0, 0.0);
-    assert!(matches!(l.list.bar_press((94.0, 80.0)), Some(Press::Track)));
+    assert!(matches!(l.list.bar_press((94.0, 80.0), (94.0, 80.0)), Some(Press::Track)));
     assert_eq!(l.list.scopes[0].off.get().1, 87.5);
 }
 
@@ -102,7 +102,7 @@ fn the_bar_is_a_thumb_over_the_right_edge_that_moves_with_the_offset() {
 fn hidden_is_clipped_but_not_a_scroll_container() {
     let l = lay("<body style='margin:0'><div style='width:100px;height:100px;overflow:hidden'><div style='height:300px;background:#f00'></div></div></body>");
     assert!(l.list.scopes.is_empty());
-    assert_eq!(l.list.wheel((10.0, 10.0), 0.0, 50.0), (0.0, 50.0));
+    assert_eq!(l.list.wheel((10.0, 10.0), (10.0, 10.0), 0.0, 50.0), (0.0, 50.0));
     assert_eq!(at(&shot(&l, 0.0, 0.0), 10, 150), WHITE);
 }
 
@@ -113,14 +113,14 @@ fn the_wheel_goes_to_the_innermost_container_that_can_move_then_to_the_one_aroun
         <div style='height:200px;background:#00f'></div></div></body>");
     assert_eq!(l.list.scopes.len(), 2);
     // The inner one (index 1) has 200 px to go, the outer one 200 px (100 + 200 of content in 100).
-    assert_eq!(l.list.wheel((10.0, 10.0), 0.0, 250.0), (0.0, 0.0));
+    assert_eq!(l.list.wheel((10.0, 10.0), (10.0, 10.0), 0.0, 250.0), (0.0, 0.0));
     assert_eq!(l.list.scopes[1].off.get(), (0.0, 200.0));
     assert_eq!(l.list.scopes[0].off.get(), (0.0, 50.0));
     // The inner one is at its end: the outer one takes the next 150 and 350 are left for the page.
-    assert_eq!(l.list.wheel((10.0, 10.0), 0.0, 500.0), (0.0, 350.0));
+    assert_eq!(l.list.wheel((10.0, 10.0), (10.0, 10.0), 0.0, 500.0), (0.0, 350.0));
     assert_eq!(l.list.scopes[0].off.get(), (0.0, 200.0));
     // Outside the boxes nothing moves.
-    assert_eq!(l.list.wheel((300.0, 10.0), 0.0, 10.0), (0.0, 10.0));
+    assert_eq!(l.list.wheel((300.0, 10.0), (300.0, 10.0), 0.0, 10.0), (0.0, 10.0));
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn sticky_in_a_scroll_container_sticks_to_it_and_a_hidden_one_never_sticks() {
     assert_eq!((at(&f, 10, 5), at(&f, 10, 25)), (RED, BLUE));
     // In an `overflow: hidden` box (which never scrolls) the box is where it is laid out; the wheel passes through.
     let h = lay("<body style='margin:0;height:1000px'><div style='width:100px;height:100px;overflow:hidden'><div style='position:sticky;top:0;height:20px;background:#f00;margin-top:50px'></div></div></body>");
-    assert_eq!(h.list.wheel((10.0, 10.0), 0.0, 30.0), (0.0, 30.0));
+    assert_eq!(h.list.wheel((10.0, 10.0), (10.0, 10.0), 0.0, 30.0), (0.0, 30.0));
     assert_eq!((at(&shot(&h, 0.0, 0.0), 10, 55), at(&shot(&h, 0.0, 40.0), 10, 15)), (RED, RED));
 }
 
@@ -231,4 +231,44 @@ fn a_sticky_sidebar_that_scrolls_is_both() {
     // Page scrolled 150: stuck at the top (shifted 50), 0 .. 100 on the screen; its own content scrolled 100 shows the middle block.
     let f = shot(&l, 0.0, 150.0);
     assert_eq!((at(&f, 10, 50), at(&f, 40, 50), at(&f, 10, 120)), (BLUE, RED, WHITE));
+}
+
+const FIXED_BOX: &str = "<body style='margin:0'><div style='height:1000px'></div>\
+    <div style='position:fixed;left:300px;top:0;width:100px;height:100px;overflow:auto'>\
+    <div style='height:100px;background:#f00'></div><div style='height:100px;background:#0f0'></div><div style='height:100px;background:#00f'></div></div></body>";
+
+#[test]
+fn a_scroll_container_in_a_fixed_box_is_found_by_its_place_in_the_viewport() {
+    let l = lay(FIXED_BOX);
+    // The fixed box is the viewport's top right 100 x 100 whatever the page's scroll; with the page scrolled 200 px the pointer at
+    // viewport (310, 10) is at page (310, 210), which is not in the box's view (its coordinates are the viewport's).
+    assert_eq!(l.list.scopes.len(), 1);
+    assert!(l.list.scopes[0].fixed);
+    assert_eq!(l.list.wheel((310.0, 210.0), (310.0, 10.0), 0.0, 50.0), (0.0, 0.0));
+    assert_eq!(l.list.scopes[0].off.get(), (0.0, 50.0));
+    // 50 px down: the red part shows for 50 px, then green (the box is at the viewport's top, not scrolled with the page).
+    let f = shot(&l, 0.0, 200.0);
+    assert_eq!((at(&f, 350, 10), at(&f, 350, 60)), (RED, GREEN));
+    // A pointer elsewhere in the viewport does not scroll it, and what the box cannot take goes to the page.
+    assert_eq!(l.list.wheel((50.0, 210.0), (50.0, 10.0), 0.0, 30.0), (0.0, 30.0));
+    assert_eq!(l.list.scopes[0].off.get(), (0.0, 50.0));
+    assert_eq!(l.list.wheel((310.0, 210.0), (310.0, 10.0), 0.0, 500.0), (0.0, 350.0));
+    // Its bar is pressed and dragged where it is drawn: the right 12 px lane at x 388..400 of the viewport (the thumb, 33 px long, is
+    // at the bottom, y 67..100, after the last wheel).
+    let Some(Press::Thumb { scope, axis, grab }) = l.list.bar_press((394.0, 280.0), (394.0, 80.0)) else { panic!("no thumb") };
+    l.list.bar_drag(scope, axis, grab, (394.0, 240.0), (394.0, 40.0));
+    assert!(l.list.scopes[0].off.get().1 < 200.0);
+    assert!(matches!(l.list.bar_press((394.0, 290.0), (394.0, 90.0)), Some(Press::Track)));
+}
+
+#[test]
+fn a_positioned_child_of_a_transformed_fixed_box_moves_with_it() {
+    // The page has a scroll container (so it has scopes, and fixed boxes are painted past the open panes). The fixed box is moved 50 px
+    // right by its transform; its absolutely positioned child (20 x 20 at 10, 10 inside it) is part of the same group: red at
+    // x 260..280, not at x 210..230 where it would be without the transform.
+    let l = lay("<body style='margin:0'><div style='width:100px;height:100px;overflow:auto'><div style='height:300px'></div></div>\
+        <div style='position:fixed;left:200px;top:0;width:100px;height:100px;transform:translate(50px,0)'>\
+        <div style='position:absolute;left:10px;top:10px;width:20px;height:20px;background:#f00'></div></div></body>");
+    let f = shot(&l, 0.0, 0.0);
+    assert_eq!((at(&f, 265, 15), at(&f, 215, 15)), (RED, WHITE));
 }

@@ -964,7 +964,7 @@ impl Browser {
             && !list.scopes.is_empty()
         {
             let pt = page.to_page(self.mouse.0 as f32 / self.dpr, self.mouse.1 as f32 / self.dpr, self.scroll, self.cross);
-            rest = list.wheel(pt, dx, dy);
+            rest = list.wheel(pt, (self.mouse.0 as f32 / self.dpr, self.mouse.1 as f32 / self.dpr), dx, dy);
             if rest != (dx, dy) {
                 self.relayout.scrolled(Instant::now());
                 self.ui.invalidate();
@@ -1015,7 +1015,7 @@ impl Browser {
             return;
         }
         let pt = page.to_page(cx, cy, self.scroll, self.cross);
-        match list.bar_press(pt) {
+        match list.bar_press(pt, (cx, cy)) {
             Some(Press::Thumb { scope, axis, grab }) => {
                 self.swallow = true;
                 self.drag = Some(Drag::Scope { scope, axis, grab });
@@ -1035,7 +1035,7 @@ impl Browser {
         let Some(list) = &page.list else { return };
         match d {
             Drag::Scope { scope, axis, grab } => {
-                list.bar_drag(scope, axis, grab, page.to_page(cx, cy, self.scroll, self.cross));
+                list.bar_drag(scope, axis, grab, page.to_page(cx, cy, self.scroll, self.cross), (cx, cy));
                 self.relayout.scrolled(Instant::now());
                 self.ui.invalidate();
             }

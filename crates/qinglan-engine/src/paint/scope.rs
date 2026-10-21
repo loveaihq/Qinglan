@@ -54,6 +54,9 @@ pub struct Scope {
     pub kind: ScopeKind,
     /// How far a scroll container is scrolled (CSS px).
     pub off: Cell<(f32, f32)>,
+    /// Inside a `position: fixed` box: `view` is in viewport coordinates, which do not move with the page, so a pointer is
+    /// matched against it by its place in the viewport, not in the page.
+    pub fixed: bool,
 }
 
 /// The items of one scope, drawn together.
@@ -157,15 +160,17 @@ impl DisplayList {
         (x, y)
     }
 
-    /// The innermost scroll container under the point (page coordinates), or `NO_SCOPE`.
-    pub fn scope_at(&self, pt: (f32, f32)) -> u32 {
+    /// The innermost scroll container under the point (`pt` in page coordinates, `at` the same place in the viewport, which is what
+    /// the containers of fixed boxes are matched with), or `NO_SCOPE`.
+    pub fn scope_at(&self, pt: (f32, f32), at: (f32, f32)) -> u32 {
         let mut inside = vec![false; self.scopes.len()];
         let mut best = NO_SCOPE;
         for (i, s) in self.scopes.iter().enumerate() {
             let up = s.parent == NO_SCOPE || inside.get(s.parent as usize) == Some(&true);
             let ok = up && (!s.scrolls() || {
                 let (sx, sy) = self.shift_of(i as u32);
-                contains(&s.view, pt.0 + sx, pt.1 + sy)
+                let p = if s.fixed { at } else { pt };
+                contains(&s.view, p.0 + sx, p.1 + sy)
             });
             if let Some(slot) = inside.get_mut(i) {
                 *slot = ok;
@@ -179,8 +184,8 @@ impl DisplayList {
 
     /// Scroll the containers under the point by (`dx`, `dy`) CSS px, the innermost that still can first and then those around
     /// it; what none of them could take is returned (for the page).
-    pub fn wheel(&self, pt: (f32, f32), mut dx: f32, mut dy: f32) -> (f32, f32) {
-        let mut i = self.scope_at(pt);
+    pub fn wheel(&self, pt: (f32, f32), at: (f32, f32), mut dx: f32, mut dy: f32) -> (f32, f32) {
+        let mut i = self.scope_at(pt, at);
         for _ in 0..MAX_CHAIN {
             let Some(s) = self.scopes.get(i as usize) else { break };
             if let ScopeKind::Scroll(show) = &s.kind {
@@ -195,15 +200,16 @@ impl DisplayList {
         (dx, dy)
     }
 
-    /// A press at the point (page coordinates) on the bar of a scroll container, if it is on one.
-    pub fn bar_press(&self, pt: (f32, f32)) -> Option<Press> {
+    /// A press at the point (page coordinates, and `at` in the viewport as for [`DisplayList::scope_at`]) on the bar of a scroll container, if it is on one.
+    pub fn bar_press(&self, pt: (f32, f32), at: (f32, f32)) -> Option<Press> {
         for (i, s) in self.scopes.iter().enumerate().rev() {
             if !s.scrolls() {
                 continue;
             }
             let (sx, sy) = self.shift_of(i as u32);
             let (w, h) = (s.view.w.to_f32(), s.view.h.to_f32());
-            let (x, y) = (pt.0 + sx - s.view.x.to_f32(), pt.1 + sy - s.view.y.to_f32());
+            let p = if s.fixed { at } else { pt };
+            let (x, y) = (p.0 + sx - s.view.x.to_f32(), p.1 + sy - s.view.y.to_f32());
             if x < 0.0 || y < 0.0 || x >= w || y >= h {
                 continue;
             }
@@ -225,13 +231,14 @@ impl DisplayList {
         None
     }
 
-    /// The thumb held by `grab` follows the pointer at `pt` (page coordinates).
-    pub fn bar_drag(&self, scope: u32, axis: u8, grab: f32, pt: (f32, f32)) {
+    /// The thumb held by `grab` follows the pointer at `pt` (page coordinates; `at` in the viewport).
+    pub fn bar_drag(&self, scope: u32, axis: u8, grab: f32, pt: (f32, f32), at: (f32, f32)) {
         let Some(s) = self.scopes.get(scope as usize) else { return };
         let Some((lane, _, tl)) = s.bar(usize::from(axis)) else { return };
         let (sx, sy) = self.shift_of(scope);
         let m = s.max();
-        let (along, max) = if axis == 1 { (pt.1 + sy - s.view.y.to_f32(), m.1) } else { (pt.0 + sx - s.view.x.to_f32(), m.0) };
+        let p = if s.fixed { at } else { pt };
+        let (along, max) = if axis == 1 { (p.1 + sy - s.view.y.to_f32(), m.1) } else { (p.0 + sx - s.view.x.to_f32(), m.0) };
         let v = ((along - grab) / (lane - tl).max(1.0) * max).fclamp(0.0, max);
         let o = s.off.get();
         s.off.set(if axis == 1 { (o.0, v) } else { (v, o.1) });
