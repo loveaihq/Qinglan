@@ -258,6 +258,18 @@ pub fn style_document_with(
     opts: &StyleOptions,
     platform: Option<&dyn Platform>,
 ) -> StyleOutput {
+    let out = style_document_inner(doc, doc_url, loader, opts, platform);
+    cascade::reset_custom_memo();
+    out
+}
+
+fn style_document_inner(
+    doc: &mut Document,
+    doc_url: Option<&Url>,
+    loader: &mut dyn ResourceLoader,
+    opts: &StyleOptions,
+    platform: Option<&dyn Platform>,
+) -> StyleOutput {
     let quirks = doc.quirks == QuirksMode::Quirks;
     let base = base_url(doc, doc_url);
     let sources = collect_sources(doc, base.as_ref());

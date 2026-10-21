@@ -11,7 +11,7 @@
 //!   the class's list of slabs with room, one with a free block comes back, and one with no live block left is
 //!   decommitted (the class keeps its last slab), so the memory a phase of the page needed (parsing, styling) does not
 //!   stay committed after it.
-//! * **Big** (128 KiB and up, alignment up to a page): its own `VirtualAlloc` pages, given back when freed. The Windows
+//! * **Big** (32 KiB and up, alignment up to a page): its own `VirtualAlloc` pages, given back when freed. The Windows
 //!   heap keeps such blocks as free space inside its segments (a doubling `Vec` of 2 MB leaves 1 + 0.5 + ... MB holes).
 //! * Everything else (and small blocks when the address range or `VirtualAlloc` is exhausted): `System`.
 //!
@@ -104,7 +104,7 @@ const GROUP: usize = 4;
 /// again (the style pass) does not commit and decommit pages over and over. More than this are decommitted.
 const SPARE_MAX: usize = 32;
 /// Blocks of this size and up get their own pages from `VirtualAlloc` and give them back when freed.
-const BIG_MIN: usize = 128 * 1024;
+const BIG_MIN: usize = 32 * 1024;
 const PAGE: usize = 4096;
 
 #[link(name = "kernel32")]

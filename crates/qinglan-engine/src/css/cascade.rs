@@ -1311,9 +1311,39 @@ fn is_css_wide(tokens: &[Cv]) -> Option<&'static str> {
 
 /// The element's custom property map: the parent's, overridden by its own declarations (var() substituted,
 /// cycles and over-long values made invalid).
+type MemoEntry = (Rc<CustomProps>, Vec<(Atom, Rc<Vec<Cv>>)>, Rc<CustomProps>);
+
+thread_local! {
+    /// Maps made from the same parent map and the same declarations are the same map. The icons of a page each set `fill`
+    /// and `stroke` (kept as custom-property entries, see `svg_props.rs`) on top of a parent map of hundreds of variables,
+    /// and every copy of such a map is 20-50 KB: on a GitHub page that was 5 MB of the 29.
+    static CUSTOM_MEMO: std::cell::RefCell<Vec<MemoEntry>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Only parents with this many entries are worth remembering, and only this many results are kept.
+const MEMO_MIN_PARENT: usize = 32;
+const MEMO_MAX: usize = 16;
+
+/// Forget the remembered maps (the end of a style pass: they hold memory).
+pub fn reset_custom_memo() {
+    CUSTOM_MEMO.with(|m| m.borrow_mut().clear());
+}
+
 fn resolve_custom_props(doc: &Document, decls: &[(Atom, Rc<Vec<Cv>>)], parent: &Rc<CustomProps>) -> Rc<CustomProps> {
     if decls.is_empty() {
         return parent.clone();
+    }
+    let memo = parent.len() >= MEMO_MIN_PARENT;
+    if memo {
+        let hit = CUSTOM_MEMO.with(|m| {
+            m.borrow()
+                .iter()
+                .find(|e| Rc::ptr_eq(&e.0, parent) && e.1.len() == decls.len() && e.1.iter().zip(decls).all(|(a, b)| a.0 == b.0 && (Rc::ptr_eq(&a.1, &b.1) || a.1 == b.1)))
+                .map(|e| e.2.clone())
+        });
+        if let Some(h) = hit {
+            return h;
+        }
     }
     let mut pending: FxHashMap<Atom, Rc<Vec<Cv>>> = FxHashMap::default();
     let mut order: Vec<Atom> = Vec::new();
@@ -1339,7 +1369,17 @@ fn resolve_custom_props(doc: &Document, decls: &[(Atom, Rc<Vec<Cv>>)], parent: &
             }
         }
     }
-    Rc::new(map)
+    let out = Rc::new(map);
+    if memo {
+        CUSTOM_MEMO.with(|m| {
+            let mut m = m.borrow_mut();
+            if m.len() >= MEMO_MAX {
+                m.remove(0);
+            }
+            m.push((parent.clone(), decls.to_vec(), out.clone()));
+        });
+    }
+    out
 }
 
 fn resolve_one(
