@@ -1,12 +1,12 @@
 # WPT `css/css-flexbox`
 
-测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-flexbox`，用时 6.6 秒。
+测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-flexbox`，用时 14.3 秒。
 
-- 通过 **666 / 951**（70.0%）
+- 通过 **668 / 951**（70.2%）
 - bug 类失败：**188**
 - 跳过：无
 
-失败分类：bug 94，bug (flex/grid with vertical writing) 8，bug (open) 86，limit (partial intrinsic size) 2，limit (placeholder boxes) 12，limit (test platform) 26，not planned 42，step 2e 15
+失败分类：bug 94，bug (flex/grid with vertical writing) 8，bug (open) 86，limit (flex min-size) 1，limit (partial intrinsic size) 2，limit (placeholder boxes) 11，limit (test platform) 26，not planned 42，step 2e 13
 
 ## 失败
 
@@ -81,7 +81,6 @@
 | css-flexbox-row-wrap.html | bug | 7320 pixels differ (largest difference 255); first at (42,80): #000000, the reference has #ffffff |
 | css-flexbox-row.html | bug | 6060 pixels differ (largest difference 255); first at (42,80): #000000, the reference has #ffffff |
 | css-flexbox-test1.html | bug | 6144 pixels differ (largest difference 255); first at (56,80): #008000, the reference has #ffffff |
-| fieldset-as-item-overflow.html | limit (placeholder boxes) | canvas, video, iframe and object are grey placeholder boxes in layer 2 (no content, no intrinsic size), and fieldset has no special layout; the reference needs the real thing (10000 pixels differ (largest difference 255); first at (11,111): #000000, the reference has #008000) |
 | fieldset-baseline-alignment.html | bug (open) | baseline alignment (css-flexbox-1 8.5, 9.4): items with different font sizes or in vertical lines; the references use offsets worked out with real font metrics, the first baseline of a container is the first item's. Not analysed one by one (4096 pixels differ (largest difference 255); first at (8,16): #000000, the reference has #ffffff) |
 | fixed-table-layout-with-percentage-width-in-flex-item.html | bug (open) | a table as a flex item: its min-content / stretched cross size follows the plain table algorithm with the forced size; Edge sizes the table wrapper box (css-tables-3) differently when it is a flex item. Not analysed one by one (53748 pixels differ (largest difference 255); first at (11,9): #ff0000, the reference has #0000ff) |
 | flex-abspos-inset-nested-001.html | bug (open) | out-of-flow descendants of a nested flex container: their containing block / static position when an inset or `order` is involved is not matched. Not analysed one by one (39800 pixels differ (largest difference 255); first at (9,48): #ffffff, the reference has #008000) |
@@ -104,13 +103,14 @@
 | flex-aspect-ratio-img-row-015.html | bug | 20000 pixels differ (largest difference 255); first at (108,48): #008000, the reference has #ffffff |
 | flex-aspect-ratio-img-row-017.html | bug (open) | flex items that are replaced elements with an aspect ratio: the flex-specific rules (transferred size suggestion 4.5, flex base size from the ratio 9.2 B, stretching an image keeping its ratio) are not implemented; only the ratio of the replaced box itself is used (9900 pixels differ (largest difference 255); first at (18,64): #ff0000, the reference has #008000) |
 | flex-aspect-ratio-intrinsic-padding-001.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (20000 pixels differ (largest difference 255); first at (28,28): #ffffff, the reference has #008000) |
-| flex-child-percent-basis-resize-1.html | step 2e | uses scrolling, sticky or form controls (2e-2) (3520 pixels differ (largest difference 255); first at (8,108): #ffffff, the reference has #000000) |
+| flex-child-percent-basis-resize-1.html | step 2e | uses scrolling, sticky or form controls (2e-2) (182 pixels differ (largest difference 117); first at (100,8): #ffffff, the reference has #8a8a8a) |
 | flex-container-line-if-empty-vertical-writing-mode.html | bug | 76400 pixels differ (largest difference 255); first at (28,64): #008000, the reference has #ffffff |
 | flex-container-max-content-001.html | bug | 12526 pixels differ (largest difference 255); first at (98,8): #ffffff, the reference has #0000ff |
 | flex-container-min-content-001.html | bug | 7064 pixels differ (largest difference 255); first at (82,8): #ffffff, the reference has #0000ff |
 | flex-grow-001.xht | bug (open) | intrinsic sizes of flex containers (9.9): multi-line and column containers use the simple formula of the web-compatible algorithm, items with flex-basis/min-content interplay are approximated. Not analysed one by one (14400 pixels differ (largest difference 255); first at (9,9): #008000, the reference has #ffffff) |
 | flex-grow-009.html | bug (open) | intrinsic sizes of flex containers (9.9): multi-line and column containers use the simple formula of the web-compatible algorithm, items with flex-basis/min-content interplay are approximated. Not analysed one by one (10000 pixels differ (largest difference 255); first at (8,48): #ff0000, the reference has #008000) |
 | flex-item-max-height-min-content.html | bug (open) | intrinsic sizes of flex containers (9.9): multi-line and column containers use the simple formula of the web-compatible algorithm, items with flex-basis/min-content interplay are approximated. Not analysed one by one (10000 pixels differ (largest difference 255); first at (8,148): #008000, the reference has #ffffff) |
+| flex-item-min-height-min-content-overflow.html | limit (flex min-size) | min-height: min-content on a scrollable flex item is taken as 0 (the keyword is not resolved in the flex min size); it was hidden before 2e-2 because auto/scroll boxes did not clip (940 pixels differ (largest difference 255); first at (12,64): #8a8a8a, the reference has #008000) |
 | flex-item-transferred-sizes-padding-border-sizing.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (5000 pixels differ (largest difference 255); first at (58,48): #ffffff, the reference has #008000) |
 | flex-item-transferred-sizes-padding-content-sizing.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (9000 pixels differ (largest difference 255); first at (18,48): #ffffff, the reference has #008000) |
 | flex-lines/multi-line-wrap-reverse-column-reverse.html | bug | 149060 pixels differ (largest difference 255); first at (533,10): #00ffff, the reference has #ffffff |
@@ -176,7 +176,7 @@
 | flexbox-min-width-auto-002c.html | bug (open) | flex items that are replaced elements with an aspect ratio: the flex-specific rules (transferred size suggestion 4.5, flex base size from the ratio 9.2 B, stretching an image keeping its ratio) are not implemented; only the ratio of the replaced box itself is used (2270 pixels differ (largest difference 255); first at (41,8): #9b379b, the reference has #9c399c) |
 | flexbox-min-width-auto-005.html | bug (open) | not analysed one by one (a css-flexbox-1 test that still differs from the reference); the families above and in docs/decisions.md 2b-1 list what is known to be missing (6000 pixels differ (largest difference 255); first at (48,64): #ff0000, the reference has #008000) |
 | flexbox-min-width-auto-006.html | bug | 14000 pixels differ (largest difference 255); first at (9,65): #ffffff, the reference has #008000 |
-| flexbox-overflow-horiz-001.html | step 2e | uses scrolling, sticky or form controls (2e-2) (4080 pixels differ (largest difference 128); first at (61,8): #008080, the reference has #800080) |
+| flexbox-overflow-horiz-001.html | step 2e | uses scrolling, sticky or form controls (2e-2) (3788 pixels differ (largest difference 128); first at (61,8): #008080, the reference has #800080) |
 | flexbox-paint-ordering-002.xhtml | bug (open) | not analysed one by one (a css-flexbox-1 test that still differs from the reference); the families above and in docs/decisions.md 2b-1 list what is known to be missing (244 pixels differ (largest difference 238); first at (88,88): #800080, the reference has #add8e6) |
 | flexbox-safe-overflow-position-002.html | bug (open) | overflow alignment: `safe` / `unsafe` and the fallback of space-* values with negative free space differ from the reference in some positions. Not analysed one by one (2000 pixels differ (largest difference 255); first at (8,54): #008000, the reference has #ffffff) |
 | flexbox-safe-overflow-position-003.html | bug (open) | overflow alignment: `safe` / `unsafe` and the fallback of space-* values with negative free space differ from the reference in some positions. Not analysed one by one (1800 pixels differ (largest difference 255); first at (0,64): #008000, the reference has #ffffff) |
@@ -234,7 +234,7 @@
 | flexbox_flex-initial.html | limit (test platform) | the test depends on the width of real text in the default font: with the test platform's 1em glyphs a word ("three", "four") is wider than the box the item shrinks to, so the automatic minimum size (css-flexbox-1 4.5) keeps it wider than the reference shows (15360 pixels differ (largest difference 255); first at (73,33): #0000ff, the reference has #ffffff) |
 | flexbox_object.html | limit (placeholder boxes) | canvas, video, iframe and object are grey placeholder boxes in layer 2 (no content, no intrinsic size), and fieldset has no special layout; the reference needs the real thing (104992 pixels differ (largest difference 204); first at (8,8): #767676, the reference has #000000) |
 | flexbox_writing_mode_vertical_lays_out_contents_from_top_to_bottom.html | bug | 40000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000 |
-| flexitem-stretch-range.html | step 2e | uses scrolling, sticky or form controls (2e-2) (78787 pixels differ (largest difference 222); first at (13,162): #e0e0e0, the reference has #767676) |
+| flexitem-stretch-range.html | step 2e | uses scrolling, sticky or form controls (2e-2) (28468 pixels differ (largest difference 255); first at (386,67): #eff6ff, the reference has #ffffff) |
 | gap-003-lr.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (2000 pixels differ (largest difference 255); first at (40,8): #ffffff, the reference has #008000) |
 | gap-003-rl.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (2000 pixels differ (largest difference 255); first at (740,8): #ffffff, the reference has #008000) |
 | gap-007-lr.html | bug | 1424 pixels differ (largest difference 255); first at (95,8): #808080, the reference has #008000 |
@@ -265,11 +265,12 @@
 | nested-flex-image-loading-invalidates-intrinsic-sizes.html | bug (open) | flex items that are replaced elements with an aspect ratio: the flex-specific rules (transferred size suggestion 4.5, flex base size from the ratio 9.2 B, stretching an image keeping its ratio) are not implemented; only the ratio of the replaced box itself is used (8400 pixels differ (largest difference 255); first at (48,48): #ffffff, the reference has #008000) |
 | order/order-abs-children-painting-order.html | bug (open) | out-of-flow descendants of a nested flex container: their containing block / static position when an inset or `order` is involved is not matched. Not analysed one by one (10000 pixels differ (largest difference 255); first at (8,48): #ff0000, the reference has #008000) |
 | ortho-table-item-001.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (10000 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #008000) |
-| overflow-area-001.html | step 2e | uses scrolling, sticky or form controls (2e-2) (20400 pixels differ (largest difference 255); first at (217,91): #0000ff, the reference has #00ffff) |
-| overflow-area-002.html | step 2e | uses scrolling, sticky or form controls (2e-2) (20400 pixels differ (largest difference 255); first at (127,91): #ffffff, the reference has #00ffff) |
-| overflow-top-left.html | step 2e | uses scrolling, sticky or form controls (2e-2) (37860 pixels differ (largest difference 255); first at (14,0): #ffffff, the reference has #cccccc) |
-| percentage-descendant-of-anonymous-flex-item.html | step 2e | uses scrolling, sticky or form controls (2e-2) (20733 pixels differ (largest difference 255); first at (8,64): #ffffff, the reference has #d3d3d3) |
-| percentage-heights-015.html | step 2e | uses scrolling, sticky or form controls (2e-2) (55000 pixels differ (largest difference 255); first at (8,164): #ff0000, the reference has #008000) |
+| overflow-area-001.html | step 2e | uses scrolling, sticky or form controls (2e-2) (5380 pixels differ (largest difference 138); first at (209,91): #00ffff, the reference has #8a8a8a) |
+| overflow-area-002.html | step 2e | uses scrolling, sticky or form controls (2e-2) (3956 pixels differ (largest difference 138); first at (209,91): #00ffff, the reference has #8a8a8a) |
+| overflow-area-003.html | step 2e | uses scrolling, sticky or form controls (2e-2) (1424 pixels differ (largest difference 138); first at (104,360): #8a8a8a, the reference has #008080) |
+| overflow-top-left.html | step 2e | uses scrolling, sticky or form controls (2e-2) (30514 pixels differ (largest difference 255); first at (88,92): #000000, the reference has #ffffff) |
+| percentage-descendant-of-anonymous-flex-item.html | step 2e | uses scrolling, sticky or form controls (2e-2) (20726 pixels differ (largest difference 255); first at (9,64): #ffffff, the reference has #e7e7e7) |
+| percentage-heights-015.html | step 2e | uses scrolling, sticky or form controls (2e-2) (44284 pixels differ (largest difference 255); first at (8,164): #ff0000, the reference has #008000) |
 | percentage-heights-020.html | limit (placeholder boxes) | canvas, video, iframe and object are grey placeholder boxes in layer 2 (no content, no intrinsic size), and fieldset has no special layout; the reference needs the real thing (31916 pixels differ (largest difference 255); first at (8,64): #767676, the reference has #008000) |
 | percentage-heights-022.html | limit (placeholder boxes) | canvas, video, iframe and object are grey placeholder boxes in layer 2 (no content, no intrinsic size), and fieldset has no special layout; the reference needs the real thing (121935 pixels differ (largest difference 255); first at (8,64): #767676, the reference has #008000) |
 | percentage-heights-023.html | limit (placeholder boxes) | canvas, video, iframe and object are grey placeholder boxes in layer 2 (no content, no intrinsic size), and fieldset has no special layout; the reference needs the real thing (42332 pixels differ (largest difference 255); first at (8,64): #767676, the reference has #008000) |
@@ -280,9 +281,6 @@
 | percentage-widths-001.html | bug (open) | definite sizes (css-flexbox-1 9.8) for percentages inside items: a stretched item or an item of an auto-height container is not always definite for its children; and percentage widths wait for the shrunk size. Not analysed one by one (16576 pixels differ (largest difference 255); first at (108,8): #008000, the reference has #000000) |
 | position-relative-percentage-top-002.html | bug (open) | definite sizes (css-flexbox-1 9.8) for percentages inside items: a stretched item or an item of an auto-height container is not always definite for its children; and percentage widths wait for the shrunk size. Not analysed one by one (20000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
 | relayout-intrinsic-block-size.html | bug (open) | flex items that are replaced elements with an aspect ratio: the flex-specific rules (transferred size suggestion 4.5, flex base size from the ratio 9.2 B, stretching an image keeping its ratio) are not implemented; only the ratio of the replaced box itself is used (11834 pixels differ (largest difference 255); first at (8,48): #767676, the reference has #008000) |
-| select-element-multiple.html | step 2e | uses scrolling, sticky or form controls (2e-2) (448 pixels differ (largest difference 255); first at (8,8): #767676, the reference has #ffffff) |
-| select-element-zero-height-001.html | step 2e | uses scrolling, sticky or form controls (2e-2) (3150 pixels differ (largest difference 255); first at (9,9): #767676, the reference has #393939) |
-| select-element-zero-height-002.html | step 2e | uses scrolling, sticky or form controls (2e-2) (3150 pixels differ (largest difference 255); first at (9,9): #767676, the reference has #393939) |
 | stretch-obeys-min-max-002.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (1000 pixels differ (largest difference 255); first at (108,64): #008000, the reference has #ffffff) |
 | stretch-requires-computed-auto-size.html | bug (open) | definite sizes (css-flexbox-1 9.8) for percentages inside items: a stretched item or an item of an auto-height container is not always definite for its children; and percentage widths wait for the shrunk size. Not analysed one by one (10000 pixels differ (largest difference 255); first at (108,64): #ff0000, the reference has #ffffff) |
 | stretching-orthogonal-flows.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (15680 pixels differ (largest difference 255); first at (8,68): #ff0000, the reference has #008000) |
@@ -378,6 +376,7 @@
 - css-flexbox-img-expand-evenly.html
 - display-flex-001.htm
 - empty-flex-box-and-margin-collapsing.html
+- fieldset-as-item-overflow.html
 - fit-content-item-001.html
 - fit-content-item-002.html
 - fit-content-item-003.html
@@ -454,7 +453,6 @@
 - flex-item-content-is-min-width-max-content.html
 - flex-item-max-width-min-content-002.html
 - flex-item-max-width-min-content.html
-- flex-item-min-height-min-content-overflow.html
 - flex-item-min-height-min-content.html
 - flex-item-min-width-min-content-max-width.html
 - flex-item-min-width-min-content.html
@@ -906,7 +904,6 @@
 - order/order-with-column-reverse.html
 - order/order-with-row-reverse.html
 - order-painting.html
-- overflow-area-003.html
 - padding-overflow.html
 - percentage-heights-002.html
 - percentage-heights-004.html
@@ -929,6 +926,9 @@
 - percentage-size-quirks-003.html
 - position-fixed-001.html
 - position-relative-percentage-top-003.html
+- select-element-multiple.html
+- select-element-zero-height-001.html
+- select-element-zero-height-002.html
 - stretch-flex-item-checkbox-input.html
 - stretch-flex-item-radio-input.html
 - stretch-input-in-column.html

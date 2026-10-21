@@ -1,12 +1,12 @@
 # WPT `css/css-tables`
 
-测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-tables`，用时 0.7 秒。
+测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-tables`，用时 1.9 秒。
 
 - 通过 **90 / 140**（64.3%）
-- bug 类失败：**31**
+- bug 类失败：**43**
 - 跳过：无
 
-失败分类：bug (open) 31，limit (print) 2，step 2c 7，step 2d 6，step 2e 4
+失败分类：bug 12，bug (open) 31，limit (overlay scroll bars) 1，limit (print) 2，step 2e 4
 
 ## 失败
 
@@ -17,48 +17,48 @@
 | absolute-tables-010.tentative.html | bug (open) | absolutely positioned tables with height / insets: not analyzed (10000 pixels differ (largest difference 255); first at (108,48): #008000, the reference has #ffffff) |
 | absolute-tables-011.tentative.html | bug (open) | absolutely positioned tables with height / insets: not analyzed (800 pixels differ (largest difference 255); first at (0,48): #008000, the reference has #ffffff) |
 | baseline-empty-cell-001.html | bug (open) | baseline details of table cells and inline-tables (empty cells, absolutely positioned boxes in a cell); not analyzed (303 pixels differ (largest difference 255); first at (95,8): #ffffff, the reference has #000000) |
-| baseline-vertical.html | step 2d | uses text features (37186 pixels differ (largest difference 255); first at (98,8): #000000, the reference has #ffffff) |
+| baseline-vertical.html | bug | 21070 pixels differ (largest difference 255); first at (68,8): #ffffff, the reference has #000000 |
 | border-collapse-double-border.html | bug (open) | collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one (renders like css/css-tables/border-collapse-double-border-notref.html, which it must not) |
-| box-shadow-001.html | step 2c | uses painting effects (3600 pixels differ (largest difference 255); first at (28,84): #ff0000, the reference has #008000) |
-| calc-percent-plus-0px-auto.html | bug (open) | calc() with a percentage in the width of a table or cell is treated as auto; not analyzed further (976 pixels differ (largest difference 255); first at (140,8): #ffffff, the reference has #000000) |
-| calc-percent-plus-0px-fixed.html | bug (open) | calc() with a percentage in the width of a table or cell is treated as auto; not analyzed further (1152 pixels differ (largest difference 255); first at (74,11): #ffffff, the reference has #000000) |
+| box-shadow-001.html | bug | 2000 pixels differ (largest difference 255); first at (28,84): #ff0000, the reference has #008000 |
+| calc-percent-plus-0px-auto.html | bug (open) | calc() with a percentage in the width of a table or cell is treated as auto; not analyzed further (1002 pixels differ (largest difference 255); first at (140,8): #ffffff, the reference has #545454) |
+| calc-percent-plus-0px-fixed.html | bug (open) | calc() with a percentage in the width of a table or cell is treated as auto; not analyzed further (1180 pixels differ (largest difference 255); first at (73,11): #696969, the reference has #000000) |
 | caption-relative-positioning.html | bug (open) | not analyzed (10000 pixels differ (largest difference 255); first at (8,114): #ff0000, the reference has #008000) |
-| col-definite-max-size-001.html | bug (open) | min-width / max-width / width on a col element are not applied (only a fixed width or % width is) (5648 pixels differ (largest difference 255); first at (80,8): #000000, the reference has #ffffff) |
-| col-definite-min-size-001.html | bug (open) | min-width / max-width / width on a col element are not applied (only a fixed width or % width is) (2096 pixels differ (largest difference 255); first at (100,8): #ffffff, the reference has #000000) |
-| col-definite-size-001.html | bug (open) | min-width / max-width / width on a col element are not applied (only a fixed width or % width is) (360 pixels differ (largest difference 255); first at (80,50): #000000, the reference has #ffffff) |
+| col-definite-max-size-001.html | bug (open) | min-width / max-width / width on a col element are not applied (only a fixed width or % width is) (5675 pixels differ (largest difference 255); first at (80,8): #545454, the reference has #ffffff) |
+| col-definite-min-size-001.html | bug (open) | min-width / max-width / width on a col element are not applied (only a fixed width or % width is) (2106 pixels differ (largest difference 255); first at (100,8): #ffffff, the reference has #545454) |
+| col-definite-size-001.html | bug (open) | min-width / max-width / width on a col element are not applied (only a fixed width or % width is) (363 pixels differ (largest difference 255); first at (80,50): #545454, the reference has #ffffff) |
 | collapsed-border-fragmentation-001-print.html | limit (print) | a reftest for paged media (print fragmentation); the harness renders the screen (1440 pixels differ (largest difference 255); first at (100,168): #000000, the reference has #ffffff) |
 | collapsed-border-fragmentation-002-print.html | limit (print) | a reftest for paged media (print fragmentation); the harness renders the screen (14768 pixels differ (largest difference 255); first at (0,3): #000000, the reference has #ffffff) |
 | collapsed-border-positioned-tr-td.html | bug (open) | collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one (613 pixels differ (largest difference 255); first at (8,8): #ffff00, the reference has #0000ff) |
-| height-distribution/percentage-sizing-of-table-cell-children-002.html | step 2e | uses svg, scrolling, sticky or form controls (6901 pixels differ (largest difference 255); first at (36,86): #00ffff, the reference has #ffff00) |
-| height-distribution/percentage-sizing-of-table-cell-replaced-children-001.html | step 2e | uses svg, scrolling, sticky or form controls (6901 pixels differ (largest difference 255); first at (36,86): #00ffff, the reference has #ffff00) |
-| height-distribution/td-different-subpixel-padding-in-same-row-vertical-rl.html | step 2d | uses text features (116 pixels differ (largest difference 255); first at (239,30): #ffffff, the reference has #000000) |
-| paint/col-paint-vrl-rtl.html | step 2c | uses painting effects (1408 pixels differ (largest difference 255); first at (41,8): #ffffff, the reference has #000000) |
+| height-distribution/percentage-sizing-of-table-cell-007.html | limit (overlay scroll bars) | the scroll bar of overflow-y: scroll is drawn over the content and takes no layout width (the reference's classic bar narrows the content box) (10296 pixels differ (largest difference 255); first at (103,11): #008000, the reference has #8a8a8a) |
+| height-distribution/percentage-sizing-of-table-cell-children-002.html | step 2e | uses scrolling, sticky or form controls (2e-2) (6901 pixels differ (largest difference 255); first at (36,86): #00ffff, the reference has #ffff00) |
+| height-distribution/percentage-sizing-of-table-cell-replaced-children-001.html | step 2e | uses scrolling, sticky or form controls (2e-2) (6901 pixels differ (largest difference 255); first at (36,86): #00ffff, the reference has #ffff00) |
+| height-distribution/td-different-subpixel-padding-in-same-row-vertical-rl.html | bug | 116 pixels differ (largest difference 255); first at (239,30): #ffffff, the reference has #000000 |
+| paint/col-paint-vrl-rtl.html | bug | 26046 pixels differ (largest difference 255); first at (41,8): #ffffff, the reference has #000000 |
 | percent-height-replaced-in-percent-cell-002.html | bug (open) | a percentage height inside a table cell is treated as auto (the cell height is not definite when its content is laid out) (31735 pixels differ (largest difference 255); first at (8,48): #767676, the reference has #008000) |
 | percent-height-replaced-in-percent-cell-003.html | bug (open) | a percentage height inside a table cell is treated as auto (the cell height is not definite when its content is laid out) (9999 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #008000) |
 | percent-height-replaced-in-percent-cell-004.html | bug (open) | a percentage height inside a table cell is treated as auto (the cell height is not definite when its content is laid out) (9999 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #008000) |
 | percentages-grandchildren-quirks-mode-002.html | bug (open) | a percentage height inside a table cell is treated as auto (the cell height is not definite when its content is laid out) (10000 pixels differ (largest difference 255); first at (8,48): #ff0000, the reference has #008000) |
-| row-group-margin-border-padding.html | step 2d | uses text features (462 pixels differ (largest difference 255); first at (13,1): #000000, the reference has #ffffff) |
-| row-margin-border-padding.html | step 2d | uses text features (462 pixels differ (largest difference 255); first at (13,1): #000000, the reference has #ffffff) |
+| row-group-margin-border-padding.html | bug | 558 pixels differ (largest difference 255); first at (13,1): #000000, the reference has #ffffff |
+| row-margin-border-padding.html | bug | 558 pixels differ (largest difference 255); first at (13,1): #000000, the reference has #ffffff |
 | rules-groups.html | bug (open) | the HTML rules / frame attributes are not implemented (only the UA colour rule is there) (39639 pixels differ (largest difference 255); first at (25,49): #ffffff, the reference has #000000) |
 | table-cell-baseline-static-position.html | bug (open) | baseline details of table cells and inline-tables (empty cells, absolutely positioned boxes in a cell); not analyzed (10000 pixels differ (largest difference 255); first at (58,48): #ffffff, the reference has #008000) |
-| table-cell-child-overflow-measure.html | step 2e | uses svg, scrolling, sticky or form controls (10000 pixels differ (largest difference 255); first at (8,108): #008000, the reference has #ffffff) |
-| table-cell-overflow-auto.html | step 2e | uses svg, scrolling, sticky or form controls (1000 pixels differ (largest difference 255); first at (111,61): #008000, the reference has #000000) |
+| table-cell-child-overflow-measure.html | step 2e | uses scrolling, sticky or form controls (2e-2) (10296 pixels differ (largest difference 255); first at (100,8): #008000, the reference has #8a8a8a) |
+| table-cell-overflow-auto.html | step 2e | uses scrolling, sticky or form controls (2e-2) (2494 pixels differ (largest difference 255); first at (111,11): #ff69b4, the reference has #000000) |
 | table-intrinsic-size-001.html | bug (open) | the min-content size of a table whose width is smaller than its content (shrink-to-fit outer box): not analyzed (2000 pixels differ (largest difference 255); first at (78,48): #ffffff, the reference has #008000) |
 | table-intrinsic-size-002.html | bug (open) | the min-content size of a table whose width is smaller than its content (shrink-to-fit outer box): not analyzed (2000 pixels differ (largest difference 255); first at (78,48): #ffffff, the reference has #008000) |
-| table-intrinsic-size-003.html | step 2d | uses text features (4000 pixels differ (largest difference 255); first at (58,48): #ffffff, the reference has #008000) |
-| table-intrinsic-size-004.html | step 2d | uses text features (4000 pixels differ (largest difference 255); first at (58,48): #ffffff, the reference has #008000) |
+| table-intrinsic-size-003.html | bug | 5000 pixels differ (largest difference 255); first at (58,48): #ffffff, the reference has #008000 |
+| table-intrinsic-size-004.html | bug | 8000 pixels differ (largest difference 255); first at (28,48): #ffffff, the reference has #008000 |
 | tentative/border-collapse-spanning-cells-002.html | bug (open) | collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one (2400 pixels differ (largest difference 255); first at (78,114): #ff0000, the reference has #008000) |
 | tentative/border-collapse-spanning-cells-003.html | bug (open) | collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one (1200 pixels differ (largest difference 255); first at (78,154): #ff0000, the reference has #008000) |
 | tentative/border-collapse-spanning-cells-004.html | bug (open) | collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one (3200 pixels differ (largest difference 255); first at (78,114): #ff0000, the reference has #008000) |
 | tentative/padding-percentage.html | bug (open) | percentage padding of cells: not analyzed (3000 pixels differ (largest difference 255); first at (8,64): #ffffff, the reference has #008000) |
-| tentative/paint/background-image-column-collapsed.html | step 2c | uses painting effects (5000 pixels differ (largest difference 111); first at (113,63): #ffffff, the reference has #90ee90) |
-| tentative/paint/background-image-column.html | step 2c | uses painting effects (8712 pixels differ (largest difference 111); first at (38,28): #90ee90, the reference has #ffffff) |
-| tentative/paint/background-image-row-collapsed.html | step 2c | uses painting effects (5000 pixels differ (largest difference 111); first at (55,105): #ffffff, the reference has #90ee90) |
-| tentative/paint/background-image-row.html | step 2c | uses painting effects (9100 pixels differ (largest difference 111); first at (88,98): #90ee90, the reference has #ffffff) |
+| tentative/paint/background-image-column-collapsed.html | bug | 5000 pixels differ (largest difference 111); first at (113,63): #ffffff, the reference has #90ee90 |
+| tentative/paint/background-image-column.html | bug | 9524 pixels differ (largest difference 255); first at (38,28): #a9a9a9, the reference has #ffffff |
+| tentative/paint/background-image-row-collapsed.html | bug | 5000 pixels differ (largest difference 111); first at (55,105): #ffffff, the reference has #90ee90 |
+| tentative/paint/background-image-row.html | bug | 9100 pixels differ (largest difference 111); first at (88,98): #98c798, the reference has #ffffff |
 | tentative/paint/collapsed-border-large-cell.html | bug (open) | collapsed borders: col / colgroup borders are not part of the conflict resolution, positioned rows / cells, spanning cells with different edge widths, double style (2c); not analyzed one by one (6971 pixels differ (largest difference 255); first at (8,8): #000000, the reference has #0000ff) |
 | tentative/paint/overflow-hidden-table.html | bug (open) | not analyzed (6712 pixels differ (largest difference 255); first at (98,8): #008000, the reference has #ffffff) |
 | th-text-align.html | bug (open) | th uses text-align: center; browsers use -internal-center (the parent value wins when it is set); not done (450 pixels differ (largest difference 255); first at (80,64): #000000, the reference has #ffffff) |
-| visibility-collapse-border-spacing-001.html | step 2c | uses painting effects (3600 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
 | visibility-collapse-border-spacing-002.html | bug (open) | visibility: collapse is done for rows (the row and its spacing go); columns, and cells that span collapsed rows or columns, are not (10000 pixels differ (largest difference 255); first at (58,164): #ff0000, the reference has #008000) |
 | visibility-collapse-colspan-003.html | bug (open) | visibility: collapse is done for rows (the row and its spacing go); columns, and cells that span collapsed rows or columns, are not (67695 pixels differ (largest difference 255); first at (77,8): #ff0000, the reference has #ffffff) |
 | visibility-collapse-rowspan-005.html | bug (open) | visibility: collapse is done for rows (the row and its spacing go); columns, and cells that span collapsed rows or columns, are not (4176 pixels differ (largest difference 255); first at (380,145): #000000, the reference has #ffffff) |
@@ -92,7 +92,6 @@
 - height-distribution/extra-height-given-to-all-row-groups-001.html
 - height-distribution/extra-height-given-to-all-row-groups-002.html
 - height-distribution/extra-height-given-to-all-row-groups-005.html
-- height-distribution/percentage-sizing-of-table-cell-007.html
 - height-distribution/percentage-sizing-of-table-cell-children-003.html
 - height-distribution/percentage-sizing-of-table-cell-children-004.html
 - height-distribution/percentage-sizing-of-table-cell-children-005.html
@@ -151,6 +150,7 @@
 - tentative/collapsed-borders-painting-order-013.html
 - tentative/section-no-tbody-fixed-distribution.html
 - tentative/section-no-tbody-percent-distribution.html
+- visibility-collapse-border-spacing-001.html
 - visibility-hidden-collapsed-borders.html
 - whitespace-001.html
 - zero-rowspan-001.html

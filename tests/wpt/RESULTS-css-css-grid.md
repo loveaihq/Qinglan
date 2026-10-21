@@ -1,12 +1,12 @@
 # WPT `css/css-grid`
 
-测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-grid`，用时 6.3 秒。
+测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-grid`，用时 12.2 秒。
 
-- 通过 **440 / 713**（61.7%）
+- 通过 **434 / 713**（60.9%）
 - bug 类失败：**160**
 - 跳过：no reftest 6
 
-失败分类：bug 66，bug (flex/grid with vertical writing) 23，bug (open) 71，limit (not supported) 4，limit (placeholder boxes) 19，limit (replaced stretch) 1，not planned 81，step 2d-2b (vertical writing modes) 2，step 2e 6
+失败分类：bug 66，bug (flex/grid with vertical writing) 23，bug (open) 71，limit (not supported) 4，limit (placeholder boxes) 19，limit (replaced stretch) 1，limit (scrollable overflow) 6，not planned 82，step 2d-2b (vertical writing modes) 2，step 2e 5
 
 ## 失败
 
@@ -87,7 +87,7 @@
 | alignment/grid-item-no-aspect-ratio-stretch-1.html | limit (replaced stretch) | an inline `<svg>` without viewBox is a replaced box of 300 x 150; a grid item that is replaced and has no aspect ratio should stretch with align/justify normal or stretch (css-grid-1 6.2), the grid code does not stretch replaced items; passed before 2e-1 only because `svg` was ignored (80000 pixels differ (largest difference 128); first at (318,18): #800080, the reference has #008000) |
 | alignment/grid-item-self-baseline-001.html | bug | 86818 pixels differ (largest difference 255); first at (215,1): #ffffff, the reference has #000000 |
 | alignment/grid-justify-baseline-001.html | bug | 7200 pixels differ (largest difference 255); first at (8,56): #808080, the reference has #000000 |
-| alignment/grid-self-alignment-stretch-input-range.html | step 2e | uses scrolling, sticky or form controls (2e-2) (91924 pixels differ (largest difference 137); first at (138,9): #ffffff, the reference has #767676) |
+| alignment/grid-self-alignment-stretch-input-range.html | step 2e | uses scrolling, sticky or form controls (2e-2) (13512 pixels differ (largest difference 255); first at (70,9): #cfe5ff, the reference has #ffffff) |
 | alignment/replaced-alignment-with-aspect-ratio-001.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (9961 pixels differ (largest difference 255); first at (8,64): #767676, the reference has #008000) |
 | alignment/replaced-alignment-with-aspect-ratio-002.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (9961 pixels differ (largest difference 255); first at (8,64): #767676, the reference has #008000) |
 | alignment/replaced-alignment-with-aspect-ratio-003.tentative.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (9931 pixels differ (largest difference 255); first at (8,64): #767676, the reference has #008000) |
@@ -140,7 +140,6 @@
 | alignment/self-baseline/grid-self-baseline-vertical-rl-006.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (176404 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
 | alignment/self-baseline/grid-self-baseline-vertical-rl-007.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (34122 pixels differ (largest difference 255); first at (0,79): #ffffff, the reference has #000000) |
 | firefox-bug-1881495.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (8280 pixels differ (largest difference 255); first at (42,110): #808080, the reference has #000000) |
-| grid-child-percent-basis-resize-1.html | step 2e | uses scrolling, sticky or form controls (2e-2) (3520 pixels differ (largest difference 255); first at (8,108): #ffffff, the reference has #000000) |
 | grid-container-baseline-synthesized-001.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (2664 pixels differ (largest difference 255); first at (54,92): #00ffff, the reference has #000000) |
 | grid-container-baseline-synthesized-002.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (3330 pixels differ (largest difference 255); first at (54,8): #00ffff, the reference has #000000) |
 | grid-container-baseline-synthesized-003.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (2664 pixels differ (largest difference 255); first at (54,92): #00ffff, the reference has #000000) |
@@ -180,14 +179,14 @@
 | grid-items/grid-items-relative-positioned-containing-block-004.html | bug (open) | out-of-flow children of a grid container (css-grid-1 9): the grid area as containing block and the static position inside it are done; this test differs for a reason that was not analysed one by one (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
 | grid-items/grid-items-relative-positioned-containing-block-005.html | bug (open) | out-of-flow children of a grid container (css-grid-1 9): the grid area as containing block and the static position inside it are done; this test differs for a reason that was not analysed one by one (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
 | grid-items/grid-items-relative-positioned-containing-block-006.html | bug (open) | out-of-flow children of a grid container (css-grid-1 9): the grid area as containing block and the static position inside it are done; this test differs for a reason that was not analysed one by one (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
-| grid-items/grid-items-sizing-alignment-001.html | step 2e | uses scrolling, sticky or form controls (2e-2) (42298 pixels differ (largest difference 255); first at (607,64): #7f7f7f, the reference has #cacaca) |
+| grid-items/grid-items-sizing-alignment-001.html | step 2e | uses scrolling, sticky or form controls (2e-2) (42176 pixels differ (largest difference 255); first at (604,64): #7b7b7b, the reference has #767676) |
 | grid-items/grid-layout-z-order-a.html | bug (open) | grid items now paint atomically like inline blocks (css-grid-1 9, CSS2 E.2 step 7) and the other tests of this family pass; this one still differs (items with a `z-index` or overlapping lines of text), not analysed one by one (224 pixels differ (largest difference 255); first at (100,60): #ffffff, the reference has #ffff00) |
 | grid-items/grid-layout-z-order-b.html | bug (open) | grid items now paint atomically like inline blocks (css-grid-1 9, CSS2 E.2 step 7) and the other tests of this family pass; this one still differs (items with a `z-index` or overlapping lines of text), not analysed one by one (224 pixels differ (largest difference 255); first at (100,60): #ffffff, the reference has #ffff00) |
 | grid-items/grid-size-with-orthogonal-child-001.html | bug | 10000 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #008000 |
 | grid-items/grid-size-with-orthogonal-child-002.html | bug | 10000 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #008000 |
 | grid-items/percentage-block-size-transfer-through-item-001.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (1916 pixels differ (largest difference 118); first at (8,48): #767676, the reference has #008000) |
 | grid-items/percentage-size-indefinite-replaced.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (1916 pixels differ (largest difference 118); first at (8,48): #767676, the reference has #008000) |
-| grid-items/percentage-size-replaced-subitems-001.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (83286 pixels differ (largest difference 255); first at (662,96): #ffffff, the reference has #ff00ff) |
+| grid-items/percentage-size-replaced-subitems-001.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (76482 pixels differ (largest difference 255); first at (662,96): #ffffff, the reference has #ff00ff) |
 | grid-items/percentage-size-subitems-001.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (76632 pixels differ (largest difference 255); first at (662,96): #ffffff, the reference has #ff00ff) |
 | grid-items/replaced-element-011.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (9296 pixels differ (largest difference 255); first at (8,48): #767676, the reference has #008000) |
 | grid-items/replaced-element-012.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (9296 pixels differ (largest difference 255); first at (8,48): #767676, the reference has #008000) |
@@ -197,6 +196,10 @@
 | grid-items/replaced-element-017.tentative.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (11834 pixels differ (largest difference 255); first at (8,48): #767676, the reference has #008000) |
 | grid-model/display-grid.html | bug (open) | not the grid (its boxes are right in the layout dump): the helper table with height:100% shares its extra height among the rows in proportion to their heights (table.rs), the browsers give it to the auto-height rows first (css-tables-3, extra height distribution) (16560 pixels differ (largest difference 205); first at (8,99): #008000, the reference has #000000) |
 | grid-model/display-inline-grid.html | bug (open) | not the grid (its boxes are right in the layout dump): the helper table with height:100% shares its extra height among the rows in proportion to their heights (table.rs), the browsers give it to the auto-height rows first (css-tables-3, extra height distribution) (16560 pixels differ (largest difference 205); first at (8,99): #008000, the reference has #000000) |
+| grid-model/grid-areas-overflowing-grid-container-001.html | limit (scrollable overflow) | the tracks of an empty grid are not part of the scrollable overflow of the grid container (no bars) (700 pixels differ (largest difference 10); first at (100,64): #808080, the reference has #8a8a8a) |
+| grid-model/grid-areas-overflowing-grid-container-002.html | limit (scrollable overflow) | same as grid-areas-overflowing-grid-container-001 (700 pixels differ (largest difference 10); first at (100,64): #808080, the reference has #8a8a8a) |
+| grid-model/grid-areas-overflowing-grid-container-003.html | limit (scrollable overflow) | same as grid-areas-overflowing-grid-container-001 (700 pixels differ (largest difference 10); first at (100,64): #808080, the reference has #8a8a8a) |
+| grid-model/grid-areas-overflowing-grid-container-009.html | limit (scrollable overflow) | same as grid-areas-overflowing-grid-container-001 (700 pixels differ (largest difference 10); first at (100,64): #808080, the reference has #8a8a8a) |
 | grid-model/grid-container-scrollbar-vertical-lr-001.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (134700 pixels differ (largest difference 255); first at (28,152): #808080, the reference has #ffffff) |
 | grid-model/grid-container-scrollbar-vertical-rl-001.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (136800 pixels differ (largest difference 255); first at (28,152): #808080, the reference has #ffffff) |
 | grid-model/grid-first-letter-003.html | limit (not supported) | ::first-letter and ::first-line are not supported (not planned in layer 2) (256 pixels differ (largest difference 128); first at (8,24): #000000, the reference has #008000) |
@@ -206,6 +209,8 @@
 | grid-model/grid-inline-first-line-003.html | limit (not supported) | ::first-letter and ::first-line are not supported (not planned in layer 2) (16640 pixels differ (largest difference 255); first at (8,24): #ff0000, the reference has #008000) |
 | grid-model/grid-inline-floats-no-intrude-001.html | bug (open) | not analysed one by one: a css-grid-1 test whose intrinsic sizing or placement still differs from the reference (fit-content(), spanning flexible tracks, max-content sizing with percentages, floats beside a grid) (5000 pixels differ (largest difference 255); first at (108,64): #ff0000, the reference has #ffffff) |
 | grid-model/grid-max-content-size-with-max-content-item.html | bug (open) | not analysed one by one: a css-grid-1 test whose intrinsic sizing or placement still differs from the reference (fit-content(), spanning flexible tracks, max-content sizing with percentages, floats beside a grid) (7200 pixels differ (largest difference 255); first at (28,48): #ffffff, the reference has #008000) |
+| grid-model/grid-overflow-padding-001.html | limit (scrollable overflow) | an empty grid whose track plus end padding overflows: the tracks are not part of the scrollable overflow (700 pixels differ (largest difference 10); first at (100,64): #808080, the reference has #8a8a8a) |
+| grid-model/grid-overflow-padding-002.html | limit (scrollable overflow) | same as grid-overflow-padding-001 (700 pixels differ (largest difference 10); first at (100,64): #808080, the reference has #8a8a8a) |
 | grid-with-aspect-ratio-uses-content-box-height-for-track-sizing.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (4000 pixels differ (largest difference 255); first at (8,108): #ffffff, the reference has #008000) |
 | grid-with-orthogonal-child-within-flexbox.html | bug | 10000 pixels differ (largest difference 255); first at (8,48): #000000, the reference has #008000 |
 | layout-algorithm/flex-sizing-rows-indefinite-height-002.html | bug (open) | percentage row tracks / heights against an indefinite container height: treated as `auto` and not resolved again after the rows are sized (css-grid-1 7.2.1, 11.1) (1600 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
@@ -222,9 +227,9 @@
 | layout-algorithm/grid-percent-rows-spanned-shrinkwrap-001.html | bug (open) | percentage row tracks / heights against an indefinite container height: treated as `auto` and not resolved again after the rows are sized (css-grid-1 7.2.1, 11.1) (800 pixels differ (largest difference 255); first at (31,91): #ffffff, the reference has #0000ff) |
 | layout-algorithm/grid-template-flexible-rerun-track-sizing.html | bug | 10000 pixels differ (largest difference 255); first at (8,164): #ff0000, the reference has #ffffff |
 | layout-algorithm/grid-track-ignores-max-size-002.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (1916 pixels differ (largest difference 118); first at (8,48): #767676, the reference has #008000) |
-| stretch-grid-item-checkbox-input.html | step 2e | uses scrolling, sticky or form controls (2e-2) (194 pixels differ (largest difference 137); first at (21,8): #ffffff, the reference has #767676) |
-| stretch-grid-item-radio-input.html | step 2e | uses scrolling, sticky or form controls (2e-2) (194 pixels differ (largest difference 137); first at (21,8): #ffffff, the reference has #767676) |
-| stretch-grid-item-text-input-overflow.html | step 2e | uses scrolling, sticky or form controls (2e-2) (2340 pixels differ (largest difference 255); first at (93,13): #ffffff, the reference has #000000) |
+| stretch-grid-item-checkbox-input.html | step 2e | uses scrolling, sticky or form controls (2e-2) (204 pixels differ (largest difference 137); first at (19,8): #828282, the reference has #767676) |
+| stretch-grid-item-radio-input.html | step 2e | uses scrolling, sticky or form controls (2e-2) (414 pixels differ (largest difference 135); first at (11,8): #dcdcdc, the reference has #ffffff) |
+| stretch-grid-item-text-input-overflow.html | step 2e | uses scrolling, sticky or form controls (2e-2) (2488 pixels differ (largest difference 255); first at (91,13): #171717, the reference has #000000) |
 | subgrid/abs-pos-002.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (16674 pixels differ (largest difference 255); first at (36,17): #000000, the reference has #ffff00) |
 | subgrid/auto-track-sizing-004.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (10000 pixels differ (largest difference 255); first at (58,64): #ff0000, the reference has #008000) |
 | subgrid/baseline-001.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (540 pixels differ (largest difference 255); first at (1,21): #ffffff, the reference has #000000) |
@@ -279,6 +284,7 @@
 | subgrid/subgrid-baseline-002.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (8364 pixels differ (largest difference 255); first at (1,21): #ffffff, the reference has #000000) |
 | subgrid/subgrid-baseline-003.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (384 pixels differ (largest difference 255); first at (0,0): #ffffff, the reference has #000000) |
 | subgrid/subgrid-baseline-004.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (384 pixels differ (largest difference 255); first at (0,0): #ffffff, the reference has #000000) |
+| subgrid/subgrid-button.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (44 pixels differ (largest difference 204); first at (8,8): #cccccc, the reference has #000000) |
 | subgrid/subgrid-item-block-size-001.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (78224 pixels differ (largest difference 255); first at (214,51): #ffffff, the reference has #000000) |
 | subgrid/subgrid-item-with-margin-left-auto.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (5760 pixels differ (largest difference 255); first at (728,16): #000000, the reference has #ffffff) |
 | subgrid/subgrid-no-items-on-edges-002.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (11200 pixels differ (largest difference 255); first at (38,64): #ff0000, the reference has #008000) |
@@ -463,6 +469,7 @@
 - child-border-box-and-max-content-002.html
 - empty-grid-within-flexbox.html
 - grid-calc-margin.html
+- grid-child-percent-basis-resize-1.html
 - grid-container-as-flex-item-001.html
 - grid-container-as-flex-item-002.html
 - grid-container-as-flex-item-003.html
@@ -609,15 +616,11 @@
 - grid-items/table-with-infinite-max-intrinsic-width.html
 - grid-items/whitespace-in-grid-item-001.html
 - grid-model/column-property-should-not-apply-on-grid-container-001.html
-- grid-model/grid-areas-overflowing-grid-container-001.html
-- grid-model/grid-areas-overflowing-grid-container-002.html
-- grid-model/grid-areas-overflowing-grid-container-003.html
 - grid-model/grid-areas-overflowing-grid-container-004.html
 - grid-model/grid-areas-overflowing-grid-container-005.html
 - grid-model/grid-areas-overflowing-grid-container-006.html
 - grid-model/grid-areas-overflowing-grid-container-007.html
 - grid-model/grid-areas-overflowing-grid-container-008.html
-- grid-model/grid-areas-overflowing-grid-container-009.html
 - grid-model/grid-container-ignores-first-letter-002.html
 - grid-model/grid-container-scrollbar-001.html
 - grid-model/grid-container-scrollbars-sizing-001.html
@@ -642,8 +645,6 @@
 - grid-model/grid-margins-no-collapse-001.html
 - grid-model/grid-margins-no-collapse-002.html
 - grid-model/grid-multicol-001.html
-- grid-model/grid-overflow-padding-001.html
-- grid-model/grid-overflow-padding-002.html
 - grid-model/grid-painting-rtl-001.html
 - grid-model/grid-vertical-align-001.html
 - grid-overflowing-item-below-container-is-painted.html
@@ -724,7 +725,6 @@
 - subgrid/standalone-axis-size-008.html
 - subgrid/standalone-axis-size-009.html
 - subgrid/subgrid-baseline-012.html
-- subgrid/subgrid-button.html
 - subgrid/subgrid-no-items-on-edges-001.html
 - subgrid/subgrid-scroller-auto-height-padding.html
 - subgrid/writing-directions-002.html

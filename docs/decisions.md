@@ -1624,3 +1624,54 @@ gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 
 
 ### 没做 / 留给后面
 - 没有固有宽高的 SVG 图片的“默认大小算法”（上面）；SVG 图片里的文字（要把平台排版搬到工作线程，或者让图片 SVG 在界面线程渲染）；`pattern`、`marker`、`mask`、滤镜；`<image>`；`overflow: visible` 的根 `svg`（图标常用它避免描边被裁，这里会裁）；内联 SVG 里的百分比在没有 `viewBox`、又由 CSS 定大小时按 300×150 算（场景在布局前建好，不知道盒子大小）；`transform-box`；`text` 里每字符的位置列表；块级 `<svg>` 在 `<a>` 里的点击（引擎本来就找不到块级替换元素的链接，图片也一样）。
+
+## 第 2 层 · 2e-2 内部滚动、sticky、页面横向滚动、表单控件外观（2026-10-21）
+
+代码：引擎 `paint/scope.rs`（新，作用域和窗格、滚动条、sticky 公式、滚轮/拖拽/点轨道、偏移的保存）、`paint/build.rs`（找作用域、窗格、滚动范围、定位盒和浮动的包装）、`paint/build/controls.rs`（新，表单控件外观）、`paint/raster.rs`、`paint/fx.rs`（`Ctx::port`）、`paint/images.rs`（`scope_gap`）、`interact.rs`（`link_at_scoped`）、`layout/block.rs`、`layout/table.rs`、`layout/mod.rs`、`css/*`（`appearance`、sticky 不再当 relative、`ua.css`）；窗口 `qinglan-win`（`MouseDown`/`MouseUp`、Shift 滚轮、`SetCapture`、`ShowScrollBar`）；应用 `qinglan-app`（`page.rs`、`app.rs`：横向滚动量 `cross`、拖拽）。测试：`tests/scopes.rs` 10 个，`hostile.rs` +3，`tests/pages/overflow-clip` 的快照改成 auto/scroll 也带 `[clip]`。
+
+### 作用域（scope）和窗格（pane）：内部滚动区域和 sticky 用同一套
+- 显示列表仍然只建一次，和滚动位置无关。**滚动容器**（`overflow-x/y` 有一个是 `scroll` 或 `auto`）和**有偏移量的 sticky 盒**各是一个 `Scope`（盒子、父作用域、视口矩形、滚动容器的可滚动溢出范围）；它们里面的东西不在 `DisplayList::items`，而在一个 `Pane`（一条列表项，边界是视口矩形）里。画窗格就是把里面的项目平移（滚动偏移，或 sticky 的位移）、裁剪到视口矩形，**直接画进帧，不开离屏层**（`Ctx::child`，和透明度/变形的组共用）。窗格套窗格，偏移自然叠加。
+- **偏移量是显示列表里唯一会变的东西**（`Cell`），按 DOM 节点保存：`DisplayList::offsets()` 在重排前取出，`restore()` 在新列表上放回去（夹在新范围内），所以图片到达引起的重排、窗口大小变化后滚动位置都还在。
+- **谁是作用域**（`Builder::find_scopes`，一次自上而下的遍历；没有滚动容器也没有带偏移量的 sticky 的页面直接返回，零代价）：`scroll`/`auto` 的块盒（不含替换盒）；`position: sticky` 且至少一个偏移不是 `auto` 的盒；以及“某个 sticky 盒最近的滚动祖先是 `overflow: hidden`”的那个 hidden 盒（它永远不滚，但 sticky 盒要对着它的视口矩形算——WPT `position-sticky-margins-003` 靠这个）。每个盒记两个作用域：自己内容所在的（`DisplayList::scope_of`，命中和图片用），和它的绝对定位后代所在的（`absolute` 的盒活在含块的作用域里，`fixed` 的不在任何作用域）。
+- **画的时候怎么找到窗格**：流内内容在 `walk` 里碰到滚动容器就开窗格（padding box 的圆角裁剪作窗格项的裁剪）；**绘制顺序靠后的**东西（浮动、绝对/相对/sticky 盒、`z-index`）不在窗格的那一趟里画，所以它们各自再套上自己所在的窗格链（`path_to`，`positioned_in_scopes`；裁剪按“所在作用域”分层：`ancestor_levels`）；`position: fixed` 的盒绕过打开的窗格，进固定列表。窗格的数量 ≤ 作用域数 × 2 + 被延后的盒数 × 链长（链长封顶 64）；恶意页面 `scrollers20000`（2 万个 `overflow:auto` 的兄弟）259 ms / 53 MB，`scrollers_nested`（300 层嵌套，每层有绝对、浮动、sticky 子孙）177 ms / 12 MB，`sticky10000` 125 ms / 24 MB。
+- **可滚动溢出范围**（css-overflow-3 2.2）：画的时候顺手量（`Builder::extend`）——每个块盒的边框盒、每个文字碎片（准确的行内矩形，不是带字形余量的 `Item::bounds`）、变形组的外接矩形，被所在的裁剪限制；负方向（上、左）够不着；内容越过内容盒时加上末端 padding（`finish_scopes`；WPT `grid-overflow-padding-*`）。没有被任何滚动容器接住的就是页面的范围（`x_max`）。
+- **overflow 的两个轴**：`hidden`/`clip` 的轴用户不能滚（`show` = 0）；`overflow-x: clip` 单独出现时只裁 x 轴（`clip_area`，WPT `clip-002/004/005`）。`auto`/`scroll` 现在也裁剪（`BoxOut::clip`），内联块的基线因此按 CSS2 10.8.1 落在下外边距边上（以前 auto 当 visible）。
+
+### 滚动条和输入
+- **滚动条是引擎画的细条，盖在容器的右边、下边，不占布局空间**（所以不会改变换行，也不需要为它重排）：车道 12 CSS px，滑块 6 px 宽、两头切角（Windows 11 的叠加式滚动条的样子，没有悬停变宽）、灰 `#8a8a8a`、最短 24 px；`auto` 有溢出才画，`scroll` 也只在有溢出时画滑块（没有溢出时 Chrome 会画灰色的空轨道，我们什么都不画）。两个轴都有时横条让出角上 12 px。窗格项在第二趟（行内那趟）画条，画在内容之上。
+- **滚轮**：窗口记着最后的鼠标位置；`DisplayList::wheel` 找鼠标下**最里面**的滚动容器，能动就动，吃不下的部分交给外层容器，再吃不下的交给页面（按轴分开算，Shift 把滚轮转成横向）。`hidden`/`clip` 的盒不是滚动容器（没有 `show`）。**键盘滚动仍然只在页面上**（还没有焦点模型：没有“当前滚动容器”，记在这里；Space/PageDown/方向键/Home/End 都只动页面）。
+- **拖拽滑块、点轨道**：窗口多了 `MouseDown`/`MouseUp`（按下时 `SetCapture`，松开时 `ReleaseCapture`，拖到窗口外也跟着）；`DisplayList::bar_press` 判断按在滑块（`Press::Thumb`，之后 `bar_drag` 跟着指针）还是轨道（`Press::Track`，翻 87.5% 的视口，立即，不重复）；按在条上不算点击（`swallow`，不会跳转链接）。
+- **命中**：`PageIndex::link_at_scoped` 把点从最外层作用域起依次减去滚动偏移、sticky 位移（`DisplayList::to_content`），点不在某个滚动容器的视口里就不命中里面的链接。固定定位的内容用视口坐标。
+- **图片**：作用域里的图片，`span`（懒加载、请求、丢弃的“远近”）用最外层滚动容器的视口矩形——容器靠近视口，里面的图就请求；解码和丢弃另外加上图片离**它所在滚动容器当前看得见的部分**有多远（`scope_gap`，只看最内层），所以横向轮播里远处的图不会全部解码。
+
+### `position: sticky`（css-position-3 3.4）
+- 计算值不再当 `relative`（`computed.rs`）；布局里 sticky 盒不偏移（流内位置 N）；它是定位盒（含块、`z-index` 起层叠上下文，画在定位那一轮，`makes_context`、`paint_order` 里不再把 sticky 当 static）。
+- **公式**（`StickyRule::delta`，每个轴单独算）：粘性视口矩形 = 滚动口（最近的滚动容器的 padding box，或页面视口）按四个偏移（`auto` 当 0）缩小；比盒子还小时让末端偏移让位；`top`/`left` 非 auto 且盒子的起边在矩形外就推进来，`bottom`/`right` 同理；推多少不能让盒子离开含块（含块 = 父盒的内容盒；父盒就是那个滚动容器时，含块伸到滚动容器内容的末端，`cb_scroll`）。
+- **画和命中**：sticky 窗格画的时候从当前的滚动口（页面：`View` 的滚动位置加布局视口 `DisplayList::vp`；滚动容器里：它的视口加偏移；套着的 sticky：减掉外层的位移）算位移，平移里面的一切（包括它的绝对定位后代）；命中走 `to_content`。窗格的边界取 N 和含块的并（滚动容器里取很远），所以位移后仍落在边界里。百分比偏移按滚动口的大小在建列表时算。
+- 没做 / 简化：位置盒用边框盒（规范是外边距盒，外边距比到含块边的距离小时用距离）；竖排里“末端”按横排解释；变形或透明度的组里的 sticky 不动（组的画布里没有滚动口）；嵌在 sticky 里的滚动容器的命中不计 sticky 的位移；`overflow: hidden` 的祖先里的 sticky 对着那个盒的 padding box（偏移 0）。
+
+### 页面的横向滚动（2d-2c 的遗留）
+- 横排页宽过视口时有了横向范围（`DisplayList::x_max` = 画出来的东西最右的边，用准确的矩形量，所以右对齐的文字不会凑出横向滚动）；`App::cross` 是横向量，`View::scroll_x` 用它；根或 body 的 `overflow-x: hidden` 传给视口时（`DisplayList::hide_x`）没有范围也没有条。
+- **页面的横条也是引擎画的**，盖在视口下边（`Ctx::page_bar`），不用 `WS_HSCROLL`（2d-2c 试过：一直显示会让所有横排页少 17 px，按页显示/隐藏要重排）。竖排页的横条是它沿行方向的进度（vertical-rl 的滑块起点在右边）；**竖排页的原生竖条隐藏**（`Ui::show_vscroll` = `ShowScrollBar`；窗口大小变一次，应用本来就处理）。条可以拖、可以点轨道。
+- **Shift+滚轮**横向滚动横排页（先给鼠标下的容器）；竖排页的 Shift+滚轮不处理。WPT 渲染里页面的横条关掉（`wpt.rs` 设 `hide_x`），否则每个“故意溢出”的测试都带一条。
+
+### 表单控件的样子（只画，还不能操作，第 3 层）
+- **文字框、按钮、`select`、`textarea` 就是普通的盒子，样子写在 `ua.css`**：`1px solid #767676`、圆角（输入框 2px、按钮和下拉框 4px）、白底或 `#efefef`；盒子的大小和以前一样（Chromium 的 21 px 高的文字框、21 px 高的按钮，下拉框 19 px 高，`padding-right` 18 px 给箭头）。**作者写的边框、背景会直接覆盖它，`appearance: none` 本来就没有别的东西可去掉**——这是最简单、也最接近 Chromium 行为的做法（Chromium 也是作者一改边框或背景就退回 CSS 画法）。
+- **画出来的控件**（`controls.rs`，强调色 `#0075ff`）：复选框（13×13、2px 圆角、选中蓝底白勾）、单选框（圆，选中蓝环加蓝点）、`progress`（圆头的槽，蓝色填到 `value/max`，不确定的只画槽）、`meter`（槽加按区域上色的填充：和最优值同区域绿、相邻黄、对面红）、`input[type=range]`（4 px 的槽，蓝色到滑块，16 px 圆滑块）、`select` 的箭头。`checked`、`value`、`max`、`min`、`low`、`high`、`optimum` 都从属性读。`appearance`（`auto`/`none`，`-webkit-`、`-moz-` 别名）进了计算样式（`MiscStyle::appearance`）：`none` 时这些都不画。**没做**：`select` 弹出、`number` 的上下箭头、`textarea` 的缩放角、`color`/`date`/`file` 的专门样子（还是灰框或文字框）、`::before` 加在 `input` 上、悬停和禁用的样子、按钮内容在高按钮里垂直居中。
+
+### WPT（`qinglan-cli wpt`，测试平台，提交 3bcf9ec；新目录用 `tests/wpt/README.md` 里同样的筛法，另外去掉带 `onload=` 等事件属性的页面）
+- `css/css-overflow`：**18 / 23（78.3%）**，bug 类 0（5 个失败各有一行 `notes.txt`：4 个是替换盒的 `overflow`/`object-position`，1 个是负外边距时末端 padding 的量法）；`css/css-position/sticky`：**5 / 5（100%）**（大多数 sticky 的 WPT 页面靠脚本设 `scrollTop`，被筛掉了）；`html/rendering/widgets`：**11 / 19（57.9%）**，bug 类 0（8 个失败各有一行 `limit`：按钮内容垂直居中 5、`::before` 加在 appearance:none 的 input 上 2、`input[switch]` 1）。
+- 原有的 3188 个：改动让 24 个退步，修好 20 个（页面横条在 WPT 里关掉；auto/scroll 的 padding 末端；overflow 轴向）；剩下 4 个原因各一行：`flex-item-min-height-min-content-overflow`（flex 项的 `min-height: min-content` 没算，以前没有裁剪，被遮住了）、`grid-areas-overflowing-grid-container-*` / `grid-overflow-padding-*` 需要空网格的轨道算进可滚动溢出（没做）、`percentage-sizing-of-table-cell-007`（表格单元格的百分比高度）；它们退出 `passing.txt`，写进 `notes.txt`。（最终数字见 L2-TASK 进度。）
+
+### 数据（release；`BatteryStatus = 2` 插电；**不是干净环境**：一个 `Emulator.exe` 在跑，约占一个核的 15%，CPU 总负载 19–29%，没有 cargo/rustc/qpdf）
+- **exe**：`qinglan.exe` 2,710,528 → 2,744,832（+34,304，预算 +40 KB 内；第 2 层上限 2,726,297 暂时超出 18,535，第 2 层最后统一压）。
+- **内存**（`qinglan.exe --bench` zhwiki-rec，1920×1080，每次新进程，滚到底，Private Bytes，5 次）：49.45 / 48.07 / 47.20 / 47.67 / 48.76 MB，**最大 49.45 MB（≤ 50）**，余量只有 0.55 MB（第一次是冷盘，首屏 408 ms）。
+- **首屏中位数**（5 次）：zhwiki-rec 175.3 ms（127–408）、gh-ripgrep 133.1 ms（117–144），都 ≤ 200 ms。
+- **滚动帧**（`--bench` 从头滚到尾；页面里的滚动容器和 sticky 每帧都画）：mdn-flex（sticky 顶栏、侧栏是滚动容器）中位数 3.0–3.3 ms、p95 5.0–5.9；rust-std-vec（侧栏和代码块是滚动容器）3.4–3.9 / 5.4–5.9；gh-rust 7.5–7.8；zhwiki-rec 5.6–9.3（第一次冷）、p95 8.4–23.8。≤ 16 ms 中位数 ✓。容器内部滚动一帧 = 整个视口重画（和页面滚动一样），窗格里的项目没有空间索引，每帧过一遍（滚动容器里有一万项时线性变慢；还没碰到）。
+- **恶意页面**（release，`cargo test --release -p qinglan-cli --test hostile`）：47 个全过，新加的 3 个见上。
+
+### 没做 / 留给后面
+键盘滚动容器（第 3 层的焦点模型）、`scroll-snap`、`scroll-behavior`、`scrollbar-gutter`/`-width`/`-color`、`overscroll-behavior`（滚轮吃不下的永远交给外层）、从右往左的滚动容器的负方向滚动、悬停时滚动条变宽和轨道、滚动容器里的 `outline`（排队等层叠上下文末尾画，在窗格外，所以丢）、嵌套滚动容器里图片的“近”只看最内层、空网格轨道算进可滚动溢出、`text-overflow`（rustdoc 侧栏的省略号）。
+### 审查（2e-2 收尾，清单式，另一个会话读 diff）和处理
+- **修了**：`Ctx::pill` 填反向矩形时从 y0 一直涂到条带底（`fill` 现在遇到空矩形直接返回，`rows_mut` 的 `take` 会回绕）；背景图的 `ImagePlace.rect` 只是 (0,0) 处的一块平铺，`scope_gap` 却当成滚动容器里的坐标，滚动容器里靠下的背景图会被当成远处而不解码（新增 `ImagePlace::area`）；sticky 盒里的图片（页头标志）的 `span` 按未位移的盒子算，滚过一屏后被丢弃（sticky 在页面上的，里面的图片永远算近：`Builder::span_of`）；**既 sticky 又 `overflow: auto` 的盒（sticky 侧栏自带滚动）只留了滚动那一个，sticky 被丢了**，现在是两个作用域，sticky 在外（`own_sticky`；新测试 `a_sticky_sidebar_that_scrolls_is_both`）；拖动中丢了鼠标捕获（Alt+Tab）后 `swallow` 会吃掉下一次真正的点击（按下时清掉）。
+- **没修，记在这里**：`position: fixed` 的盒里的滚动容器，`scopes` 的视口矩形是视口坐标，滚轮、`bar_press`、`bar_drag` 收到的是页面坐标，页面滚过之后固定的抽屉或弹窗里的滚动容器滚不动（`Scope` 没有“固定”标记）；带 `opacity` 或 `transform` 的固定盒里的定位孩子，`positioned_in_scopes` 的 `detached` 把组的那一层也摘掉了（效果丢，画在组之前）；`bar_press` 不检查外层滚动容器的视口是否含这个点（被外层裁掉的条仍会被按到）；`shift_of`（滚轮、按条用）不计 sticky 位移；`path_to` 在目标不在当前作用域内时（含块在中间滚动容器之外的绝对定位盒）退回成原地画；固定列表用 `port = None` 画，命中却按 (0,0,视口) 算 sticky；每个定位盒或浮动都重开整条窗格链（链长 ≤ 64，没有合并相邻的窗格），窗格里的项目没有索引；`scope_at` 每次滚轮分配 O(作用域数)；`link_at_scoped` 每次鼠标移动对每个碎片走一遍作用域链（O(碎片 × 深度)）；重排或导航时 `drag` 不清（按住不放时作用域序号可能指到别的容器）。

@@ -456,3 +456,16 @@ WPT 和表格的细节（没做的）在 `docs/decisions.md` 的 2a-2 一节。
 | mdn-flex（MDN） | 没有逐项看 | 渲染成功；只记差值（14.5），没有逐项对比 SVG 图标 | 14.5 |
 
 文字完整度、坏图检查和上一步一样。
+
+## 第 2e-2 步：内部滚动、sticky、表单控件（2026-10-21）
+
+重跑四页（`tools/corpus_run.py render` 和 `compose`，对 `tests/out/*-edge.png`，Edge 的图没有重取；图片是 1280 × 2400 的整页截图，所以视口比页面高，sticky 不会有位移，滚动容器也不会真的滚）。Edge 无头截图里没有滚动条，我们的叠加式细条会多出来：
+
+| 页 | 结论 | 说明 | 差值（越小越像） |
+|---|---|---|---|
+| mdn-flex（MDN） | 和 Edge 接近，差别在后面步骤 | 左侧栏是 `overflow: auto` 的滚动容器：栏的右边缘出现了滚动条的滑块（Edge 的图里没有），栏里内容和位置没变。剩下的差别还是上一步那些：顶栏图标、搜索框、栏里折叠箭头和 `Filter` 框（图标字体或脚本才有的内容） | 14.1 |
+| rust-std-vec（Rust 标准库文档） | 和 Edge 接近 | 左边栏（`overflow-y: auto`）右边缘有滑块；代码块、标题、正文位置和 Edge 一致。差别：`text-overflow: ellipsis` 的栏里条目（“Capacity and reallocati…”）我们没有省略号（`text-overflow` 没做） | 2.3 |
+| gh-ripgrep（GitHub 仓库页） | 和 Edge 接近 | 顶栏、文件表、右侧 About 栏位置没变；这页没有真正滚动的容器；顶部导航里“Open Source”换行是以前就有的字宽差别 | 10.3 |
+| gov-uk（英国政府首页，搜索表单） | 和 Edge 接近 | 搜索框（白底、细灰边）和蓝色放大镜按钮的大小、位置和 Edge 一致；差别是几处文字折行不同（字宽，以前就有） | 11.4 |
+
+文字完整度、坏图检查和上一步一样。复选框、单选框、下拉框的箭头、进度条用手算像素的测试（`crates/qinglan-engine/tests/scopes.rs`）检查，这四页里没有；`gov-uk` 的搜索框是唯一的真实表单。滚动容器的内部滚动、sticky 的位移、拖滑块这些要在窗口里操作才看得到，真实网页对比图里看不到；它们由手算测试和 `--bench` 的滚动帧（mdn-flex、rust-std-vec、gh-rust）覆盖，窗口里的鼠标操作（按下、拖动、Shift+滚轮）这一步没有在真实窗口里手工验证。
