@@ -11,7 +11,12 @@
 //!   the class's list of slabs with room, one with a free block comes back, and one with no live block left is
 //!   decommitted (the class keeps its last slab), so the memory a phase of the page needed (parsing, styling) does not
 //!   stay committed after it.
-//! * **Big** (32 KiB and up, alignment up to a page): its own `VirtualAlloc` pages, given back when freed. The Windows
+//! * **Mid** (1025..=32768 bytes, alignment up to 8): 20 more size classes, four to a doubling (1280, 1536, 1792, 2048,
+//!   2560, ... 32768). Their slabs are 256 KiB spans of the same range, committed 16 KiB at a time as the bump pointer
+//!   advances (a class that holds one 8 KiB block does not commit 256 KiB); a span with no live block is decommitted
+//!   whole, and the last span of a class gives back what it committed beyond 64 KiB. The Windows heap kept the blocks of
+//!   this size as free space between live ones: about 5 MB of 10 on the Chinese Wikipedia article (docs/decisions.md, 2f-3).
+//! * **Big** (over 32 KiB, alignment up to a page): its own `VirtualAlloc` pages, given back when freed. The Windows
 //!   heap keeps such blocks as free space inside its segments (a doubling `Vec` of 2 MB leaves 1 + 0.5 + ... MB holes).
 //! * Everything else (and small blocks when the address range or `VirtualAlloc` is exhausted): `System`.
 //!
@@ -89,10 +94,19 @@ impl<T> Drop for SpinGuard<'_, T> {
 
 /// The biggest block a slab serves.
 const SMALL_MAX: usize = 1024;
-/// The strictest alignment a slab block has (every size is a multiple of 8 and the blocks start 64 bytes into a slab).
-const SMALL_ALIGN: usize = 8;
-const CLASSES: usize = 40;
+/// The strictest alignment a slab block has: 16 for the sizes `kind` rounds up to a multiple of 16 (the tables of `hashbrown`
+/// ask for it), else every size is a multiple of 8 and the blocks start 64 bytes into a slab.
+const SMALL_ALIGN: usize = 16;
+/// The biggest block a mid class serves; bigger ones are `Big`.
+const MID_MAX: usize = 32 * 1024;
+/// 40 small classes and 20 mid ones.
+const SMALL_CLASSES: usize = 40;
+const CLASSES: usize = 60;
 const SLAB: usize = 16 * 1024;
+/// A mid class's slab: 16 units of `SLAB` that start on a multiple of itself (counted from the start of the range).
+const MID_SLAB: usize = 256 * 1024;
+/// What a mid span's last slab keeps committed when it has no live block.
+const MID_KEEP: usize = 64 * 1024;
 const HEADER: usize = 64;
 /// Address space reserved for slabs (nothing is committed until a slab is taken): 512 MiB.
 const ARENA: usize = 512 * 1024 * 1024;
@@ -103,8 +117,6 @@ const GROUP: usize = 4;
 /// Empty committed slabs kept for the next class that needs one, so a phase that frees and allocates the same amount
 /// again (the style pass) does not commit and decommit pages over and over. More than this are decommitted.
 const SPARE_MAX: usize = 32;
-/// Blocks of this size and up get their own pages from `VirtualAlloc` and give them back when freed.
-const BIG_MIN: usize = 32 * 1024;
 const PAGE: usize = 4096;
 
 #[link(name = "kernel32")]
@@ -118,10 +130,15 @@ const MEM_DECOMMIT: u32 = 0x4000;
 const MEM_RELEASE: u32 = 0x8000;
 const PAGE_READWRITE: u32 = 0x04;
 
-/// The class (0..40) of a block of `size` bytes, 1 <= `size` <= 1024.
+/// The class (0..60) of a block of `size` bytes, 1 <= `size` <= 32768.
 #[inline]
 fn class_of(size: usize) -> usize {
-    if size <= 128 {
+    if size > SMALL_MAX {
+        // Four classes to each doubling: (1024 << g) + (256 << g) * k for k = 1..=4.
+        let g = (usize::BITS - (size - 1).leading_zeros()) as usize - 11;
+        let k = (size - (SMALL_MAX << g)).div_ceil(256 << g);
+        SMALL_CLASSES + g * 4 + k - 1
+    } else if size <= 128 {
         size.div_ceil(8) - 1
     } else if size <= 256 {
         15 + (size - 128).div_ceil(16)
@@ -135,7 +152,10 @@ fn class_of(size: usize) -> usize {
 /// The block size of class `c`.
 #[inline]
 fn class_size(c: usize) -> usize {
-    if c < 16 {
+    if c >= SMALL_CLASSES {
+        let (g, k) = ((c - SMALL_CLASSES) / 4, (c - SMALL_CLASSES) % 4 + 1);
+        (SMALL_MAX << g) + (256 << g) * k
+    } else if c < 16 {
         (c + 1) * 8
     } else if c < 24 {
         128 + (c - 15) * 16
@@ -154,9 +174,11 @@ struct Slab {
     prev: *mut Slab,
     /// Freed blocks of this slab (each one's first 8 bytes point to the next).
     free: *mut u8,
-    /// The untouched rest of the slab: `bump..end`.
+    /// The untouched rest of the slab: `bump..end` is committed, `end..limit` is not (a mid slab commits as it goes; for a small
+    /// one `end == limit`).
     bump: *mut u8,
     end: *mut u8,
+    limit: *mut u8,
     /// Blocks handed out and not yet freed.
     live: u32,
     /// Is the slab in its class's list?
@@ -204,22 +226,128 @@ fn in_arena(p: *mut u8) -> bool {
     base != 0 && (p as usize).wrapping_sub(base) < ARENA
 }
 
+/// Bytes committed in mid slabs, and how many spans (16 units of the range each) they are in (for the statistics and the tests).
+static MID_COMMITTED: AtomicUsize = AtomicUsize::new(0);
+static MID_SPANS: AtomicUsize = AtomicUsize::new(0);
+
+/// The start of the reserved range, reserving it the first time; 0 when that fails (now or before).
+fn reserve(a: &mut Arena) -> usize {
+    let base = BASE.load(Relaxed);
+    if base != 0 || a.failed {
+        return base;
+    }
+    // SAFETY: a null address asks for a new region of address space; nothing is committed.
+    let p = unsafe { VirtualAlloc(null_mut(), ARENA, MEM_RESERVE, PAGE_READWRITE) };
+    if p.is_null() {
+        a.failed = true;
+        return 0;
+    }
+    BASE.store(p as usize, Relaxed);
+    p as usize
+}
+
+/// A mid slab: a span of 16 units that no class uses, its first unit committed; null when the range or the system is out.
+fn new_mid_slab() -> *mut Slab {
+    const UNITS: usize = MID_SLAB / SLAB;
+    let mut a = lock_arena();
+    let base = reserve(&mut a);
+    if base == 0 {
+        return null_mut();
+    }
+    let mut found = None;
+    let mut w = a.hint;
+    while w < WORDS && found.is_none() {
+        let word = a.used.get(w).copied().unwrap_or(u64::MAX);
+        if word != u64::MAX {
+            found = (0..64 / UNITS).find(|j| (word >> (j * UNITS)) & 0xFFFF == 0).map(|j| w * 64 + j * UNITS);
+        }
+        w += 1;
+    }
+    let Some(first) = found else { return null_mut() };
+    // SAFETY: `first..first + UNITS` lie inside the reserved range and are not committed (their bits are clear).
+    let p = unsafe { VirtualAlloc((base + first * SLAB) as *mut u8, SLAB, MEM_COMMIT, PAGE_READWRITE) };
+    if p.is_null() {
+        return null_mut();
+    }
+    if let Some(word) = a.used.get_mut(first / 64) {
+        *word |= 0xFFFFu64 << (first % 64);
+    }
+    MID_COMMITTED.fetch_add(SLAB, Relaxed);
+    MID_SPANS.fetch_add(1, Relaxed);
+    p.cast()
+}
+
+/// Give back a mid slab that has no live block: its `committed` bytes and its span.
+fn release_mid(s: *mut Slab, committed: usize) {
+    let base = BASE.load(Relaxed);
+    let first = ((s as usize) - base) / SLAB;
+    let mut a = lock_arena();
+    // SAFETY: `s..s + committed` is committed memory of the range and nothing points into it any more.
+    unsafe { VirtualFree(s.cast(), committed, MEM_DECOMMIT) };
+    MID_COMMITTED.fetch_sub(committed, Relaxed);
+    MID_SPANS.fetch_sub(1, Relaxed);
+    if let Some(word) = a.used.get_mut(first / 64) {
+        *word &= !(0xFFFFu64 << (first % 64));
+    }
+    a.hint = a.hint.min(first / 64);
+}
+
+/// Commit the pages of mid slab `s` that a block of `size` bytes at its bump pointer needs; false when the system refuses.
+///
+/// # Safety
+/// The class lock is held and `s` is a mid slab of that class with `bump + size <= limit`.
+unsafe fn grow(s: *mut Slab, size: usize) -> bool {
+    // SAFETY: `s` is a valid slab (the lock is held); `end..start + to` lies in the slab's reserved span and is not committed.
+    unsafe {
+        let start = s as usize;
+        let to = ((*s).bump as usize + size - start).next_multiple_of(SLAB).min(MID_SLAB);
+        let from = (*s).end as usize - start;
+        if to > from {
+            if VirtualAlloc((*s).end, to - from, MEM_COMMIT, PAGE_READWRITE).is_null() {
+                return false;
+            }
+            (*s).end = (start + to) as *mut u8;
+            MID_COMMITTED.fetch_add(to - from, Relaxed);
+        }
+    }
+    true
+}
+
+/// A mid slab with no live block that stays (the last of its class) gives back what it committed beyond `MID_KEEP`.
+///
+/// # Safety
+/// The class lock is held and `s` is a mid slab of that class that has no live block.
+unsafe fn trim_mid(s: *mut Slab) {
+    // SAFETY: `s` is a valid slab; the pages beyond `keep` hold no live block, so nothing points into them.
+    unsafe {
+        let keep = s.cast::<u8>().add(MID_KEEP);
+        if (*s).end > keep {
+            let extra = ((*s).end as usize) - (keep as usize);
+            VirtualFree(keep, extra, MEM_DECOMMIT);
+            MID_COMMITTED.fetch_sub(extra, Relaxed);
+            (*s).end = keep;
+        }
+    }
+}
+
+/// The slab of the block `p` of class `c`.
+#[inline]
+fn slab_of(p: *mut u8, c: usize) -> *mut Slab {
+    if c < SMALL_CLASSES {
+        ((p as usize) & !(SLAB - 1)) as *mut Slab
+    } else {
+        // Mid spans start on a multiple of their size counted from the range's start, which is only 64 KiB aligned.
+        let base = BASE.load(Relaxed);
+        (base + (((p as usize).wrapping_sub(base)) & !(MID_SLAB - 1))) as *mut Slab
+    }
+}
+
 /// Commit a fresh slab, or null when the range or the system is out of memory.
 fn new_slab() -> *mut Slab {
     let mut a = lock_arena();
-    let mut base = BASE.load(Relaxed);
+    let base = reserve(&mut a);
     if base == 0 {
-        if a.failed {
-            return null_mut();
-        }
-        // SAFETY: a null address asks for a new region of address space; nothing is committed.
-        let p = unsafe { VirtualAlloc(null_mut(), ARENA, MEM_RESERVE, PAGE_READWRITE) };
-        if p.is_null() {
-            a.failed = true;
-            return null_mut();
-        }
-        base = p as usize;
-        BASE.store(base, Relaxed);
+        return null_mut();
     }
     if a.spare_n > 0 {
         a.spare_n -= 1;
@@ -288,12 +416,13 @@ fn release_slab(s: *mut Slab) {
 /// Set up a fresh slab.
 ///
 /// # Safety
-/// `s` points to `SLAB` committed, writable bytes that nobody uses.
-unsafe fn init_slab(s: *mut Slab) {
+/// `s` points to `SLAB` committed, writable bytes that nobody uses (for a mid class, the start of a span of `MID_SLAB`).
+unsafe fn init_slab(s: *mut Slab, c: usize) {
     let start = s.cast::<u8>();
-    // SAFETY: the slab is `SLAB` bytes, so `HEADER` and `SLAB` are in bounds (`end` is one past the end).
+    let limit = if c < SMALL_CLASSES { SLAB } else { MID_SLAB };
+    // SAFETY: the slab is `SLAB` bytes, so `HEADER` and `SLAB` are in bounds (`end` is one past the end), and `limit` is the end of its span.
     unsafe {
-        s.write(Slab { next: null_mut(), prev: null_mut(), free: null_mut(), bump: start.add(HEADER), end: start.add(SLAB), live: 0, listed: false });
+        s.write(Slab { next: null_mut(), prev: null_mut(), free: null_mut(), bump: start.add(HEADER), end: start.add(SLAB), limit: start.add(limit), live: 0, listed: false });
     }
 }
 
@@ -341,7 +470,7 @@ fn take(c: usize, layout: Layout) -> *mut u8 {
     let size = class_size(c);
     let mut class = lock_class(c);
     if class.head.is_null() {
-        let s = new_slab();
+        let s = if c < SMALL_CLASSES { new_slab() } else { new_mid_slab() };
         if s.is_null() {
             drop(class);
             // SAFETY: the caller's layout is valid and not zero-sized.
@@ -349,7 +478,7 @@ fn take(c: usize, layout: Layout) -> *mut u8 {
         }
         // SAFETY: `new_slab` gave us a committed slab nobody else has; the class lock is held.
         unsafe {
-            init_slab(s);
+            init_slab(s, c);
             link(&mut class, s);
         }
     }
@@ -359,6 +488,11 @@ fn take(c: usize, layout: Layout) -> *mut u8 {
     unsafe {
         let p = if (*s).free.is_null() {
             let p = (*s).bump;
+            // Only a mid slab has uncommitted space (`end < limit`) to take from.
+            if (p as usize) + size > ((*s).end as usize) && !grow(s, size) {
+                drop(class);
+                return System.alloc(layout);
+            }
             (*s).bump = p.add(size);
             p
         } else {
@@ -367,7 +501,7 @@ fn take(c: usize, layout: Layout) -> *mut u8 {
             p
         };
         (*s).live += 1;
-        if (*s).free.is_null() && ((*s).end as usize) - ((*s).bump as usize) < size {
+        if (*s).free.is_null() && ((*s).limit as usize) - ((*s).bump as usize) < size {
             unlink(&mut class, s);
         }
         p
@@ -380,7 +514,7 @@ fn take(c: usize, layout: Layout) -> *mut u8 {
 /// `p` came from a slab through `take(c, ..)` and is not used afterwards.
 unsafe fn give(p: *mut u8, c: usize) {
     let mut class = lock_class(c);
-    let s = ((p as usize) & !(SLAB - 1)) as *mut Slab;
+    let s = slab_of(p, c);
     // SAFETY: `p` is a live block of the slab `s`, so the slab is mapped and has this class (the lock is held).
     unsafe {
         p.cast::<*mut u8>().write((*s).free);
@@ -394,9 +528,16 @@ unsafe fn give(p: *mut u8, c: usize) {
                 // The class's last slab stays, as new as it was.
                 (*s).free = null_mut();
                 (*s).bump = s.cast::<u8>().add(HEADER);
+                if c >= SMALL_CLASSES {
+                    trim_mid(s);
+                }
             } else {
                 unlink(&mut class, s);
-                release_slab(s);
+                if c >= SMALL_CLASSES {
+                    release_mid(s, ((*s).end as usize) - (s as usize));
+                } else {
+                    release_slab(s);
+                }
             }
         }
     }
@@ -423,9 +564,13 @@ pub fn pool_report() -> (usize, usize, String) {
             }
         }
     }
-    let committed = lock_arena().used.iter().map(|w| w.count_ones() as usize).sum::<usize>() * SLAB;
-    let spare = lock_arena().spare_n;
-    (committed, free_bytes, format!(" ({listed} slabs with room, {spare} spare)"))
+    let (units, spare) = {
+        let a = lock_arena();
+        (a.used.iter().map(|w| w.count_ones() as usize).sum::<usize>(), a.spare_n)
+    };
+    let (mid, spans) = (MID_COMMITTED.load(Relaxed), MID_SPANS.load(Relaxed));
+    let committed = (units - spans * (MID_SLAB / SLAB)) * SLAB + mid;
+    (committed, free_bytes, format!(" ({listed} slabs with room, {spare} spare, {spans} mid spans with {} KiB committed)", mid / 1024))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -440,9 +585,11 @@ enum Kind {
 
 #[inline]
 fn kind(size: usize, align: usize) -> Kind {
-    if size <= SMALL_MAX && align <= SMALL_ALIGN && size != 0 {
-        Kind::Small(class_of(size))
-    } else if size >= BIG_MIN && align <= PAGE {
+    if size <= MID_MAX && align <= SMALL_ALIGN && size != 0 {
+        // Every class size above 8 bytes that is a multiple of 16 puts its blocks on 16-byte boundaries (a slab is 16 KiB aligned and
+        // its header 64 bytes), so a block of 16 alignment is one whose size is rounded up to a multiple of 16.
+        Kind::Small(class_of(if align > 8 { size.next_multiple_of(16) } else { size }))
+    } else if size > MID_MAX && align <= PAGE {
         Kind::Big
     } else {
         Kind::Heap
@@ -548,17 +695,23 @@ mod tests {
     #[test]
     fn classes_round_up_and_cover_every_size() {
         let mut prev = 0;
-        for size in 1..=SMALL_MAX {
+        for size in 1..=MID_MAX {
             let c = class_of(size);
             assert!(c < CLASSES, "size {size}");
             assert!(class_size(c) >= size, "size {size} class {c}");
             assert!(c == 0 || class_size(c - 1) < size, "size {size} class {c} is not the smallest");
             assert!(c >= prev);
             assert_eq!(class_size(c) % 8, 0);
-            assert!(HEADER + class_size(c) <= SLAB);
+            assert!(HEADER + class_size(c) <= if c < SMALL_CLASSES { SLAB } else { MID_SLAB });
+            // A mid slab holds at least seven blocks.
+            assert!(c < SMALL_CLASSES || (MID_SLAB - HEADER) / class_size(c) >= 7, "class {c}");
             prev = c;
         }
-        assert_eq!(class_size(CLASSES - 1), SMALL_MAX);
+        for size in 1..=MID_MAX {
+            assert!(matches!(kind(size, 16), Kind::Small(c) if class_size(c) % 16 == 0 && class_size(c) >= size), "size {size}");
+        }
+        assert_eq!(class_size(SMALL_CLASSES - 1), SMALL_MAX);
+        assert_eq!(class_size(CLASSES - 1), MID_MAX);
         assert!(std::mem::size_of::<Slab>() <= HEADER);
     }
 
@@ -598,8 +751,8 @@ mod tests {
                         let size = match state >> 28 {
                             0..=9 => 1 + (state >> 8) as usize % 200,
                             10..=11 => 1 + (state >> 8) as usize % 1100,
-                            12 => 1 + (state >> 8) as usize % 5000,
-                            13 => BIG_MIN - 3000 + (state >> 8) as usize % 100_000,
+                            12 => 1 + (state >> 8) as usize % 33_000,
+                            13 => MID_MAX - 3000 + (state >> 8) as usize % 100_000,
                             _ => 1 + (state >> 8) as usize % 5000,
                         };
                         let align = if state & 0x30 == 0x30 { 16 } else { 1 << (state & 3) };
@@ -685,5 +838,48 @@ mod tests {
         for p in again {
             unsafe { a.dealloc(p, layout) };
         }
+    }
+
+    /// Mid blocks (1 KiB to 32 KiB) commit their slab as they go, keep their bytes, and give the span back when they are all freed.
+    #[test]
+    fn mid_slabs_commit_lazily_and_are_given_back() {
+        let _serial = serial();
+        let a = PoolAlloc;
+        let (before, spans) = (MID_COMMITTED.load(Relaxed), MID_SPANS.load(Relaxed));
+        // One 8 KiB block commits its header unit only (the first 16 KiB chunk): not the 256 KiB of the span.
+        let l8 = Layout::from_size_align(8192, 8).expect("layout");
+        // SAFETY: a valid, non-zero layout.
+        let one = unsafe { a.alloc(l8) };
+        assert!(!one.is_null() && in_arena(one));
+        assert!(MID_COMMITTED.load(Relaxed) <= before + 2 * SLAB, "{before} -> {}", MID_COMMITTED.load(Relaxed));
+        // 300 blocks of 20 KB (class 20480, 12 to a span) fill 25 spans, committing as they go; every block keeps its bytes.
+        let l20 = Layout::from_size_align(20_000, 8).expect("layout");
+        let blocks: Vec<*mut u8> = (0..300)
+            .map(|i| {
+                // SAFETY: a valid, non-zero layout.
+                let p = unsafe { a.alloc(l20) };
+                assert!(!p.is_null() && in_arena(p) && p as usize % 8 == 0);
+                fill(p, 20_000, i as u8);
+                p
+            })
+            .collect();
+        assert!(MID_SPANS.load(Relaxed) >= spans + 24);
+        assert!(MID_COMMITTED.load(Relaxed) >= before + 300 * 20_000);
+        for (i, &p) in blocks.iter().enumerate() {
+            check(p, 20_000, i as u8);
+        }
+        // Freed in the order they were taken: spans with no live block are decommitted and given back, the last one keeps 64 KiB.
+        for &p in &blocks {
+            // SAFETY: allocated above with this layout.
+            unsafe { a.dealloc(p, l20) };
+        }
+        assert!(MID_SPANS.load(Relaxed) <= spans + 2, "{} -> {}", spans, MID_SPANS.load(Relaxed));
+        assert!(MID_COMMITTED.load(Relaxed) <= before + 3 * MID_KEEP, "{before} -> {}", MID_COMMITTED.load(Relaxed));
+        // SAFETY: allocated above with this layout.
+        unsafe { a.dealloc(one, l8) };
+        // A block of exactly 32 KiB is mid, one byte more is big; 16-aligned ones are rounded up to a multiple of 16, 32-aligned ones are the heap's.
+        assert!(matches!(kind(32768, 8), Kind::Small(c) if c == CLASSES - 1));
+        assert!(kind(32769, 8) == Kind::Big && kind(32768, 32) == Kind::Heap && matches!(kind(1025, 16), Kind::Small(c) if class_size(c) == 1280));
+        assert!(matches!(kind(17, 16), Kind::Small(c) if class_size(c) == 32) && matches!(kind(100, 16), Kind::Small(c) if class_size(c) == 112));
     }
 }
