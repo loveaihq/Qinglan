@@ -12,6 +12,7 @@
 //!
 //! Everything here treats its input as hostile: non-finite numbers are skipped, sizes are capped, nothing panics.
 
+use crate::fmath::Fclamp;
 pub mod fill;
 pub mod stroke;
 
@@ -297,7 +298,7 @@ impl Path {
 /// Number of lines for a curve whose error bound numerator is `err` (error <= err / n^2).
 fn curve_lines(err: f32, tol: f32) -> usize {
     let n = (err / tol).sqrt().ceil();
-    if n.is_finite() { (n as usize).clamp(1, MAX_CURVE_LINES) } else { 1 }
+    if n.is_finite() { (n as usize).fclamp(1, MAX_CURVE_LINES) } else { 1 }
 }
 
 fn finish(out: &mut Vec<Poly>, cur: &mut Vec<Pt>, closed: bool) {

@@ -22,6 +22,7 @@
 //! * `IDWriteTextAnalysisSink` (we implement): 3 SetScriptAnalysis, 4 SetLineBreakpoints, 5
 //!   SetBidiLevel, 6 SetNumberSubstitution.
 
+use qinglan_engine::fmath::Fclamp;
 use core::ffi::c_void;
 use core::ptr::{NonNull, null, null_mut};
 
@@ -1304,7 +1305,7 @@ impl Factory {
                 }
             }
         }
-        let bgra: Vec<u8> = acc.as_chunks::<4>().0.iter().flat_map(|p| [p[2], p[1], p[0], p[3]]).map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect();
+        let bgra: Vec<u8> = acc.as_chunks::<4>().0.iter().flat_map(|p| [p[2], p[1], p[0], p[3]]).map(|v| (v.fclamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect();
         Some(RawColor { left: l, top: t, width: w as u32, height: h as u32, bgra })
     }
 }

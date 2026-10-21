@@ -467,17 +467,16 @@ pub fn rank_faces(faces: &[&FaceDesc], weight: f32, slant: FontSlant) -> Vec<usi
         };
         (stretch.0, stretch.1, style_rank, weight_key.0, weight_key.1)
     };
-    let mut order: Vec<usize> = (0..faces.len()).collect();
     let keys: Vec<(u8, f32, u8, u8, f32)> = faces.iter().map(|f| key(f)).collect();
-    order.sort_by(|&a, &b| {
-        let (ka, kb) = (keys.get(a).copied().unwrap_or((9, 0.0, 9, 9, 0.0)), keys.get(b).copied().unwrap_or((9, 0.0, 9, 9, 0.0)));
-        ka.0.cmp(&kb.0)
-            .then(ka.1.total_cmp(&kb.1))
-            .then(ka.2.cmp(&kb.2))
-            .then(ka.3.cmp(&kb.3))
-            .then(ka.4.total_cmp(&kb.4))
-            .then(b.cmp(&a))
-    });
+    let key_of = |i: usize| keys.get(i).copied().unwrap_or((9, 0.0, 9, 9, 0.0));
+    // Equal keys: the later declaration first. Start from the reverse order and sort stably by one key at a time,
+    // the last key first (one shared sort instead of a copy of the sorting code for a five-way comparison).
+    let mut order: Vec<usize> = (0..faces.len()).rev().collect();
+    crate::sorting::sort_by_u64_key(&mut order, |&i| crate::sorting::f32_key(key_of(i).4));
+    crate::sorting::sort_by_u64_key(&mut order, |&i| u64::from(key_of(i).3));
+    crate::sorting::sort_by_u64_key(&mut order, |&i| u64::from(key_of(i).2));
+    crate::sorting::sort_by_u64_key(&mut order, |&i| crate::sorting::f32_key(key_of(i).1));
+    crate::sorting::sort_by_u64_key(&mut order, |&i| u64::from(key_of(i).0));
     order
 }
 

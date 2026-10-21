@@ -5,6 +5,7 @@
 //! `IDWriteTextAnalyzer`; masks come from `IDWriteGlyphRunAnalysis`. See docs/decisions.md
 //! ("1b-3") for the choices made where the task sheet leaves room.
 
+use qinglan_engine::fmath::Fclamp;
 use std::cell::{Cell, RefCell};
 use std::time::Instant;
 use std::hash::{Hash, Hasher};
@@ -563,7 +564,7 @@ impl Inner {
             self.shape_cache = Lru::new(SHAPE_CACHE_BYTES);
         }
         let w = if q.weight.is_finite() { q.weight } else { 400.0 };
-        let weight = w.round().clamp(1.0, 999.0) as u32;
+        let weight = w.round().fclamp(1.0, 999.0) as u32;
         let style = match q.slant {
             FontSlant::Upright => 0,
             FontSlant::Oblique => 1,
@@ -1229,7 +1230,7 @@ impl WinPlatform {
         if text.is_empty() {
             return Vec::new();
         }
-        let size = if size_px.is_finite() { size_px.clamp(0.01, 4096.0) } else { 16.0 };
+        let size = if size_px.is_finite() { size_px.fclamp(0.01, 4096.0) } else { 16.0 };
         let size_bits = size.to_bits();
         let mut inn = self.inner.borrow_mut();
         let qi = inn.query_index(&self.dw, query);
@@ -1446,7 +1447,7 @@ impl Platform for WinPlatform {
             return None;
         }
         let sub = subpixel.min(3);
-        let size = if size_px.is_finite() { size_px.clamp(0.01, 1024.0) } else { return None };
+        let size = if size_px.is_finite() { size_px.fclamp(0.01, 1024.0) } else { return None };
         let g = u16::try_from(glyph).ok()?;
         let key = (font.0, glyph, size.to_bits(), sub);
         let mut inn = self.inner.borrow_mut();

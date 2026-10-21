@@ -79,7 +79,8 @@ pub struct Loader {
     tx: Sender<Done>,
     rx: Receiver<Done>,
     /// Waiting requests by priority (documents, style sheets, images).
-    queues: [VecDeque<Queued>; 3],
+    /// (A `Vec` of boxes: the drop code of the three queues as an array of unboxed items is several inlined copies, 10 KB.)
+    queues: Vec<VecDeque<Box<Queued>>>,
     in_flight: usize,
     per_host: HashMap<String, usize>,
     /// Results that need no transfer (cache hits, `data:`), delivered by the next `poll`.
@@ -101,7 +102,7 @@ impl Loader {
             wake,
             tx,
             rx,
-            queues: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
+            queues: vec![VecDeque::new(), VecDeque::new(), VecDeque::new()],
             in_flight: 0,
             per_host: HashMap::new(),
             ready: Vec::new(),
@@ -168,7 +169,7 @@ impl Loader {
         }
         let host = (plan == Plan::Network).then(|| policy::host_key(&url));
         if let Some(q) = self.queues.get_mut(kind.priority()) {
-            q.push_back(Queued { ticket, url, kind, plan, headers, host });
+            q.push_back(Box::new(Queued { ticket, url, kind, plan, headers, host }));
         }
         self.pump();
         Ok(ticket)
@@ -246,7 +247,7 @@ impl Loader {
         while self.in_flight < MAX_IN_FLIGHT {
             let Some((qi, pos)) = self.next_startable() else { break };
             let Some(q) = self.queues.get_mut(qi).and_then(|d| d.remove(pos)) else { break };
-            self.start(q);
+            self.start(*q);
         }
     }
 

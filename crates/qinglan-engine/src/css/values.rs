@@ -1,5 +1,6 @@
 //! CSS values: lengths, percentages and `calc()`/`min()`/`max()`/`clamp()` (css-values-4).
 
+use crate::fmath::Fclamp;
 use std::rc::Rc;
 
 use super::syntax::{BlockKind, Cv, split_commas, trim_ws};
@@ -92,7 +93,7 @@ pub struct LenCtx {
 pub const MAX_PX: f32 = 1.0e9;
 
 fn clamp_px(v: f32) -> f32 {
-    if v.is_nan() { 0.0 } else { v.clamp(-MAX_PX, MAX_PX) }
+    if v.is_nan() { 0.0 } else { v.fclamp(-MAX_PX, MAX_PX) }
 }
 
 impl LenUnit {
@@ -205,7 +206,7 @@ pub fn fmt_num(v: f32) -> String {
     if v == v.trunc() && v.abs() < 1.0e9 {
         format!("{}", v as i64)
     } else {
-        let s = format!("{v:.4}");
+        let s = crate::fmath::fixed_f32(v, 4);
         s.trim_end_matches('0').trim_end_matches('.').to_string()
     }
 }
@@ -480,10 +481,10 @@ pub fn parse_number(cv: &Cv) -> Option<f32> {
 /// An `<integer>` (calc() results are rounded).
 pub fn parse_integer(cv: &Cv) -> Option<i32> {
     match cv {
-        Cv::Tok(Token::Number { value, is_int: true, .. }) => Some((*value).clamp(i32::MIN as f64, i32::MAX as f64) as i32),
+        Cv::Tok(Token::Number { value, is_int: true, .. }) => Some((*value).fclamp(i32::MIN as f64, i32::MAX as f64) as i32),
         Cv::Func(name, items) => {
             let (n, ty) = parse_math_function(name, items)?;
-            (ty == Ty::Num).then(|| n.eval(0.0).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32)
+            (ty == Ty::Num).then(|| n.eval(0.0).round().fclamp(i32::MIN as f32, i32::MAX as f32) as i32)
         }
         _ => None,
     }

@@ -16,6 +16,7 @@
 //!   inline-level placeholders (so that the static position can be found) and never split an inline box.
 //! * List items get their ordinal here (HTML 4.4.8: `<ol start reversed>`, `<li value>`).
 
+use crate::fmath::Fclamp;
 use std::rc::Rc;
 
 use super::generated::{Counters, Piece};
@@ -510,7 +511,7 @@ pub(crate) fn parse_html_int(s: &str) -> Option<i32> {
     }
     let v: i64 = digits.parse().ok()?;
     let v = if neg { -v } else { v };
-    Some(v.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+    Some(v.fclamp(i32::MIN as i64, i32::MAX as i64) as i32)
 }
 
 fn collapse_ws(s: &str) -> String {

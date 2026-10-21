@@ -2,6 +2,7 @@
 //! errors do not pile up. All arithmetic saturates at +-2^24 px, so hostile lengths (1e9px) cannot
 //! overflow.
 
+use crate::fmath::Fclamp;
 use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
@@ -17,7 +18,7 @@ impl LayoutUnit {
     pub const MIN: LayoutUnit = LayoutUnit(-(RAW_MAX as i32));
 
     fn sat(v: i64) -> LayoutUnit {
-        LayoutUnit(v.clamp(-RAW_MAX, RAW_MAX) as i32)
+        LayoutUnit(v.fclamp(-RAW_MAX, RAW_MAX) as i32)
     }
 
     pub fn from_raw(raw: i64) -> LayoutUnit {

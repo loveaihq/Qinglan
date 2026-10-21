@@ -5,6 +5,7 @@
 //! colors along the gradient. Colors are interpolated premultiplied in sRGB, the rule for the legacy color syntaxes
 //! (CSS Color 4 12.3); every color this engine parses is already sRGB, so that is the only space.
 
+use crate::fmath::Fclamp;
 use crate::css::bg::{Extent, GradKind, Gradient, LinearDir, RadSize};
 use crate::css::color::Color;
 
@@ -77,11 +78,11 @@ fn wrap(x: f32, m: f32) -> f32 {
 /// channel. (The C library's `powf` alone is 3.7 KB of the executable.)
 fn pow_unit(t: f32, e: f32) -> f32 {
     let l = crate::fmath::log2(t);
-    let y = (e * l).clamp(-100.0, 100.0);
+    let y = (e * l).fclamp(-100.0, 100.0);
     let yi = y.floor();
     let yf = y - yi;
     let p = 1.0 + yf * (std::f32::consts::LN_2 + yf * (0.240_226_5 + yf * (0.055_504_11 + yf * (0.009_618_13 + yf * 0.001_333_36))));
-    p * f32::from_bits(((yi as i32 + 127).clamp(1, 254) as u32) << 23)
+    p * f32::from_bits(((yi as i32 + 127).fclamp(1, 254) as u32) << 23)
 }
 
 fn premul(c: Color) -> Rgba {
@@ -256,7 +257,7 @@ pub fn resolve(g: &Gradient, w: f32, h: f32, text: Color) -> Option<GradPaint> {
         let pos = c.0.unwrap_or(0.0);
         let next = cols.get(k + 1).and_then(|x| x.0).unwrap_or(pos);
         let hint = match c.2 {
-            Some(hp) if next > pos => ((hp.clamp(pos, next) - pos) / (next - pos)).clamp(0.0, 1.0),
+            Some(hp) if next > pos => ((hp.fclamp(pos, next) - pos) / (next - pos)).fclamp(0.0, 1.0),
             _ => 0.0,
         };
         // A hint at relative 0.5 is a plain linear transition.
@@ -272,7 +273,7 @@ pub fn resolve(g: &Gradient, w: f32, h: f32, text: Color) -> Option<GradPaint> {
         GradKind::Conic { .. } => 1024,
         _ => (span * 2.0).ceil() as usize,
     }
-    .clamp(2, MAX_LUT);
+    .fclamp(2, MAX_LUT);
     let mut lut = Vec::with_capacity(entries);
     for k in 0..entries {
         let s = if last - first < 1.0e-4 {
@@ -281,11 +282,11 @@ pub fn resolve(g: &Gradient, w: f32, h: f32, text: Color) -> Option<GradPaint> {
             first + (k as f32 + 0.5) / entries as f32 * span
         };
         let c = color_at(&stops, s);
-        let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let b = |v: f32| (v.fclamp(0.0, 1.0) * 255.0 + 0.5) as u8;
         lut.push([b(c[2]), b(c[1]), b(c[0]), b(c[3])]);
     }
     let bytes = |c: Rgba| {
-        let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let b = |v: f32| (v.fclamp(0.0, 1.0) * 255.0 + 0.5) as u8;
         [b(c[2]), b(c[1]), b(c[0]), b(c[3])]
     };
     let (before, after) = (bytes(stops.first()?.color), bytes(stops.last()?.color));

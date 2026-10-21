@@ -9,6 +9,7 @@
 //! wall-clock time over the same span, which also contains the wait for the sheets (a replay is fast, but each sheet is
 //! still a thread and a file read), so it is an upper bound.
 
+use qinglan_engine::fmath::Fclamp;
 use std::time::{Duration, Instant};
 
 use crate::args::BenchOptions;
@@ -153,15 +154,42 @@ pub fn percentile(sorted: &[f64], q: f64) -> f64 {
     if sorted.is_empty() {
         return 0.0;
     }
-    let i = ((sorted.len() as f64 - 1.0) * q.clamp(0.0, 1.0)).round() as usize;
+    let i = ((sorted.len() as f64 - 1.0) * q.fclamp(0.0, 1.0)).round() as usize;
     sorted.get(i).copied().unwrap_or(0.0)
+}
+
+/// `v` with `decimals` decimals, rounded half away from zero. The report is a diagnostic, and Rust's own float
+/// formatting (`{:.1}`, `{}`) is about 25 KB of code that nothing else in the program needs.
+pub fn fixed(v: impl Into<f64>, decimals: u32) -> String {
+    let v: f64 = v.into();
+    if v.is_nan() {
+        return "NaN".to_string();
+    }
+    let scale = 10u64.pow(decimals.min(6));
+    let r = (v.abs() * scale as f64).round();
+    if r >= 1e18 {
+        return if v < 0.0 { "-inf" } else { "inf" }.to_string();
+    }
+    let r = r as u64;
+    let sign = if v < 0.0 && r > 0 { "-" } else { "" };
+    if scale == 1 {
+        format!("{sign}{r}")
+    } else {
+        format!("{sign}{}.{:0w$}", r / scale, r % scale, w = decimals.min(6) as usize)
+    }
+}
+
+/// `v` with up to three decimals and no trailing zeros (`1920`, `1.25`).
+pub fn trimmed(v: impl Into<f64>) -> String {
+    let s = fixed(v, 3);
+    if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s }
 }
 
 impl Report<'_> {
     /// `key: value` lines, one per number; a number that was not measured says `n/a`.
     pub fn format(&self) -> String {
         let b = self.bench;
-        let num = |v: Option<f64>| v.map_or_else(|| "n/a".to_string(), |v| format!("{v:.1}"));
+        let num = |v: Option<f64>| v.map_or_else(|| "n/a".to_string(), |v| fixed(v, 1));
         let mut sorted = b.frames.clone();
         qinglan_engine::sorting::sort_by_u64_key(&mut sorted, |&x| qinglan_engine::sorting::f64_key(x));
         let frames = !sorted.is_empty();
@@ -174,7 +202,7 @@ impl Report<'_> {
             s.push('\n');
         };
         line("bench-address", o.address.clone());
-        line("bench-viewport", format!("{}x{} css px, dpr {} ({}x{} device px)", o.width, o.height, o.dpr, (o.width * o.dpr).round(), (o.height * o.dpr).round()));
+        line("bench-viewport", format!("{}x{} css px, dpr {} ({}x{} device px)", trimmed(o.width), trimmed(o.height), trimmed(o.dpr), trimmed((o.width * o.dpr).round()), trimmed((o.height * o.dpr).round())));
         line("startup-ms", num(b.startup_ms));
         line("first-screen-ms", num(b.first_screen.map(|s| ms(s.busy))));
         line("first-screen-wall-ms", num(b.first_screen.map(|s| ms(s.wall))));
@@ -194,9 +222,9 @@ impl Report<'_> {
         line("scroll-present-stalls", format!("{stalls} frames over 50 ms"));
         let mut order: Vec<usize> = (0..b.frames.len()).collect();
         qinglan_engine::sorting::sort_by_u64_key(&mut order, |&i| !qinglan_engine::sorting::f64_key(b.frames.get(i).copied().unwrap_or(0.0)));
-        let slowest: Vec<String> = order.iter().take(3).map(|&i| format!("{:.1} ms at y={:.0}", b.frames[i], b.frame_y.get(i).copied().unwrap_or(0.0))).collect();
+        let slowest: Vec<String> = order.iter().take(3).map(|&i| format!("{} ms at y={}", fixed(b.frames[i], 1), fixed(b.frame_y.get(i).copied().unwrap_or(0.0), 0))).collect();
         line("scroll-slowest-frames", slowest.join(", "));
-        line("scroll-relayouts", format!("{} (longest {:.1} ms)", b.scroll_relayouts, b.scroll_relayout_max_ms));
+        line("scroll-relayouts", format!("{} (longest {} ms)", b.scroll_relayouts, fixed(b.scroll_relayout_max_ms, 1)));
         line("scroll-decode-ms", num(frames.then_some(b.decode_ms)));
         line("peak-private-bytes", self.memory.map_or_else(|| "n/a".to_string(), |m| m.1.to_string()));
         line("private-bytes-after-scroll", self.memory.map_or_else(|| "n/a".to_string(), |m| m.0.to_string()));
@@ -217,6 +245,22 @@ mod tests {
 
     fn opts() -> BenchOptions {
         BenchOptions { address: "http://x/".into(), width: 1920.0, height: 1080.0, dpr: 1.5 }
+    }
+
+    #[test]
+    fn numbers_are_written_without_float_formatting() {
+        assert_eq!(fixed(6.04, 1), "6.0");
+        assert_eq!(fixed(6.06, 1), "6.1");
+        assert_eq!(fixed(0.0, 1), "0.0");
+        assert_eq!(fixed(123.456, 0), "123");
+        assert_eq!(fixed(-2.5, 1), "-2.5");
+        assert_eq!(fixed(-0.01, 1), "0.0");
+        assert_eq!(fixed(f64::NAN, 1), "NaN");
+        assert_eq!(fixed(f64::INFINITY, 1), "inf");
+        assert_eq!(trimmed(1920.0), "1920");
+        assert_eq!(trimmed(1.5), "1.5");
+        assert_eq!(trimmed(1.25), "1.25");
+        assert_eq!(trimmed(0.0), "0");
     }
 
     #[test]

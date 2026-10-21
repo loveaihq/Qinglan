@@ -2,6 +2,7 @@
 //! (css-text-decor-3 4.1), `transform` and `transform-origin` (css-transforms-1 6, 7, 8). 3D functions keep their 2D part
 //! (the upper left 2x2 and the translation of the 4x4 matrix).
 
+use crate::fmath::Fclamp;
 use std::rc::Rc;
 
 use super::color::{ColorValue, parse_color_cv};
@@ -105,7 +106,7 @@ impl Fx {
                 TFn::Skew(ax, ay) => {
                     let tan = |a: f32| {
                         let (s, c) = sin_cos(f64::from(a));
-                        (s / c).clamp(-1.0e6, 1.0e6) as f32
+                        (s / c).fclamp(-1.0e6, 1.0e6) as f32
                     };
                     Transform { a: 1.0, b: tan(*ay), c: tan(*ax), d: 1.0, e: 0.0, f: 0.0 }
                 }
@@ -125,7 +126,7 @@ pub fn parse_opacity(c: &Cv) -> Option<Value> {
         Cv::Tok(Token::Percentage { value }) => *value as f32 / 100.0,
         _ => parse_number(c)?,
     };
-    v.is_finite().then(|| Value::Opacity(v.clamp(0.0, 1.0)))
+    v.is_finite().then(|| Value::Opacity(v.fclamp(0.0, 1.0)))
 }
 
 /// `box-shadow` / `text-shadow`: `none` or a comma-separated list of `<color>? && <length>{2,4} && inset?` (text: no spread, no `inset`).

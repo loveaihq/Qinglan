@@ -1,6 +1,7 @@
 //! Computed style: the groups (`Rc`-shared), initial values and the computation of a group from
 //! the cascaded declarations (css-cascade-5 "defaulting", css-values-4 "computed value").
 
+use crate::fmath::Fclamp;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
@@ -549,7 +550,7 @@ pub fn compute_font(parent: &Rc<FontStyle>, d: &Declared<'_>, env: &Env<'_>, roo
         },
         Pick::Value(_) => {}
     }
-    f.size = f.size.clamp(0.0, 10_000.0);
+    f.size = f.size.fclamp(0.0, 10_000.0);
     // The element's own `em`, `ex` and `ch` (line-height, letter-spacing) use its final font.
     let (own_ex, own_ch) = if f.size == parent.size && f.family == parent.family && f.weight == parent.weight && f.style == parent.style {
         (pex, pch)

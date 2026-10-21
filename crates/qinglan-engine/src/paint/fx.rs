@@ -14,6 +14,7 @@
 //!   re-rasterized, not stretched), then the layer is composited through the rest of the transform (a whole-pixel offset,
 //!   or bilinear sampling for rotation and skew) with the group's opacity (css-color-4 12.1, css-compositing-1 3).
 
+use crate::fmath::Fclamp;
 use std::cell::RefCell;
 use std::hash::Hasher;
 use std::rc::Rc;
@@ -64,7 +65,7 @@ thread_local! {
 /// `feGaussianBlur`: `d = floor(s * 3 * sqrt(2 pi) / 4 + 0.5)`; odd `d`: three boxes of `d`; even: two of `d`, one a pixel
 /// to the left and one to the right, and one of `d + 1`).
 fn passes(sigma: f32) -> [(usize, usize); 3] {
-    let d = (sigma * 1.880_15 + 0.5).floor().clamp(1.0, 4096.0) as usize;
+    let d = (sigma * 1.880_15 + 0.5).floor().fclamp(1.0, 4096.0) as usize;
     if d % 2 == 1 { [(d / 2, d / 2); 3] } else { [(d / 2, d / 2 - 1), (d / 2 - 1, d / 2), (d / 2, d / 2)] }
 }
 
@@ -621,7 +622,7 @@ impl Ctx<'_> {
         let flat = self.depth >= MAX_DEPTH;
         let xf = &g.xf;
         let (a, b, c, d) = (f64::from(xf.a), f64::from(xf.b), f64::from(xf.c), f64::from(xf.d));
-        let k = a.hypot(b).max(c.hypot(d)).clamp(0.125, 8.0);
+        let k = a.hypot(b).max(c.hypot(d)).fclamp(0.125, 8.0);
         // What is left of the linear part once the scale is in the layer.
         let near = |v: f64, t: f64| (v - t).abs() < 1.0e-3;
         // A turn by a multiple of 90 degrees is exact, not the rounding of a cosine.

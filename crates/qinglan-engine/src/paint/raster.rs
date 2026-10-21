@@ -7,6 +7,7 @@
 //! way). Images are drawn 1:1 when the decoded bitmap has exactly the size of the destination rectangle (the
 //! normal case: they are decoded at display size) and bilinearly scaled otherwise.
 
+use crate::fmath::Fclamp;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -62,7 +63,7 @@ pub struct RasterStats {
 
 /// Layout units to device pixels, rounded.
 pub(super) fn dev(v: LU, dpr: f64) -> i32 {
-    (f64::from(v.raw()) * dpr / 64.0).round().clamp(-1.0e9, 1.0e9) as i32
+    (f64::from(v.raw()) * dpr / 64.0).round().fclamp(-1.0e9, 1.0e9) as i32
 }
 
 pub(super) fn device_rect(r: &Rect, dpr: f64) -> IRect {
@@ -154,10 +155,10 @@ pub fn render_frame(list: &DisplayList, platform: &dyn Platform, images: &mut dy
 /// number of rows wanted: a window can draw and copy the viewport a band at a time and so needs a buffer of a band,
 /// not of the whole viewport. The pixels are the same as the same rows of [`render_frame`].
 pub fn render_band(list: &DisplayList, platform: &dyn Platform, images: &mut dyn ImageSource, view: View, y0: u32, frame: &mut Frame) -> RasterStats {
-    let dpr = f64::from(view.dpr).clamp(0.25, 8.0);
+    let dpr = f64::from(view.dpr).fclamp(0.25, 8.0);
     let band = y0.min(1 << 30) as i32;
     let sy = (f64::from(view.scroll_y.max(0.0)) * dpr).round().min(1.0e9) as i32 + band;
-    let sx = (f64::from(view.scroll_x) * dpr).round().clamp(-1.0e9, 1.0e9) as i32;
+    let sx = (f64::from(view.scroll_x) * dpr).round().fclamp(-1.0e9, 1.0e9) as i32;
     let (w, h) = (frame.width as i32, frame.height as i32);
     let bounds = IRect { x0: 0, y0: 0, x1: w, y1: h };
     let canvas = list.canvas.unwrap_or(Color::WHITE);
@@ -247,7 +248,7 @@ impl Ctx<'_> {
                         let Some(b) = before.get((ry * w + rx) * 4 + c).copied() else { continue };
                         if let Some(d) = row.get_mut(x as usize * 4 + c) {
                             let (b, a) = (i32::from(b), i32::from(*d));
-                            *d = (b + ((a - b) * cov + if a >= b { 127 } else { -127 }) / 255).clamp(0, 255) as u8;
+                            *d = (b + ((a - b) * cov + if a >= b { 127 } else { -127 }) / 255).fclamp(0, 255) as u8;
                         }
                     }
                 }
@@ -397,8 +398,8 @@ impl Ctx<'_> {
             return;
         }
         self.stats.images += usize::from(bmp.is_some());
-        let ox = (f64::from(b.origin.0) * dpr).round().clamp(-1.0e9, 1.0e9) as i32 - self.sx;
-        let oy = (f64::from(b.origin.1) * dpr).round().clamp(-1.0e9, 1.0e9) as i32 - self.sy;
+        let ox = (f64::from(b.origin.0) * dpr).round().fclamp(-1.0e9, 1.0e9) as i32 - self.sx;
+        let oy = (f64::from(b.origin.1) * dpr).round().fclamp(-1.0e9, 1.0e9) as i32 - self.sy;
         let step = |s: f32| (s > 0.0).then(|| f64::from(s) * dpr);
         let (stx, sty) = (step(b.step.0), step(b.step.1));
         // Start of tile `k` along an axis with origin `o` and step `s`.
@@ -563,13 +564,13 @@ fn draw_image(frame: &mut Frame, img: &Arc<DecodedImage>, dst: &IRect, area: &IR
     let cols: Vec<(usize, usize, u32)> = (area.x0..area.x1)
         .map(|x| {
             let fx = ((x - dst.x0) as f32 + 0.5) * kx - 0.5;
-            let fx = fx.clamp(0.0, (sw - 1) as f32);
+            let fx = fx.fclamp(0.0, (sw - 1) as f32);
             let x0 = fx.floor() as usize;
             (x0, (x0 + 1).min(sw - 1), ((fx - x0 as f32) * 256.0) as u32)
         })
         .collect();
     for (y, row) in rows_mut(frame, area) {
-        let fy = (((y - dst.y0) as f32 + 0.5) * ky - 0.5).clamp(0.0, (sh - 1) as f32);
+        let fy = (((y - dst.y0) as f32 + 0.5) * ky - 0.5).fclamp(0.0, (sh - 1) as f32);
         let y0 = fy.floor() as usize;
         let wy = ((fy - y0 as f32) * 256.0) as u32;
         let (Some(r0), Some(r1)) = (src_row(y0), src_row((y0 + 1).min(sh - 1))) else { continue };

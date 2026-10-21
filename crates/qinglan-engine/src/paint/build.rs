@@ -4,6 +4,7 @@
 //! or 0 in document order and the positive ones. A positioned box and everything in its flow is painted at its turn
 //! in the context it belongs to, not inside the flow; `position: fixed` boxes (and what they contain) go to the fixed list.
 
+use crate::fmath::Fclamp;
 use std::rc::Rc;
 
 use super::{BgDraw, BorderDraw, DisplayList, Group, ImagePlace, ImageSpot, Item, ItemKind, NO_CLIP, NO_SCOPE, Pane, PaintGlyph, RRect, Rect, Round, Scope, ScopeKind, ScrollAxis, ShadowDraw, StickyRule, TextRun, gradient};
@@ -592,7 +593,7 @@ impl Builder<'_> {
         }
         let corners = [(local.x, local.y), (local.right(), local.y), (local.x, local.bottom()), (local.right(), local.bottom())].map(|(cx, cy)| xf.apply(crate::vector::Pt::new(cx.to_f32(), cy.to_f32())));
         let lim = (MAX_PAGE_HEIGHT_PX / 2) as f32;
-        let fold = |f: fn(f32, f32) -> f32, g: fn(&crate::vector::Pt) -> f32, init: f32| corners.iter().map(g).fold(init, f).clamp(-lim, lim);
+        let fold = |f: fn(f32, f32) -> f32, g: fn(&crate::vector::Pt) -> f32, init: f32| corners.iter().map(g).fold(init, f).fclamp(-lim, lim);
         let (x0, x1) = (fold(f32::min, |p| p.x, f32::MAX), fold(f32::max, |p| p.x, f32::MIN));
         let (y0, y1) = (fold(f32::min, |p| p.y, f32::MAX), fold(f32::max, |p| p.y, f32::MIN));
         let bounds = Rect::new(LU::from_f32(x0), LU::from_f32(y0), LU::from_f32(x1 - x0), LU::from_f32(y1 - y0));
@@ -793,7 +794,7 @@ impl Builder<'_> {
             if color.a == 0 || ![dx, dy, blur, spread].iter().all(|v| v.is_finite()) {
                 continue;
             }
-            let (dx, dy, blur, spread) = (dx.clamp(-1.0e6, 1.0e6), dy.clamp(-1.0e6, 1.0e6), blur.min(1.0e5), spread.clamp(-1.0e6, 1.0e6));
+            let (dx, dy, blur, spread) = (dx.fclamp(-1.0e6, 1.0e6), dy.fclamp(-1.0e6, 1.0e6), blur.min(1.0e5), spread.fclamp(-1.0e6, 1.0e6));
             let (rect, radii, bounds) = if inset {
                 (pb, inset_radii(radii, bw.map(LU::to_f32)), pb)
             } else {
@@ -1008,7 +1009,7 @@ impl Builder<'_> {
             return;
         }
         let w = border_px(o.width);
-        let grow = LU::from_f32(o.offset.clamp(-1.0e5, 1.0e5)) + w;
+        let grow = LU::from_f32(o.offset.fclamp(-1.0e5, 1.0e5)) + w;
         let rect = Rect::new(r.x - grow, r.y - grow, (r.w + grow + grow).max0(), (r.h + grow + grow).max0());
         let g = grow.to_f32();
         let radii = radii.map(|(a, b)| if a > 0.0 && b > 0.0 { (a + g, b + g) } else { (0.0, 0.0) });
@@ -1205,7 +1206,7 @@ impl Builder<'_> {
             if col.a == 0 || ![dx, dy, blur].iter().all(|v| v.is_finite()) {
                 continue;
             }
-            let (dx, dy, blur) = (dx.clamp(-1.0e5, 1.0e5), dy.clamp(-1.0e5, 1.0e5), blur.min(1.0e4));
+            let (dx, dy, blur) = (dx.fclamp(-1.0e5, 1.0e5), dy.fclamp(-1.0e5, 1.0e5), blur.min(1.0e4));
             let g = LU::from_f32(blur * 1.5 + 1.0);
             let b = Rect::new(bounds.x + LU::from_f32(dx) - g, bounds.y + LU::from_f32(dy) - g, bounds.w + g + g, bounds.h + g + g);
             self.push(b, ItemKind::Text(TextRun { x: x + LU::from_f32(dx), baseline: baseline + LU::from_f32(dy), size, color: col, glyphs, blur, rot }));

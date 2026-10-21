@@ -6,6 +6,7 @@
 //! declaration of the element itself; the builder resolves inheritance itself (`St`), which is also what makes `use`
 //! instances inherit from the `use` element and not from where the referenced element sits.
 
+use crate::fmath::Fclamp;
 use std::rc::Rc;
 
 use super::data::{self, Unit};
@@ -187,7 +188,7 @@ fn mul255(a: u32, b: u32) -> u32 {
 }
 
 fn alpha_of(op: f32) -> u8 {
-    (op.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+    (op.fclamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
 #[inline(never)]
@@ -223,7 +224,7 @@ fn opacity_value(t: &str) -> Option<f32> {
     let mut c = data::Cur::new(t.trim());
     let v = c.number()?;
     let v = if c.rest() == "%" { v / 100.0 } else if c.rest().is_empty() { v } else { return None };
-    Some(v.clamp(0.0, 1.0))
+    Some(v.fclamp(0.0, 1.0))
 }
 
 impl<'a> B<'a> {
@@ -876,7 +877,7 @@ impl<'a> B<'a> {
                     let v = k.number()?;
                     Some(if k.rest() == "%" { v / 100.0 } else { v })
                 });
-                let off = off.unwrap_or(0.0).clamp(0.0, 1.0).max(stops.last().map_or(0.0, |s| s.0));
+                let off = off.unwrap_or(0.0).fclamp(0.0, 1.0).max(stops.last().map_or(0.0, |s| s.0));
                 let col = match self.own(&style, pstyle.as_deref(), P_STOP_COLOR).and_then(|t| parse_paint(&t)) {
                     Some(Spec::Color(c)) => c,
                     Some(Spec::Current) => style.text.color,

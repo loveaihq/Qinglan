@@ -6,6 +6,7 @@
 //! ratio) and an image with no size at all is 0x0. Frames and plug-ins are 300x150 like any replaced
 //! element without an intrinsic size (CSS2 10.3.2).
 
+use crate::fmath::Fclamp;
 use super::block::resolve_dim;
 use super::boxtree::{BoxId, ReplacedKind, parse_html_int};
 use super::image::ImageState;
@@ -30,7 +31,7 @@ fn ratio_of(w: f64, h: f64) -> Option<f64> {
 /// `width` and `height` are `auto`, so that min/max constraints keep the ratio.
 fn constrain(w: f64, h: f64, min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> (f64, f64) {
     if w <= 0.0 || h <= 0.0 {
-        return (w.clamp(min_w, max_w.max(min_w)), h.clamp(min_h, max_h.max(min_h)));
+        return (w.fclamp(min_w, max_w.max(min_w)), h.fclamp(min_h, max_h.max(min_h)));
     }
     let (over_w, under_w, over_h, under_h) = (w > max_w, w < min_w, h > max_h, h < min_h);
     match (over_w, under_w, over_h, under_h) {
@@ -162,8 +163,8 @@ impl Layouter<'_> {
 /// for `auto`), the `(min-width, max-width, min-height, max-height)` and what is known of the element itself.
 fn solve(spec_w: Option<f64>, spec_h: Option<f64>, limits: (f64, f64, f64, f64), nat: &Natural) -> (f64, f64) {
     let (min_w, max_w, min_h, max_h) = limits;
-    let cw = |v: f64| v.clamp(min_w, max_w.max(min_w));
-    let ch = |v: f64| v.clamp(min_h, max_h.max(min_h));
+    let cw = |v: f64| v.fclamp(min_w, max_w.max(min_w));
+    let ch = |v: f64| v.fclamp(min_h, max_h.max(min_h));
     match (spec_w, spec_h) {
         (Some(w), Some(h)) => (cw(w), ch(h)),
         (Some(w), None) => {

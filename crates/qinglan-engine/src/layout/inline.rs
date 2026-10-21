@@ -18,6 +18,7 @@
 //!
 //! `measure_inline` gives the min-content and max-content widths of a paragraph from the same units.
 
+use crate::fmath::Fclamp;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -1095,7 +1096,7 @@ impl Layouter<'_> {
                 u.first = text.chars().next().unwrap_or('\u{FFFC}');
                 u.last = text.chars().next_back().unwrap_or('\u{FFFC}');
                 u.vo = 3;
-                u.tcy = (scale * 100.0).clamp(1.0, 100.0) as u8;
+                u.tcy = (scale * 100.0).fclamp(1.0, 100.0) as u8;
                 units.push(u);
                 return;
             }

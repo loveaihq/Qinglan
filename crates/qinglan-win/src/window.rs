@@ -86,6 +86,31 @@ pub enum Event {
     Close,
 }
 
+impl Event {
+    /// The variant's name, for the crash message (`{:?}` would pull the float-to-text code in for `Wheel`'s `f32`).
+    fn label(&self) -> &'static str {
+        match self {
+            Event::Ready => "Ready",
+            Event::Size { .. } => "Size",
+            Event::Dpi { .. } => "Dpi",
+            Event::Paint => "Paint",
+            Event::MouseMove { .. } => "MouseMove",
+            Event::MouseLeave => "MouseLeave",
+            Event::MouseDown { .. } => "MouseDown",
+            Event::MouseUp => "MouseUp",
+            Event::Click { .. } => "Click",
+            Event::Wheel { .. } => "Wheel",
+            Event::Key { .. } => "Key",
+            Event::Scroll(_) => "Scroll",
+            Event::Command(_) => "Command",
+            Event::Timer(_) => "Timer",
+            Event::Wake => "Wake",
+            Event::User(_) => "User",
+            Event::Close => "Close",
+        }
+    }
+}
+
 /// The application behind the window.
 pub trait App {
     /// Handle `ev`. The return value matters for [`Event::Key`] (handled) and [`Event::Close`] (veto).
@@ -195,7 +220,7 @@ fn run_event(app: &mut dyn App, ui: &Ui, ev: Event) -> bool {
     match catch_unwind(AssertUnwindSafe(|| app.event(ui, ev))) {
         Ok(r) => r,
         Err(_) => {
-            eprintln!("qinglan: the application panicked while handling {ev:?}");
+            eprintln!("qinglan: the application panicked while handling {}", ev.label());
             false
         }
     }

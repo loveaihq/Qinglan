@@ -32,7 +32,7 @@ pub fn assemble(flavor: u32, mut tables: Vec<Table>) -> Result<Vec<u8>, FontErro
     if n == 0 || n > MAX_TABLES {
         return Err(FontError::Corrupt("table count"));
     }
-    tables.sort_by_key(|t| t.tag);
+    crate::sorting::sort_by_u64_key(&mut tables, |t| u64::from(u32::from_be_bytes(t.tag)));
     if tables.windows(2).any(|w| w.first().map(|a| a.tag) == w.get(1).map(|b| b.tag)) {
         return Err(FontError::Corrupt("duplicate table"));
     }

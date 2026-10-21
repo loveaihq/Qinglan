@@ -5,6 +5,7 @@
 //! The hints are returned as a declaration block that takes part in the cascade as the weakest
 //! author-level declarations (specificity 0, before every author rule).
 
+use crate::fmath::Fclamp;
 use std::rc::Rc;
 
 use super::color::{Color, ColorValue, parse_legacy_color};
@@ -600,7 +601,7 @@ fn legacy_font_size(input: &str) -> Option<u8> {
     } else if mode == -1 {
         value = 3 - value;
     }
-    let value = value.clamp(1, 7);
+    let value = value.fclamp(1, 7);
     // 1 -> x-small (index 1) ... 7 -> xxx-large (index 7).
     Some(value as u8)
 }

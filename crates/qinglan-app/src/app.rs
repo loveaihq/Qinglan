@@ -1,6 +1,7 @@
 //! The browser: what the window's events do. One [`Browser`] lives on the UI thread; the network runs on the loader's
 //! threads and reaches it through the wake-up message, the UI thread never waits for it.
 
+use qinglan_engine::fmath::Fclamp;
 use std::any::Any;
 use std::io::Write as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -148,7 +149,7 @@ const BAND_BYTES: u32 = 2 << 20;
 
 /// Rows of a band for a viewport `w` x `h` device pixels.
 fn band_rows(w: u32, h: u32) -> u32 {
-    (BAND_BYTES / (w.max(1) * 4)).clamp(64, h.max(64))
+    (BAND_BYTES / (w.max(1) * 4)).fclamp(64, h.max(64))
 }
 
 /// `about:blank`, made by hand: the address of an error page whose own address cannot be parsed.
@@ -720,7 +721,7 @@ impl Browser {
             Some(f) => page.fragment_y(f, vp.w).unwrap_or(0.0),
             None => self.scroll,
         };
-        self.scroll = self.snap(target.clamp(0.0, max));
+        self.scroll = self.snap(target.fclamp(0.0, max));
         self.mark_full_layout();
         self.mem_mark("full-layout");
         self.update_scrollbar();
@@ -883,7 +884,7 @@ impl Browser {
             b.relayout_done(ms(started.elapsed()));
         }
         let (max, max_cross) = (page.max_scroll(vp), page.max_cross(vp));
-        self.scroll = self.snap(anchored.clamp(0.0, max));
+        self.scroll = self.snap(anchored.fclamp(0.0, max));
         self.cross = self.cross.min(max_cross);
         self.relayout.done(Instant::now());
         self.update_scrollbar();
@@ -932,7 +933,7 @@ impl Browser {
 
     fn scroll_to(&mut self, y: f32) {
         let max = self.page.as_ref().map_or(0.0, |p| p.max_scroll(self.vp()));
-        let y = self.snap(if y.is_finite() { y.clamp(0.0, max) } else { 0.0 });
+        let y = self.snap(if y.is_finite() { y.fclamp(0.0, max) } else { 0.0 });
         if y == self.scroll {
             return;
         }
@@ -978,7 +979,7 @@ impl Browser {
 
     fn cross_to(&mut self, x: f32) {
         let max = self.page.as_ref().map_or(0.0, |p| p.max_cross(self.vp()));
-        let x = self.snap(if x.is_finite() { x.clamp(0.0, max) } else { 0.0 });
+        let x = self.snap(if x.is_finite() { x.fclamp(0.0, max) } else { 0.0 });
         if x != self.cross {
             self.cross = x;
             self.ui.invalidate();
@@ -1004,7 +1005,7 @@ impl Browser {
             } else {
                 // Towards the pointer: on the screen to the left or right; a page that starts at its right edge moves the other way.
                 let step = (if cx < ts { -0.875 } else { 0.875 }) * vp.w * if axis == ScrollAxis::Left { -1.0 } else { 1.0 };
-                let target = (p + step).clamp(0.0, max);
+                let target = (p + step).fclamp(0.0, max);
                 if axis == ScrollAxis::Down {
                     self.cross_to(target);
                 } else {
@@ -1042,7 +1043,7 @@ impl Browser {
                 let kind = list.axis;
                 let p = if kind == ScrollAxis::Down { self.cross } else { self.scroll };
                 if let Some((lane, _, tl, max)) = list.page_bar(p) {
-                    let frac = ((cx - grab) / (lane - tl).max(1.0)).clamp(0.0, 1.0);
+                    let frac = ((cx - grab) / (lane - tl).max(1.0)).fclamp(0.0, 1.0);
                     let v = max * if kind == ScrollAxis::Left { 1.0 - frac } else { frac };
                     if kind == ScrollAxis::Down {
                         self.cross_to(v);

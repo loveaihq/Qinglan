@@ -6,6 +6,7 @@
 //! frame, no layer. The scroll offsets are the only part of a list that changes after it is built (they are cells), so the list is
 //! still built once per layout and drawn at any position; [`DisplayList::inherit`] carries them over to the next layout.
 
+use crate::fmath::Fclamp;
 use std::cell::Cell;
 
 use super::raster::{Ctx, Frame, device_rect, fill, premul};
@@ -65,8 +66,8 @@ pub struct Pane {
 
 /// The size of a thumb and its place on a lane of `lane` px, for `view` px of `content` scrolled `off` of at most `max`.
 pub fn thumb(lane: f32, view: f32, content: f32, off: f32, max: f32) -> (f32, f32) {
-    let len = (lane * view / content.max(1.0)).clamp(THUMB_MIN.min(lane), lane.max(1.0));
-    let start = if max > 0.0 { (lane - len) * (off / max).clamp(0.0, 1.0) } else { 0.0 };
+    let len = (lane * view / content.max(1.0)).fclamp(THUMB_MIN.min(lane), lane.max(1.0));
+    let start = if max > 0.0 { (lane - len) * (off / max).fclamp(0.0, 1.0) } else { 0.0 };
     (start, len)
 }
 
@@ -184,8 +185,8 @@ impl DisplayList {
             let Some(s) = self.scopes.get(i as usize) else { break };
             if let ScopeKind::Scroll(show) = &s.kind {
                 let ((ox, oy), (mx, my)) = (s.off.get(), s.max());
-                let nx = if show.first() == Some(&0) { ox } else { (ox + dx).clamp(0.0, mx) };
-                let ny = if show.get(1) == Some(&0) { oy } else { (oy + dy).clamp(0.0, my) };
+                let nx = if show.first() == Some(&0) { ox } else { (ox + dx).fclamp(0.0, mx) };
+                let ny = if show.get(1) == Some(&0) { oy } else { (oy + dy).fclamp(0.0, my) };
                 (dx, dy) = (dx - (nx - ox), dy - (ny - oy));
                 s.off.set((nx, ny));
             }
@@ -217,7 +218,7 @@ impl DisplayList {
                 }
                 let step = (if along < ts { -0.875 } else { 0.875 }) * if a == 1 { h } else { w };
                 let (o, m) = (s.off.get(), s.max());
-                s.off.set(if a == 1 { (o.0, (o.1 + step).clamp(0.0, m.1)) } else { ((o.0 + step).clamp(0.0, m.0), o.1) });
+                s.off.set(if a == 1 { (o.0, (o.1 + step).fclamp(0.0, m.1)) } else { ((o.0 + step).fclamp(0.0, m.0), o.1) });
                 return Some(Press::Track);
             }
         }
@@ -231,7 +232,7 @@ impl DisplayList {
         let (sx, sy) = self.shift_of(scope);
         let m = s.max();
         let (along, max) = if axis == 1 { (pt.1 + sy - s.view.y.to_f32(), m.1) } else { (pt.0 + sx - s.view.x.to_f32(), m.0) };
-        let v = ((along - grab) / (lane - tl).max(1.0) * max).clamp(0.0, max);
+        let v = ((along - grab) / (lane - tl).max(1.0) * max).fclamp(0.0, max);
         let o = s.off.get();
         s.off.set(if axis == 1 { (o.0, v) } else { (v, o.1) });
     }
@@ -305,7 +306,7 @@ impl DisplayList {
     pub fn set_scroll(&self, node: NodeId, x: f32, y: f32) {
         if let Some(s) = self.scopes.iter().find(|s| s.node == node && s.scrolls()) {
             let m = s.max();
-            s.off.set((x.clamp(0.0, m.0), y.clamp(0.0, m.1)));
+            s.off.set((x.fclamp(0.0, m.0), y.fclamp(0.0, m.1)));
         }
     }
 

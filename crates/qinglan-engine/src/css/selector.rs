@@ -6,6 +6,7 @@
 //! but never match. `:has()` and unknown pseudo-classes make a selector invalid. Pseudo-elements parse
 //! (the rule is valid) but never match an element.
 
+use crate::fmath::Fclamp;
 use super::syntax::{BlockKind, Cv, split_commas, trim_ws};
 use super::tokenizer::Token;
 use crate::html::atoms::{Atom, FxHashMap, Interner};
@@ -506,7 +507,7 @@ pub fn parse_nth(cvs: &[Cv]) -> Option<Nth> {
         }
     }
     let (first, _) = *items.first()?;
-    let int_of = |v: f64| -> i32 { v.clamp(-1.0e9, 1.0e9) as i32 };
+    let int_of = |v: f64| -> i32 { v.fclamp(-1.0e9, 1.0e9) as i32 };
     // Returns (a, b-so-far, index of the next item, needs_signless_b, needs_b_after_dash)
     let mut idx = 1;
     let a: i32;

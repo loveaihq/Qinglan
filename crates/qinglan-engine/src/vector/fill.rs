@@ -6,6 +6,7 @@
 //! Edges that overlap inside one pixel add their areas, so a pixel where two same-direction shapes partly overlap
 //! is covered a little too much (the usual limit of this method); pixels fully inside a shape are exact.
 
+use crate::fmath::Fclamp;
 use super::{IRect, Poly, Pt};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,7 +90,7 @@ pub fn fill_polys(polys: &[Poly], rule: FillRule, win: IRect, row: &mut dyn FnMu
 
 /// `p` relative to `org`, finite and bounded.
 fn clampp(p: Pt, org: Pt) -> Pt {
-    let f = |v: f32| if v.is_finite() { v.clamp(-LIMIT, LIMIT) } else { 0.0 };
+    let f = |v: f32| if v.is_finite() { v.fclamp(-LIMIT, LIMIT) } else { 0.0 };
     Pt::new(f(p.x) - org.x, f(p.y) - org.y)
 }
 
@@ -124,7 +125,7 @@ fn edge(acc: &mut [f32], stride: usize, wf: f32, rows: usize, p0: Pt, p1: Pt) {
         let xnext = x + dxdy * dy;
         let d = dy * dir;
         let (lo, hi) = if x < xnext { (x, xnext) } else { (xnext, x) };
-        let (lo, hi) = (lo.clamp(0.0, wf), hi.clamp(0.0, wf));
+        let (lo, hi) = (lo.fclamp(0.0, wf), hi.fclamp(0.0, wf));
         let base = y * stride;
         let lo_floor = lo.floor();
         let lo_i = lo_floor as usize;

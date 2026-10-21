@@ -5,6 +5,7 @@
 //! the system colors. `color-mix()`, `color()`, `light-dark()` and relative colors are invalid
 //! (decisions.md). Out-of-gamut Lab/LCH/OKLab/OKLCH colors are clipped to sRGB instead of gamut-mapped.
 
+use crate::fmath::Fclamp;
 use super::color_names::NAMED_COLORS;
 use super::syntax::{Cv, split_commas, trim_ws};
 use super::tokenizer::Token;
@@ -35,7 +36,7 @@ impl Color {
         if self.a == 255 {
             format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
         } else {
-            format!("rgba({}, {}, {}, {:.3})", self.r, self.g, self.b, self.a as f32 / 255.0)
+            format!("rgba({}, {}, {}, {})", self.r, self.g, self.b, crate::fmath::fixed_f32(self.a as f32 / 255.0, 3))
         }
     }
 }
@@ -108,11 +109,11 @@ pub fn named_color(name: &str) -> Option<Color> {
 }
 
 fn clamp_u8(v: f64) -> u8 {
-    if v.is_nan() { 0 } else { v.round().clamp(0.0, 255.0) as u8 }
+    if v.is_nan() { 0 } else { v.round().fclamp(0.0, 255.0) as u8 }
 }
 
 fn alpha_u8(a: f64) -> u8 {
-    clamp_u8(a.clamp(0.0, 1.0) * 255.0)
+    clamp_u8(a.fclamp(0.0, 1.0) * 255.0)
 }
 
 fn parse_hex(h: &str) -> Option<Color> {
@@ -263,7 +264,7 @@ fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (f64, f64, f64) {
     let f = |n: f64| {
         let k = (n + h / 30.0) % 12.0;
         let a = s * l.min(1.0 - l);
-        l - a * (k - 3.0).min(9.0 - k).clamp(-1.0, 1.0)
+        l - a * (k - 3.0).min(9.0 - k).fclamp(-1.0, 1.0)
     };
     (f(0.0), f(8.0), f(4.0))
 }
@@ -280,8 +281,8 @@ fn parse_hsl(items: &[Cv]) -> Option<Color> {
             _ => None,
         }
     };
-    let s = pct(*args.get(1)?, legacy)?.clamp(0.0, 100.0) / 100.0;
-    let l = pct(*args.get(2)?, legacy)?.clamp(0.0, 100.0) / 100.0;
+    let s = pct(*args.get(1)?, legacy)?.fclamp(0.0, 100.0) / 100.0;
+    let l = pct(*args.get(2)?, legacy)?.fclamp(0.0, 100.0) / 100.0;
     let (r, g, b) = hsl_to_rgb(h, s, l);
     Some(Color { r: clamp_u8(r * 255.0), g: clamp_u8(g * 255.0), b: clamp_u8(b * 255.0), a: alpha_u8(a) })
 }
@@ -301,8 +302,8 @@ fn parse_hwb(items: &[Cv]) -> Option<Color> {
             Arg::Angle(_) => None,
         }
     };
-    let w = pct(*args.get(1)?)?.clamp(0.0, 100.0) / 100.0;
-    let bl = pct(*args.get(2)?)?.clamp(0.0, 100.0) / 100.0;
+    let w = pct(*args.get(1)?)?.fclamp(0.0, 100.0) / 100.0;
+    let bl = pct(*args.get(2)?)?.fclamp(0.0, 100.0) / 100.0;
     if w + bl >= 1.0 {
         let gray = w / (w + bl);
         let g = clamp_u8(gray * 255.0);
@@ -401,7 +402,7 @@ fn parse_lab_like(items: &[Cv], polar: bool, ok: bool) -> Option<Color> {
     } else {
         (scalar(*args.get(1)?, ab_ref)?, scalar(*args.get(2)?, ab_ref)?)
     };
-    let l = if ok { l.clamp(0.0, 1.0) } else { l.clamp(0.0, 100.0) };
+    let l = if ok { l.fclamp(0.0, 1.0) } else { l.fclamp(0.0, 100.0) };
     Some(if ok { oklab_to_srgb(l, x, y, a) } else { lab_to_srgb(l, x, y, a) })
 }
 

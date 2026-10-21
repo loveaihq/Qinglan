@@ -1675,3 +1675,33 @@ gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 
 ### 审查（2e-2 收尾，清单式，另一个会话读 diff）和处理
 - **修了**：`Ctx::pill` 填反向矩形时从 y0 一直涂到条带底（`fill` 现在遇到空矩形直接返回，`rows_mut` 的 `take` 会回绕）；背景图的 `ImagePlace.rect` 只是 (0,0) 处的一块平铺，`scope_gap` 却当成滚动容器里的坐标，滚动容器里靠下的背景图会被当成远处而不解码（新增 `ImagePlace::area`）；sticky 盒里的图片（页头标志）的 `span` 按未位移的盒子算，滚过一屏后被丢弃（sticky 在页面上的，里面的图片永远算近：`Builder::span_of`）；**既 sticky 又 `overflow: auto` 的盒（sticky 侧栏自带滚动）只留了滚动那一个，sticky 被丢了**，现在是两个作用域，sticky 在外（`own_sticky`；新测试 `a_sticky_sidebar_that_scrolls_is_both`）；拖动中丢了鼠标捕获（Alt+Tab）后 `swallow` 会吃掉下一次真正的点击（按下时清掉）。
 - **没修，记在这里**：`position: fixed` 的盒里的滚动容器，`scopes` 的视口矩形是视口坐标，滚轮、`bar_press`、`bar_drag` 收到的是页面坐标，页面滚过之后固定的抽屉或弹窗里的滚动容器滚不动（`Scope` 没有“固定”标记）；带 `opacity` 或 `transform` 的固定盒里的定位孩子，`positioned_in_scopes` 的 `detached` 把组的那一层也摘掉了（效果丢，画在组之前）；`bar_press` 不检查外层滚动容器的视口是否含这个点（被外层裁掉的条仍会被按到）；`shift_of`（滚轮、按条用）不计 sticky 位移；`path_to` 在目标不在当前作用域内时（含块在中间滚动容器之外的绝对定位盒）退回成原地画；固定列表用 `port = None` 画，命中却按 (0,0,视口) 算 sticky；每个定位盒或浮动都重开整条窗格链（链长 ≤ 64，没有合并相邻的窗格），窗格里的项目没有索引；`scope_at` 每次滚轮分配 O(作用域数)；`link_at_scoped` 每次鼠标移动对每个碎片走一遍作用域链（O(碎片 × 深度)）；重排或导航时 `drag` 不清（按住不放时作用域序号可能指到别的容器）。
+
+## 第 2 层 · 2f-1 体积、内存、首屏（2026-10-21，起点 `0327c17`；提交 `Shrink the executable`、`Cut memory`）
+
+**状态：体积差 2,336 字节没到 2,700,000（到 2,702,336，第 2 层上限 2,726,297 还剩 23,961）；zhwiki-rec 内存没到 46.0 MB；gh-ripgrep 内存 28.8 → 25.9（目标 24 没到）；首屏没有可信的数字，没找到原因。** 工具调用用完（100 次），剩下的写在最后。
+
+### 1. 体积：2,744,832 → 2,702,336（−42,496）
+量法：`cargo rustc --release -p qinglan -- -C link-arg=/MAP:...`（这个工具链的符号默认就是 v0 名字，`-C symbol-mangling-version=legacy` 要 `-Z`），Python 脚本按符号地址差累加（`.text` 2,109 KB：引擎 1,359、core 214、app 168、win 96、std 70、hashbrown 55、alloc 49；`.rdata` 266、`.xdata` 223、`.pdata` 65）。各项（单独量的，每次 3 分钟一个构建）：
+- **排序再去重 −16 KB**：`core::slice::sort` 47 个实例 29.8 KB → 29 个 13.5 KB。`fonts::face::rank_faces`（五项比较的 `sort_by`，9 KB）改成从大到小的下标起、按最后一个键到第一个键各稳定排一次 `sort_by_u64_key`（结果同原来的比较，含“同分时后声明的在前”）；`fonts::sfnt::assemble` 的表按 tag 排。层叠里的 `sort_by_key`（`Entry`，6 KB）没动：热路径，键是 104 位。
+- **`qinglan-app` 用 opt-level "s"：约 −17 KB**（"z" 是 −22.5 KB）。窗口里的绘制循环只是引擎光栅器的薄调用，引擎和二进制壳仍是 3，所以最后一遍 LTO 的级别不变。**速度没单独量**（见第 4 节）；退路是回到 3，加 17 KB。
+- **去掉 `f32::clamp`/`f64::clamp` 的 panic 信息 + 浮点数转文字 −7 KB（A1 → A3）**：`clamp` 的断言信息用 `{:?}` 打印两个边界，所以每个用浮点 `clamp` 的程序都带着 `<f32 as Debug>`。新增 `fmath::Fclamp::fclamp`（对 `min <= max` 的结果和 `clamp` 一样，位相同，有测试；反过来的边界不 panic，给 `max`），84 处调用全换了（整数的也换了，方便统一）；`css::values::fmt_num` 和 `Color::to_css` 的 `{:.4}`/`{:.3}` 换成 `fmath::fixed_f32`（整数运算，对 18 万个浮点数、小数位 0/1/3/4 和 `format!` 逐字相同，有测试）；`--bench` 报告里的 `{:.1}` 换成 `bench::fixed/trimmed`；窗口崩溃信息里 `{ev:?}` 换成 `Event::label()`（`Wheel` 有 `f32`）。**浮点数转文字的代码（`flt2dec` 12.9 KB + `fmt::float` 5.5 KB）这样还是没有全部去掉**：量的时候（A2）还剩 `<Event as Debug>`，之后又改了；最终的地图没有再生成，没确认它们现在有没有了。
+- `net::loader` 的队列：`[VecDeque<Queued>; 3]` 的 drop 代码 10.3 KB（三份内联）→ `Vec<VecDeque<Box<Queued>>>`，约 −7 KB。
+- 内存修复（第 2 节）的共享表 +4.6 KB。
+- **试了没采用**：`-inlinehint-threshold=125`（其余同）：2,697,728 → 2,675,712（−22 KB），**速度没量**，所以没写进 `.cargo/config.toml`；要补 2,336 字节的话这是最近的一步。float 的 `Display` 在 `Color::to_css` 里是地图 + 字节扫描（`xref.py`，在暂存目录里：找 `lea reg,[rip+disp]` 指向目标函数的位置，再按符号地址找所在函数）找到的。
+
+### 2. 内存
+- **gh-ripgrep 22.83（2c-3，`71ba54f`）→ 29.01（`0327c17`）→ 25.89 MB（现在）；gh-rust 21.02 → 26.36 → 22.66。原因：** `mem-stats` 的 `computed-styles` 3.8 → 8.8 MB。SVG 的表现属性（`fill`、`stroke` 等 23 个，`css/svg_props.rs`）当作自定义属性的条目存（为了借用层叠和继承），而 GitHub 的 `:root` 有几百个 `--*` 变量；每个设了 `fill`/`stroke` 的 `svg`/`path` 元素都把父元素的整张表（`FxHashMap`，20–50 KB）复制一份。**改**：`cascade::resolve_custom_props` 记住最近 16 次（父表指针 + 声明的值）→ 结果表（只对父表 ≥ 32 项的情形），样式阶段结束清掉；同一个父表、同样声明的元素共用一张 `Rc`。表内容不变，所以渲染不变。**没到 24 MB**：还剩约 +3 MB（25.89 对 22.83）没有查（可能是 SVG 场景和图标位图缓存 `svg::CACHE_BYTES` 1.5 MB、每个图标的 `Scene`；`mem-stats` 的 `win-heap-allocated` +5.0 MB 是这一项，修了以后没再量分项）。
+- **zhwiki-rec（滚到底私有字节）**：`71ba54f` 5 次 46.3–47.7（中位数 47.17）；`0327c17` 5 次 46.8–48.8（中位数 47.80）；现在 3 次 47.06 / 47.21 / 47.42。**没到 ≤ 46.0。** `mem-stats`（窗口 exe，各 1 次）对比：滚到底 45.35 → 47.26 MB；活堆 +0.56 MB（显示列表 +254 KB、字形缓存 +164 KB、盒子+碎片 +128 KB、碎片 +99 KB、texts 数 24,931 → 27,123）；池的块 +0.41 MB；系统堆已提交 9.47 → 10.23 MB，**其中只有 5.0 MB 是活的（1 KiB–128 KiB 的块的碎片）**；全部释放后剩的 +0.86 MB。`qinglan-cli bench --mem` 的分项不能当窗口的：命令行的 bench 不调 `release_text_data`，所以它报的 glyphs 4 MB 在窗口里已经丢了。
+- **试了**：`PoolAlloc` 的大块门槛 128 KiB → 32 KiB（`BIG_MIN`，让中等大小的块也走自己的页）：zhwiki-rec 看不出差别（47.8 → 47.2，在噪声内，同时还加了第 2 节的修复）；堆测试和 hostile 都过，所以留着，**但没证明有好处**。下一步该试的：给 1–32 KiB 的块加更多等级的 slab（碎片 5 MB 就在这里）；显示列表只建视口附近的带。
+
+### 3. 渲染
+`tools` 之外的脚本（暂存目录 `rcmp.py`）：52 页用旧 `qinglan-cli`（`0327c17`）和新的各渲染一次（1280×2400，replay），31 页逐字节相同；其余 21 页旧程序**自己两次渲染也不同**（`unstable`，排除：asahi-home、bbc-zhongwen、chinanews-art、codingnow-blog、emoji-wiki、enwiki-hk、gohugo 等，原因没查，多半是图片/线程到达次序），**没有一页是稳定地不同**。`--scroll 1500` 的 zhwiki-rec、mdn-flex、gh-ripgrep 逐字节相同。不稳定的 21 页没法证明相同，只靠 `wpt --check` 3218 / 3218 兜底。
+
+### 4. 首屏：没有结论
+机器上有一个忙的 Emulator.exe；第一轮测量时是电池（`BatteryStatus = 1`），中途接上电，CPU 25–54%，所以以下只是新旧交替的相对数字（`qinglan.exe --bench`，各 5 次新进程，中位数，旧 `71ba54f` / 新）：zhwiki-rec 230 / 226 ms，gh-ripgrep 199 / 257，gh-rust 201 / 166；最大值 300–590，噪声盖过了差别。**没做 `qinglan-cli bench` 的分阶段对比，zhwiki-rec 从 121 到 175 ms 的原因没找到，没改。** 滚动帧中位数 zhwiki-rec 6.3 / 8.4、gh-ripgrep 7.0 / 9.0、gh-rust 9.9 / 10.2（新的一侧同时包含 qinglan-app 改 "s"，**没有单独量它**，只能说在这个噪声里没有超过 16 ms 的线）。
+
+### 5. 没做 / 下一步
+1. 首屏：电源稳定、没有 Emulator 时 `qinglan-cli bench` 新旧交替，逐阶段比（解析/样式/首屏排版/光栅）。
+2. 去掉 2,336 字节：`-inlinehint-threshold=125`（−22 KB，要量速度）或再找几处泛型。
+3. 内存：中等块的碎片、gh-ripgrep 剩下的 3 MB、显示列表按带建。
+4. 重新生成最终的链接映射，确认浮点数转文字有没有去干净。

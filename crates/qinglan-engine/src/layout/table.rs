@@ -12,6 +12,7 @@
 //! resolved per grid edge; the cells and the table get their halves as border widths, and the painter draws the edges
 //! (`TableInfo::segs`) instead of the boxes' own borders.
 
+use crate::fmath::Fclamp;
 use std::rc::Rc;
 
 use super::Layouter;
@@ -108,7 +109,7 @@ pub(crate) struct Grid {
 }
 
 fn px(l: LU) -> u16 {
-    (l.raw() / 64).clamp(0, i32::from(u16::MAX)) as u16
+    (l.raw() / 64).fclamp(0, i32::from(u16::MAX)) as u16
 }
 
 fn lu(p: u16) -> LU {

@@ -2,6 +2,7 @@
 //! SVG will, too). The outline is a union of simple polygons, one rectangle per segment, one wedge per join and one
 //! cap at each open end, all wound the same way, so filling the result with the non-zero rule is the stroke.
 
+use crate::fmath::Fclamp;
 use super::{Poly, Pt};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -76,7 +77,7 @@ fn push(out: &mut Vec<Poly>, mut pts: Vec<Pt>) {
 fn arc(c: Pt, r: f32, a0: f32, sweep: f32, tol: f32) -> Vec<Pt> {
     // The chord angle whose sagitta is `tol`: r (1 - cos(a / 2)) ~ r a^2 / 8.
     let step = 2.0 * (2.0 * tol.min(r) / r).sqrt();
-    let n = if step > 1.0e-3 { (sweep.abs() / step).ceil() as usize } else { 64 }.clamp(1, 256);
+    let n = if step > 1.0e-3 { (sweep.abs() / step).ceil() as usize } else { 64 }.fclamp(1, 256);
     (0..=n)
         .map(|i| {
             let a = a0 + sweep * i as f32 / n as f32;

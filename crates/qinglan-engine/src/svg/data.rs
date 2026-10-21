@@ -2,6 +2,7 @@
 //! handling of 9.5.4 "render up to the first error"), transform lists (css-transforms-1 "SVG transform attribute") and
 //! number lists. Every parser works on hostile text and returns what it could read; none panics.
 
+use crate::fmath::Fclamp;
 use crate::fmath::sin_cos;
 use crate::vector::{Path, Pt, Transform};
 
@@ -298,7 +299,7 @@ fn arc(p: &mut Path, from: Pt, (rx, ry, rot): (f32, f32, f32), (large, sweep): (
     } else if sweep && dt < 0.0 {
         dt += tau;
     }
-    let n = (dt.abs() / (std::f64::consts::FRAC_PI_2) - 1.0e-9).ceil().clamp(1.0, 4.0) as usize;
+    let n = (dt.abs() / (std::f64::consts::FRAC_PI_2) - 1.0e-9).ceil().fclamp(1.0, 4.0) as usize;
     let step = dt / n as f64;
     let k = 4.0 / 3.0 * { let (s, c) = sin_cos(step / 4.0); s / c };
     let pt = |t: f64, d: f64| {

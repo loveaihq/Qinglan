@@ -3,6 +3,7 @@
 //! styled by the UA style sheet (a 1px `#767676` border, small radius, white or `#efefef` fill), so author borders and
 //! backgrounds replace them; `appearance: none` also removes what is painted here. The controls cannot be used yet (layer 3).
 
+use crate::fmath::Fclamp;
 use super::*;
 use crate::css::types::Appearance;
 
@@ -68,14 +69,14 @@ impl Builder<'_> {
                 self.pill(c, h / 2.0, TRACK);
                 if let Some(v) = value {
                     let prev = self.push_round(c, [(h / 2.0, h / 2.0); 4]);
-                    self.rect(Rect::new(c.x, c.y, LU::from_f32(w * (v / top).clamp(0.0, 1.0)), c.h), ACCENT);
+                    self.rect(Rect::new(c.x, c.y, LU::from_f32(w * (v / top).fclamp(0.0, 1.0)), c.h), ACCENT);
                     self.restore(prev);
                 }
             }
             "meter" => {
                 let lo = min.unwrap_or(0.0);
                 let hi = max.unwrap_or(1.0).max(lo);
-                let at = |v: f32| v.clamp(lo, hi);
+                let at = |v: f32| v.fclamp(lo, hi);
                 let (l, hg) = (at(self.num_attr(node, "low").unwrap_or(lo)), at(self.num_attr(node, "high").unwrap_or(hi)));
                 let region = |v: f32| -> i32 { if v < l { 0 } else if v > hg { 2 } else { 1 } };
                 let v = at(value.unwrap_or(0.0));
@@ -95,7 +96,7 @@ impl Builder<'_> {
             "range" => {
                 let (lo, hi) = (min.unwrap_or(0.0), max.unwrap_or(100.0));
                 let v = value.unwrap_or((lo + hi) / 2.0);
-                let f = if hi > lo { ((v - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 0.0 };
+                let f = if hi > lo { ((v - lo) / (hi - lo)).fclamp(0.0, 1.0) } else { 0.0 };
                 let mid = c.y + LU::from_f32((h - 4.0) / 2.0);
                 let x = LU::from_f32((w - h) * f + h / 2.0);
                 self.pill(Rect::new(c.x, mid, c.w, LU::px(4)), 2.0, Color::rgb(0xc4, 0xc4, 0xc4));

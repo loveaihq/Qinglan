@@ -1,6 +1,7 @@
 //! Parsing of the grid properties (css-grid-1 7 and 8): track lists with `repeat()` and line names, areas, `<grid-line>`
 //! and the shorthands `grid-template`, `grid`, `grid-area`, `grid-row`, `grid-column`.
 
+use crate::fmath::Fclamp;
 use std::rc::Rc;
 
 use super::parse_prop::p_lp;
@@ -358,8 +359,8 @@ pub(super) fn grid_line(items: &[&Cv]) -> Option<GridLine> {
             }
         }
         (false, Some(0), _) => return None,
-        (false, Some(n), Some(i)) => GridLine::NumIdent(n.clamp(-max, max), i),
-        (false, Some(n), None) => GridLine::Num(n.clamp(-max, max)),
+        (false, Some(n), Some(i)) => GridLine::NumIdent(n.fclamp(-max, max), i),
+        (false, Some(n), None) => GridLine::Num(n.fclamp(-max, max)),
         (false, None, Some(i)) => GridLine::Ident(i),
         (false, None, None) => return None,
     })

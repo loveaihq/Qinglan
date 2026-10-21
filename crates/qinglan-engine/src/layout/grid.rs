@@ -13,6 +13,7 @@
 //! nested grids measure each level once and the work stays polynomial in the depth, see `tests/grid.rs`), then the item
 //! is laid out once for real. Items in rows with fixed sizes are not measured.
 
+use crate::fmath::Fclamp;
 use std::rc::Rc;
 
 use super::block::{BlockResult, Flow, Geom, border_px, lp_has_percent, pad_px, relative_offset, resolve_dim, resolve_margin};
@@ -263,7 +264,7 @@ fn edges(names: &[Vec<Rc<str>>], ex: i64, s: &GridLine, e: &GridLine) -> (Option
         (E::Span(n, nm), E::Line(b)) => (Some(span_start(names, b, n, nm)), Some(b), 1),
         (E::Line(a), E::Auto) => (Some(a), None, 1),
         (E::Auto, E::Line(b)) => (None, Some(b), 1),
-        (E::Span(n, _), _) | (E::Auto, E::Span(n, _)) => (None, None, n.clamp(1, MAXT)),
+        (E::Span(n, _), _) | (E::Auto, E::Span(n, _)) => (None, None, n.fclamp(1, MAXT)),
         (E::Auto, E::Auto) => (None, None, 1),
     }
 }
@@ -271,7 +272,7 @@ fn edges(names: &[Vec<Rc<str>>], ex: i64, s: &GridLine, e: &GridLine) -> (Option
 /// An item's position on one axis (8.3, 8.3.1): (definite, start line, span). An `auto` end is a span of 1.
 fn resolve_axis(names: &[Vec<Rc<str>>], ex: i64, s: &GridLine, e: &GridLine) -> (bool, i64, usize) {
     match edges(names, ex, s, e) {
-        (Some(a), Some(b), _) => (true, a, ((b - a) as usize).clamp(1, MAXT)),
+        (Some(a), Some(b), _) => (true, a, ((b - a) as usize).fclamp(1, MAXT)),
         (Some(a), None, _) => (true, a, 1),
         (None, Some(b), _) => (true, b - 1, 1),
         (None, None, n) => (false, 0, n),
@@ -365,7 +366,7 @@ impl Occ {
 }
 
 fn us(v: i64) -> usize {
-    v.clamp(0, MAXT as i64) as usize
+    v.fclamp(0, MAXT as i64) as usize
 }
 
 /// The work `place` has done and the most it may do (what the page budget has left).
@@ -833,10 +834,10 @@ impl Layouter<'_> {
         let mut neg: Ax<usize> = Ax::default();
         for a in 0..2 {
             let lo = items.iter().filter(|i| i.def.v(a)).map(|i| i.st.v(a)).min().unwrap_or(0);
-            *neg.m(a) = (-lo).clamp(0, MAXT as i64) as usize;
+            *neg.m(a) = (-lo).fclamp(0, MAXT as i64) as usize;
             for it in items.iter_mut() {
                 if it.def.v(a) {
-                    let s = (it.st.v(a) + neg.v(a) as i64).clamp(0, MAXT as i64 - 1);
+                    let s = (it.st.v(a) + neg.v(a) as i64).fclamp(0, MAXT as i64 - 1);
                     *it.st.m(a) = s;
                     *it.sp.m(a) = it.sp.v(a).min(MAXT - s as usize).max(1);
                 }

@@ -5,6 +5,7 @@
 //! are found per pixel through the inverse of their matrix. Clips are 8-bit coverage planes the size of the canvas, opacity
 //! groups are extra canvases (few, and counted). A pixel budget stops hostile scenes (a thousand full-canvas fills).
 
+use crate::fmath::Fclamp;
 use std::rc::Rc;
 
 use super::build::path_bounds;
@@ -455,7 +456,7 @@ impl GradEval {
                 if u > 1.0 { 2.0 - u } else { u }
             }
             2 => t - t.floor(),
-            _ => t.clamp(0.0, 1.0),
+            _ => t.fclamp(0.0, 1.0),
         };
         let i = (t * (LUT - 1) as f32 + 0.5) as usize;
         self.lut.get(i.min(LUT - 1)).copied().unwrap_or([0; 4])

@@ -2,6 +2,7 @@
 //! css-fonts-4, css-display-3, css-position-3, css-color-4 and css-values-4 for the value types).
 //! Shorthands are expanded; declarations with `var()` are kept unparsed (see [`VarDecl`]).
 
+use crate::fmath::Fclamp;
 use std::rc::Rc;
 
 use super::color::{ColorValue, parse_color_cv};
@@ -1436,7 +1437,7 @@ fn parse_counters(items: &[&Cv], default: i32) -> Option<Value> {
             if !*is_int {
                 return None;
             }
-            value = (*v).clamp(i32::MIN as f64, i32::MAX as f64) as i32;
+            value = (*v).fclamp(i32::MIN as f64, i32::MAX as f64) as i32;
             i += 1;
         }
         if out.len() < super::types::MAX_GEN_ITEMS {

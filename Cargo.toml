@@ -18,9 +18,14 @@ strip = true
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 
-# Hot code stays at opt-level 3: qinglan-engine (HTML parse, style, layout, paint), qinglan-app (the window's draw and
-# scroll path) and the binary crates (`qinglan`, a thin shell around qinglan-app, and `qinglan-cli`). Per-package levels
-# work under fat LTO, but the final LTO pass runs at the opt-level of the crate linked last, so the binary crates must
-# stay at 3 or the engine slows down by ~15%. The Windows glue is size-optimized (docs/decisions.md, "Hot and cold code").
+# Hot code stays at opt-level 3: qinglan-engine (HTML parse, style, layout, paint) and the binary crates (`qinglan`, a thin
+# shell around qinglan-app, and `qinglan-cli`). Per-package levels work under fat LTO, but the final LTO pass runs at the
+# opt-level of the crate linked last, so the binary crates must stay at 3 or the engine slows down by ~15%. The Windows
+# glue is size-optimized ("z"), and so is qinglan-app ("s", step 2f-1: it is the event handling and bookkeeping around the
+# engine, 17 KB smaller; its draw/scroll loop is a thin caller of the engine's raster). See docs/decisions.md, "Hot and
+# cold code" and "2f-1".
 [profile.release.package.qinglan-win]
 opt-level = "z"
+
+[profile.release.package.qinglan-app]
+opt-level = "s"

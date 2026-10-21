@@ -1,6 +1,7 @@
 //! The test platform (L1 task 8): every glyph is a 1em square, ascent 0.8em, descent 0.2em (like the
 //! WPT "Ahem" font), so layout snapshots do not depend on the fonts installed on the machine.
 
+use crate::fmath::Fclamp;
 use std::rc::Rc;
 
 use super::{FontId, FontMetrics, FontQuery, Glyph, GlyphMask, Platform};
@@ -99,7 +100,7 @@ impl Platform for TestPlatform {
         if zero_width(c) || is_space_like(c) || c == '\u{00A0}' {
             return None;
         }
-        let side = size_px.round().clamp(1.0, 512.0) as u32;
+        let side = size_px.round().fclamp(1.0, 512.0) as u32;
         let ascent = (Self::ASCENT * size_px).round() as i32;
         // The private use characters U+E000..U+E0FF are colour glyphs (the display list keeps 16 bits of a glyph): the left half red, the right half blue, fully opaque.
         if (0xE000..=0xE0FF).contains(&glyph) {
