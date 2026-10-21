@@ -42,7 +42,7 @@ fn lay(html: &str, vw: u32, vh: u32, dpr: f32, base: Option<&Url>, sizes: &Image
 
 fn draw(page: &Page, vw: u32, vh: u32, dpr: f32, scroll: f32, images: &mut dyn ImageSource) -> Frame {
     let mut frame = Frame::new((vw as f32 * dpr).round() as u32, (vh as f32 * dpr).round() as u32);
-    render_frame(&page.list, &TestPlatform, images, View { scroll_y: scroll, dpr }, &mut frame);
+    render_frame(&page.list, &TestPlatform, images, View { scroll_x: 0.0, scroll_y: scroll, dpr }, &mut frame);
     frame
 }
 

@@ -17,6 +17,7 @@ use qinglan_engine::net::loader::{LoadEvent, LoadRequest, Loader, Ticket};
 use qinglan_engine::net::policy::{self, Refusal};
 use qinglan_engine::net::{NetError, ResourceKind};
 use qinglan_engine::paint::decode::{DECODE_WORKERS, DecodePool};
+use qinglan_engine::paint::ScrollAxis;
 use qinglan_engine::paint::raster::Frame;
 use qinglan_engine::url::{Url, UrlPath};
 use qinglan_win::{WicDecoder, WinPlatform};
@@ -355,13 +356,13 @@ impl Browser {
     /// Images the pool finished: the page takes the ones it still wants into its cache and the rows they cover are drawn
     /// again (nothing else is). A result of a page that is gone is dropped.
     fn on_decoded(&mut self) {
-        let (scroll, dpr, height) = (self.scroll, self.dpr, self.dev.1);
+        let (scroll, vp, height) = (self.scroll, self.vp(), self.dev.1);
         let mut rows: Option<(u32, u32)> = None;
         let mut again = false;
         let mut relayout = false;
         for done in self.pool.poll() {
             let Some(page) = self.page.as_mut() else { continue };
-            let (taken, broke) = page.take_decoded(done, scroll, dpr, height);
+            let (taken, broke) = page.take_decoded(done, scroll, vp, height);
             if let Some((a, b)) = taken {
                 rows = Some(rows.map_or((a, b), |(r0, r1)| (r0.min(a), r1.max(b))));
             }
@@ -489,7 +490,8 @@ impl Browser {
             NavKind::New => {
                 self.history.save_scroll(self.scroll);
                 self.history.push(url.href());
-                let y = url.fragment.as_deref().and_then(|f| self.page.as_ref().and_then(|p| p.fragment_y(f)));
+                let vw = self.vp().w;
+                let y = url.fragment.as_deref().and_then(|f| self.page.as_ref().and_then(|p| p.fragment_y(f, vw)));
                 if let Some(y) = y {
                     self.scroll_to(y);
                 }
@@ -693,7 +695,7 @@ impl Browser {
         let Some(page) = self.page.as_ref() else { return };
         let max = page.max_scroll(vp);
         let target = match &fragment {
-            Some(f) => page.fragment_y(f).unwrap_or(0.0),
+            Some(f) => page.fragment_y(f, vp.w).unwrap_or(0.0),
             None => self.scroll,
         };
         self.scroll = self.snap(target.clamp(0.0, max));
@@ -883,9 +885,20 @@ impl Browser {
 
     // ---- scrolling and the pointer ------------------------------------------------------------------------
 
+    /// The way the page scrolls (down, or along the lines of a vertical page) and the viewport's size that way (CSS px).
+    fn axis(&self) -> ScrollAxis {
+        self.page.as_ref().map_or(ScrollAxis::Down, |p| p.axis())
+    }
+
+    fn axis_extent(&self) -> f32 {
+        let vp = self.vp();
+        if self.axis() == ScrollAxis::Down { vp.h } else { vp.w }
+    }
+
     fn update_scrollbar(&self) {
         let page_h = self.dev.1;
-        let total = self.page.as_ref().map_or(page_h, |p| ((p.height() * self.dpr).ceil() as u32).max(page_h));
+        // The window has a vertical scroll bar only: a page that scrolls sideways shows it disabled (total = page).
+        let total = self.page.as_ref().filter(|p| p.axis() == ScrollAxis::Down).map_or(page_h, |p| ((p.height() * self.dpr).ceil() as u32).max(page_h));
         self.ui.set_scroll(total, page_h, (self.scroll * self.dpr).round() as u32);
     }
 
@@ -912,12 +925,12 @@ impl Browser {
         if ctrl {
             return;
         }
-        let dy = if lines == u32::MAX { notches * self.vp().h * PAGE_FRACTION } else { notches * lines as f32 * LINE_PX };
+        let dy = if lines == u32::MAX { notches * self.axis_extent() * PAGE_FRACTION } else { notches * lines as f32 * LINE_PX };
         self.scroll_by(-dy);
     }
 
     fn on_scroll_code(&mut self, code: ScrollCode) {
-        let page = self.vp().h * PAGE_FRACTION;
+        let page = self.axis_extent() * PAGE_FRACTION;
         match code {
             ScrollCode::LineUp => self.scroll_by(-ARROW_PX),
             ScrollCode::LineDown => self.scroll_by(ARROW_PX),
@@ -1003,6 +1016,11 @@ impl Browser {
             (VK_END, ..) => self.on_scroll_code(ScrollCode::Bottom),
             (VK_UP, ..) => self.on_scroll_code(ScrollCode::LineUp),
             (VK_DOWN, ..) => self.on_scroll_code(ScrollCode::LineDown),
+            // On a vertical page the lines run down and the page moves sideways: the arrow towards the end of the text goes on.
+            (VK_LEFT, ..) | (VK_RIGHT, ..) if self.axis() != ScrollAxis::Down => {
+                let forward = (vk == VK_LEFT) == (self.axis() == ScrollAxis::Left);
+                self.on_scroll_code(if forward { ScrollCode::LineDown } else { ScrollCode::LineUp });
+            }
             _ => return false,
         }
         true

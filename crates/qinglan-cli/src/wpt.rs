@@ -298,7 +298,7 @@ impl Runner {
             }
         };
         let mut frame = Frame::new(W, H);
-        render_frame(&list, platform, &mut store, View { scroll_y: 0.0, dpr: 1.0 }, &mut frame);
+        render_frame(&list, platform, &mut store, View { scroll_x: 0.0, scroll_y: 0.0, dpr: 1.0 }, &mut frame);
         let frame = Arc::new(frame);
         if self.frames.len() > 24 {
             self.frames.clear();

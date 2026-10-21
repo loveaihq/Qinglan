@@ -1546,3 +1546,29 @@ gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 
 - 模糊本身：列方向原来一列一列地拷出来再拷回去（每个像素碰一条新的缓存线），改成每列一个滑动和、一行一行地走（`box_cols`），两个缓冲区来回；除法换成乘法加移位（`Mean`，对 ≤ 255×4097 的和精确，单元测试对比除法）。
 - **和旧代码的画面对比**（旧 = 提交 A 的 `qinglan-cli`，新 = 本提交，`render` 1280×1000，滚动 0 和 700）：p3_shadows16x、q3_shadows30、r1_both、r2_blur_big、r2_blur_distinct、q5_shadow400、bigcard2（2 Mpx 窗口）、以及 gh-ripgrep、gh-rust、mdn-div、mdn-flex、rust-book-own **逐字节相同**（最大差 0）；差别只在旧版本来就不画的 1260×3300 包装层（现在有阴影）。hn-front、gov-uk、jekyllrb 在旧版自己跑两次也有 80–383 个像素不同（图片解码的时序），与本改动无关。
 - 数字（release，`render` 单次进程，1280×1000；旧 → 新）：r1_shadow_only（300 个 1270×1000 的盒阴影）10.3 s → **0.22 s**；q5_shadow400（400 层嵌套带圆角阴影）3.64 s → **0.36 s**；p3_shadows16x 约 1 s（16 层 100 px 模糊 × 300 个，不变，主要是风格数多）；1260×3300 包装层：没阴影 → 有阴影，`--scroll-bench` 每帧中位数 1.6 ms；1260×1800 的卡片（旧版窗口 2.4 Mpx，每帧重做）每帧 **63–66 ms → 1.6–1.7 ms**；同样大小带内阴影（`inset 0 4px 24px`）每帧 2.3 ms。`hostile.rs` 新增三个：300 个满屏盒阴影 0.16 s，400 层嵌套 1.2 s，3300 高的包装层 0.3 s。
+
+## 第 2 层 · 2d-2c 竖排页面沿行方向滚动（2026-10-21，`Scroll vertical-writing pages along their own axis`）
+
+代码：引擎 `paint/mod.rs`（`ScrollAxis`、`DisplayList::{axis, x_min, x_max, max_progress, band}`）、`paint/build.rs`（范围、图片的沿轴范围）、`paint/raster.rs`（`View::scroll_x`）、`interact.rs`（`link_at_in`、`node_start`、`anchor_on`）；应用 `qinglan-app` 的 `page.rs`、`app.rs`；`qinglan-cli` 的 `render.rs`、`bench.rs`、`main.rs`（`--scroll-x`）。测试：`tests/scroll_axis.rs` 5 个、`qinglan-cli/tests/bench.rs` +1。
+
+### 做法：滚动位置是“沿页面自己的轴走了多远”
+- **一个数，不是两个**：`App::scroll`、历史里存的位置、锚定、`snap`、滚动条的拇指都还是一个 `f32`，意思是沿**轴**走了多远（进度）。轴由根的书写模式定（body 的竖排已经在 `boxtree.rs` 里传给了根）：`Down`（横排）、`Left`（vertical-rl / sideways-rl：起点是右边缘，往左走）、`Right`（vertical-lr / sideways-lr）。进度换成物理偏移只在两处：光栅（`View { scroll_x, scroll_y }`，`ScrollAxis::offset`：Down `(0, p)`、Left `(-p, 0)`、Right `(p, 0)`）和命中（页面坐标 = 视口坐标 + 偏移）。这样历史恢复、`#片段`、滚动锚定、`--bench` 的走法、图片的懒加载带都不用写第二份。
+- **范围**（`DisplayList::max_progress`）：Down：页高 − 视口高（和以前一样）；Left：−`x_min`，`x_min` 是根盒和所有画出来的东西（被 `overflow` 裁剪后）最左的 x，v1_scroll 的 html 在 `(-4120, 0, 5400×1000)`，范围 4120；Right：`x_max` − 视口宽。反方向的溢出（vertical-rl 的右边、vertical-lr 的左边）到不了，和浏览器一样。只有竖排页才多量这两个数（`finish` 里已有的那一遍项目循环里顺便做），横排页不付代价。根或 body 传给视口的 `overflow-x: hidden` 对竖排页等于不能滚（横排页看 `overflow-y`，和以前一样）。
+- **固定定位**的项目画的时候 `sx = 0`，不跟着动。
+- **图片**：`ImageSpot`、`ImagePlace::span` 改成沿轴的范围（Left 从视口右边缘量起，`ScrollAxis::span`），`Band` 的高 = 视口沿轴的尺寸（`DisplayList::band`），所以 `wanted_images`、`far_images`、`prepare_async`、`drop_far` 一行没改，只是看的是列而不是行。`take_decoded` 在竖排页上跳过沿轴不在视口里的图（否则每张解码完的远图都要重画一遍它的行）。
+- **命中**：`PageIndex::link_at_in(页面坐标, 视口坐标)`（旧的 `link_at` 转调它）。**锚定**：`anchor_on` / `node_start`（旧的 `anchor`、`node_y` 转调，`Down` 时同样的数）；Left 的“起点”是 `视口宽 − 右边缘`。`Page::fragment_y(片段, 视口宽)`。
+- **输入**：滚轮（向下 = 往行尾走：vertical-rl 向左，和 Chrome、Firefox 一样；“一页”模式和 Space、PageUp/Down 的一页是视口宽的 87.5%，横排页还是视口高）、Home/End、上下方向键都走进度；左右方向键只在竖排页处理（朝文字往下读的方向：vertical-rl 的 ← 前进，vertical-lr 的 → 前进），横排页的左右键和 Alt+←/→（前进后退）不变。
+- **滚动条**：窗口只有竖直的原生滚动条。竖排页把它显示成禁用（总长 = 页面区高）；**没有水平滚动条，也没有位置指示**。试过的想法：给页面窗口加 `WS_HSCROLL`——一直显示会让所有横排页的视口高少 17 px（“横排页不变”破了），按页面显示/隐藏则每次切换都要重排；这一步不做。
+- **CLI**：`render --scroll-x X`（沿行方向的 CSS px，截到范围，横排页忽略；`--scroll` 仍是竖直方向的物理 y）；`render --scroll-bench`、`bench`、窗口的 `--bench` 都沿页面自己的轴从头走到尾（v1_scroll：窗口 `--bench` 43 帧，`qinglan-cli bench` 的竖排测试页 27 帧）。
+
+### 没做 / 记下的限制
+- **Shift+滚轮横向滚动**没做：横排页没有横向滚动的状态（宽过视口的横排页也不能横向滚），要加第二个滚动量，历史、锚定、滚动条都得跟着加，不算便宜。竖排页的另一个方向（上下）也不滚：行折在视口高里，`white-space: nowrap` 的长行被截在下边缘外。
+- **第一屏的停止线**还是 `滚动位置 + 2 × 视口高`，对竖排页它沿块轴（逻辑 y，也就是进度轴）量；窗口比 2:1 还宽时第一屏右边会少几列，直到紧接着的整页排版完成。没处理。
+- **显示列表的索引按 y 分带**：竖排页所有内容都落在同几个 y 带里，每帧要把全部项目都过一遍再按矩形剔除（v1_scroll 每帧 408 项，约 1.1 ms；青空文库那样的长篇会随项目数线性增长）。要做二维索引再说。
+- 窗口大小变了的时候，竖排页的进度不重算（Left 的锚定用新的视口宽，所以锚定过的位置是对的；没有锚定的是原来的进度）。
+
+### 数据（release；`BatteryStatus = 2` 插电；**不是干净环境**：另有 3 个 cargo/rustc 进程和 1 个 Emulator.exe 在跑）
+- **exe**：`qinglan.exe` 2,579,456 → 2,582,016 字节（+2,560，预算 +12 KB）。
+- **内存**（`qinglan.exe --bench` zhwiki-rec，1920×1080，每次新进程，滚到底，Private Bytes，5 次）：46,845,952 / 46,813,184 / 46,854,144 / 46,972,928 / 46,477,312，最大 46.97 MB（≤ 50 MB）；之后和旧 exe 交替量的 3 对：旧 46.5 / 47.1 / 47.5 MB，新 47.6 / 48.6 / 47.5 MB，最大 48.57 MB。
+- **横排页的滚动帧不变**（zhwiki-rec，673 帧）：旧 exe 中位数 6.7 / 6.1 / 6.2 ms、p95 9.5 / 9.3 / 8.7 ms；新 exe 6.1 / 6.1 / 5.9 ms、8.7 / 8.6 / 8.7 ms。
+- **v1_scroll**（`--test-font` 以外，真字体，1280×1000）：`render --scroll-x 99999` 左边缘是“第299列”（`第0列` 在 `--scroll-x 0` 的右边缘）；窗口 `--bench` 43 帧，中位数 2.4 ms，p95 3.3 ms，内存 6.1 MB；`render --scroll-bench`（`--test-font`）37 帧，中位数 1.1 ms。

@@ -25,7 +25,7 @@
 //!                                                    a window (for regression tests)
 //!
 //! Step 1c-2a command:
-//!   qinglan-cli render <file|url> -o out.png [--width 1280] [--height 1000 | --full] [--dpr 1] [--scroll Y]
+//!   qinglan-cli render <file|url> -o out.png [--width 1280] [--height 1000 | --full] [--dpr 1] [--scroll Y] [--scroll-x X]
 //!                    [--replay <dir>] [--test-font] [--time] [--scroll-bench] [--no-prewarm]
 //!                    [--no-first-screen-first]
 //!                                                    paint the page with the engine's rasterizer into a PNG
@@ -93,7 +93,7 @@ fn count_notdef(res: &qinglan_engine::layout::LayoutResult) -> (usize, String) {
 fn usage() -> ExitCode {
     eprintln!(
         "usage:\n  qinglan-cli dom <file|url> [--replay <dir>]\n  qinglan-cli style <file|url> [--width W] [--height H] [--time] [--replay <dir>]\n  qinglan-cli layout <file|url> [--width W] [--height H] [--test-font] [--time] [--replay <dir>]\n  qinglan-cli record <url> <dir> [--width W] [--height H]
-  qinglan-cli render <file|url> -o out.png [--width W] [--height H | --full] [--dpr D] [--scroll Y] [--replay <dir>] [--test-font] [--time] [--scroll-bench]
+  qinglan-cli render <file|url> -o out.png [--width W] [--height H | --full] [--dpr D] [--scroll Y] [--scroll-x X] [--replay <dir>] [--test-font] [--time] [--scroll-bench]
   qinglan-cli bench <url> --replay <dir> [--width W] [--height H] [--dpr D] [--max-frames N] [--mem]"
     );
     ExitCode::from(2)
@@ -114,6 +114,7 @@ struct Args {
     full: bool,
     dpr: f32,
     scroll: f32,
+    scroll_x: f32,
     scroll_bench: bool,
     no_prewarm: bool,
     no_stop: bool,
@@ -138,6 +139,7 @@ fn parse_args() -> Option<Args> {
         full: false,
         dpr: 1.0,
         scroll: 0.0,
+        scroll_x: 0.0,
         scroll_bench: false,
         no_prewarm: false,
         no_stop: false,
@@ -173,6 +175,10 @@ fn parse_args() -> Option<Args> {
             "--scroll" => {
                 i += 1;
                 a.scroll = args.get(i)?.parse().ok().filter(|s: &f32| s.is_finite() && *s >= 0.0)?;
+            }
+            "--scroll-x" => {
+                i += 1;
+                a.scroll_x = args.get(i)?.parse().ok().filter(|s: &f32| s.is_finite() && *s >= 0.0)?;
             }
             "--max-frames" => {
                 i += 1;
@@ -354,6 +360,7 @@ fn main() -> ExitCode {
             full: args.full,
             dpr: args.dpr,
             scroll: args.scroll,
+            scroll_x: args.scroll_x,
             width: args.width,
             height: args.height,
             timing: args.timing,

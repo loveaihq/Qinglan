@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use super::{BgDraw, BorderDraw, DisplayList, Group, ImagePlace, ImageSpot, Item, ItemKind, NO_CLIP, PaintGlyph, RRect, Rect, Round, ShadowDraw, TextRun, gradient};
+use super::{BgDraw, BorderDraw, DisplayList, Group, ImagePlace, ImageSpot, Item, ItemKind, NO_CLIP, PaintGlyph, RRect, Rect, Round, ScrollAxis, ShadowDraw, TextRun, gradient};
 use crate::css::fx::Shadow;
 use crate::vector::Transform;
 use crate::css::bg::{Backgrounds, BgBox, BgImage, BgRepeat, BgSize, Pos1, Rep};
@@ -53,6 +53,7 @@ pub fn build_display_list(doc: &Document, res: &LayoutResult, platform: &dyn Pla
     let mut b = Builder { doc, res, platform, list: DisplayList::empty(), clip: NO_CLIP, fixed: false, canvas_from: res.canvas.map_or(NO_BOX, |c| c.from), floats: Vec::new(), outlines: Vec::new(), sinks: Vec::new(), inline_fx: res.tree.boxes.iter().any(|b| b.kind == BoxKind::Inline && b.style.misc.fx.as_deref().is_some_and(|x| x.opacity < 255)) };
     b.list.canvas = res.canvas.map(|c| c.color);
     b.list.partial = res.partial;
+    b.list.axis = ScrollAxis::of(res.tree.get(res.tree.root).style.text.writing_mode);
     let root = res.tree.root;
     let (rx, ry) = res.page_pos(root);
     b.fixed = false;
@@ -621,7 +622,7 @@ impl Builder<'_> {
                 self.list.grads.push(gp);
             } else {
                 let tile = Rect::new(LU::ZERO, LU::ZERO, LU::from_f32(tw), LU::from_f32(th));
-                self.list.images.push(ImagePlace { node, rect: tile, span: (clip_rect.y, clip_rect.bottom()), fixed: self.fixed });
+                self.list.images.push(ImagePlace { node, rect: tile, span: self.along(&clip_rect), fixed: self.fixed });
             }
             let bi = self.list.bgs.len() as u32;
             self.list.bgs.push(draw);
@@ -905,7 +906,7 @@ impl Builder<'_> {
                     let inner = inset_radii(radii, [t.to_f32(), rt.to_f32(), bt.to_f32(), l.to_f32()]);
                     let prev = inner.iter().any(|(a, b)| *a > 0.0 && *b > 0.0).then(|| self.push_round(content, inner));
                     self.push(content, ItemKind::Image { node: bx.node });
-                    self.list.images.push(ImagePlace { node: bx.node, rect: content, span: (content.y, content.bottom()), fixed: self.fixed });
+                    self.list.images.push(ImagePlace { node: bx.node, rect: content, span: self.along(&content), fixed: self.fixed });
                     if let Some(p) = prev {
                         self.restore(p);
                     }
@@ -967,14 +968,29 @@ impl Builder<'_> {
         let cap = LU::px(MAX_PAGE_HEIGHT_PX);
         let root = res.box_out(res.tree.root);
         let mut height = (root.y + root.h).min(cap);
+        // A vertical page also measures how far it reaches to the sides (the scroll range is horizontal).
+        let vertical = self.list.axis != ScrollAxis::Down;
+        let (mut x_min, mut x_max) = if vertical { (root.x.max(-cap), (root.x + root.w).min(cap)) } else { (LU::ZERO, LU::ZERO) };
         for it in &self.list.items {
-            let bottom = match self.list.clip_rect(it.clip) {
+            let clip = self.list.clip_rect(it.clip);
+            let bottom = match clip {
                 Some(c) => it.bounds.bottom().min(c.bottom()),
                 None => it.bounds.bottom(),
             };
             height = height.max(bottom.min(cap));
+            if vertical {
+                let (l, r) = match clip {
+                    Some(c) => (it.bounds.x.max(c.x), it.bounds.right().min(c.right())),
+                    None => (it.bounds.x, it.bounds.right()),
+                };
+                if l < r {
+                    x_min = x_min.min(l.max(-cap));
+                    x_max = x_max.max(r.min(cap));
+                }
+            }
         }
         self.list.height = height;
+        (self.list.x_min, self.list.x_max) = (x_min, x_max);
         self.list.spots = self.spots();
         // The arrays grew by doubling; the list lives as long as the page.
         let l = &mut self.list;
@@ -985,6 +1001,11 @@ impl Builder<'_> {
         l.images.shrink_to_fit();
         self.list.build_index();
         self.list
+    }
+
+    /// The extent of `r` along the scroll axis (fixed items are never measured: they are always near).
+    fn along(&self, r: &Rect) -> (LU, LU) {
+        self.list.axis.span(self.res.viewport.0, r)
     }
 
     /// Where each requested image sits on the page (same order as `LayoutResult::images`).
@@ -1028,8 +1049,9 @@ impl Builder<'_> {
                     // Below the first-screen stop line: not placed yet, so not near anything.
                     return ImageSpot { top: LU::MAX, bottom: LU::MAX, lazy };
                 }
-                let (_, y) = res.page_pos(owner);
-                ImageSpot { top: y, bottom: y + o.h, lazy }
+                let (x, y) = res.page_pos(owner);
+                let (top, bottom) = self.along(&Rect::new(x, y, o.w, o.h));
+                ImageSpot { top, bottom, lazy }
             })
             .collect()
     }

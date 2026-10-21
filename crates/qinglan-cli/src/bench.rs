@@ -116,7 +116,7 @@ pub fn run(cx: Ctx<'_>, url: &Url, a: &BenchArgs) -> ExitCode {
     let d_list = t.elapsed();
     let t = Instant::now();
     let mut frame = Frame::new(frame_w, frame_h);
-    render_frame(&list, platform, &mut NoBitmaps, View { scroll_y: 0.0, dpr }, &mut frame);
+    render_frame(&list, platform, &mut NoBitmaps, View { scroll_x: 0.0, scroll_y: 0.0, dpr }, &mut frame);
     let d_raster = t.elapsed();
     let first_screen = d_parse + d_start + d_style + d_layout + d_list + d_raster;
     let first_wall = t_html.elapsed();
@@ -165,17 +165,18 @@ pub fn run(cx: Ctx<'_>, url: &Url, a: &BenchArgs) -> ExitCode {
     let mut frames: Vec<f64> = Vec::new();
     let mut decode = 0.0;
     let mut peak_decoded = 0;
-    let last = (list.height.to_f32() - a.height).max(0.0);
+    let last = list.max_progress(a.width, a.height);
     let mut y = 0.0f32;
     loop {
-        let band = Band::new(y, a.height);
+        let band = list.band(y, a.width, a.height);
         let t = Instant::now();
         store.prepare(&list, band, dpr, &WicDecoder, &mut |u| loader.cache_mut().get(u));
         store.drop_far(&list, band);
         peak_decoded = peak_decoded.max(store.bytes());
         decode += ms(t.elapsed());
         let t = Instant::now();
-        render_frame(&list, platform, &mut store, View { scroll_y: y, dpr }, &mut frame);
+        let (scroll_x, scroll_y) = list.axis.offset(y);
+        render_frame(&list, platform, &mut store, View { scroll_x, scroll_y, dpr }, &mut frame);
         frames.push(ms(t.elapsed()));
         if y >= last || frames.len() >= a.max_frames {
             break;

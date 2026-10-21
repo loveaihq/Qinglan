@@ -17,7 +17,7 @@ use qinglan_engine::net::loader::Loader;
 use qinglan_engine::net::page::{PageResources, Update, apply_probe, probe_response};
 use qinglan_engine::paint::images::{Band, ImageStore, NoBitmaps};
 use qinglan_engine::paint::raster::{Frame, View, render_frame};
-use qinglan_engine::paint::{DisplayList, build_display_list, wanted_images};
+use qinglan_engine::paint::{DisplayList, ScrollAxis, build_display_list, wanted_images};
 use qinglan_engine::platform::Platform;
 use qinglan_win::{WicDecoder, WinPlatform};
 
@@ -35,6 +35,8 @@ pub struct RenderArgs {
     pub full: bool,
     pub dpr: f32,
     pub scroll: f32,
+    /// How far to scroll along the lines of a vertical page (CSS px from where it starts, clamped to the page).
+    pub scroll_x: f32,
     pub width: f32,
     pub height: f32,
     pub timing: bool,
@@ -132,7 +134,7 @@ pub fn run(mut cx: Ctx<'_>, a: &RenderArgs) -> ExitCode {
         let d_list = t.elapsed();
         let t = Instant::now();
         let mut frame = Frame::new(frame_w, view_h);
-        let stats = render_frame(&list, cx.platform, &mut NoBitmaps, View { scroll_y: a.scroll, dpr }, &mut frame);
+        let stats = render_frame(&list, cx.platform, &mut NoBitmaps, view_of(&list, a, dpr), &mut frame);
         let d_raster = t.elapsed();
         let total = t_ready.elapsed();
         println!("first-screen-ms: {:.1}", ms(total));
@@ -154,7 +156,6 @@ pub fn run(mut cx: Ctx<'_>, a: &RenderArgs) -> ExitCode {
     let t = Instant::now();
     let mut sizes = ImageSizes::new();
     let mut store = ImageStore::new();
-    let band = Band::new(a.scroll, a.height);
     let mut round = 0;
     let mut decoded_early = 0usize;
     let (mut d_lay, mut d_list_full) = (Duration::ZERO, Duration::ZERO);
@@ -168,6 +169,7 @@ pub fn run(mut cx: Ctx<'_>, a: &RenderArgs) -> ExitCode {
         if round >= MAX_ROUNDS {
             break (layout, list);
         }
+        let band = list.band(progress_of(&list, a), a.width, a.height);
         let mut changed = fetch_images(&mut cx, &layout, &list, band, a.full, &mut sizes, &mut store);
         round += 1;
         if !changed {
@@ -204,12 +206,13 @@ pub fn run(mut cx: Ctx<'_>, a: &RenderArgs) -> ExitCode {
         (view_h, a.scroll)
     };
     let t = Instant::now();
-    let dec_band = if a.full { Band::new(0.0, (frame_h as f32 / dpr).max(1.0)) } else { Band::new(scroll, a.height) };
+    let dec_band = if a.full { Band::new(0.0, (frame_h as f32 / dpr).max(1.0)) } else { list.band(progress_of(&list, a), a.width, a.height) };
     let prepared = store.prepare(&list, dec_band, dpr, &WicDecoder, &mut |u| cx.loader.cache_mut().get(u));
     let d_decode = t.elapsed();
     let t = Instant::now();
     let mut frame = Frame::new(frame_w, frame_h);
-    let stats = render_frame(&list, cx.platform, &mut store, View { scroll_y: scroll, dpr }, &mut frame);
+    let view = View { scroll_y: scroll, ..view_of(&list, a, dpr) };
+    let stats = render_frame(&list, cx.platform, &mut store, view, &mut frame);
     let d_raster = t.elapsed();
     let t = Instant::now();
     if let Err(e) = qinglan_win::write_png(&a.out, frame.width, frame.height, &frame.data) {
@@ -251,23 +254,36 @@ pub fn run(mut cx: Ctx<'_>, a: &RenderArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Raster time per frame while scrolling from the top to the bottom in [`SCROLL_STEP`] px steps. Pass 1 meets
+/// How far the page is scrolled along its axis: `--scroll` down a horizontal page, `--scroll-x` along the lines of a vertical one
+/// (cut to what the page can scroll).
+fn progress_of(list: &DisplayList, a: &RenderArgs) -> f32 {
+    if list.axis == ScrollAxis::Down { a.scroll } else { a.scroll_x.min(list.max_progress(a.width, a.height)) }
+}
+
+/// The view `a` asks for.
+fn view_of(list: &DisplayList, a: &RenderArgs, dpr: f32) -> View {
+    let (scroll_x, scroll_y) = list.axis.offset(progress_of(list, a));
+    View { scroll_x, scroll_y, dpr }
+}
+
+/// Raster time per frame while scrolling along the page's axis, from the start to the end, in [`SCROLL_STEP`] px steps. Pass 1 meets
 /// every glyph for the first time (the platform's mask cache fills as it goes), pass 2 is the same walk warm.
 /// Decoding the images that come near is done before each frame and is not counted.
 fn scroll_bench(platform: &dyn Platform, loader: &mut Loader, list: &DisplayList, store: &mut ImageStore, a: &RenderArgs) {
     let dpr = a.dpr;
     let mut frame = Frame::new((a.width * dpr).round() as u32, (a.height * dpr).round() as u32);
-    let last = (list.height.to_f32() - a.height).max(0.0);
+    let last = list.max_progress(a.width, a.height);
     for pass in 1..=2 {
         let mut times: Vec<f64> = Vec::new();
         let (mut items, mut glyphs) = (0usize, 0usize);
         let mut y = 0.0f32;
         loop {
-            let band = Band::new(y, a.height);
+            let band = list.band(y, a.width, a.height);
             store.prepare(list, band, dpr, &WicDecoder, &mut |u| loader.cache_mut().get(u));
             store.drop_far(list, band);
             let t = Instant::now();
-            let s = render_frame(list, platform, store, View { scroll_y: y, dpr }, &mut frame);
+            let (scroll_x, scroll_y) = list.axis.offset(y);
+            let s = render_frame(list, platform, store, View { scroll_x, scroll_y, dpr }, &mut frame);
             times.push(ms(t.elapsed()));
             items += s.items;
             glyphs += s.glyphs;

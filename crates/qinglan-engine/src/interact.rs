@@ -6,6 +6,7 @@ use crate::css::types::Position;
 use crate::html::atoms::{FxHashMap, a};
 use crate::html::dom::{DOCUMENT, Document, NONE, NodeId};
 use crate::layout::{BoxId, BoxKind, FragKind, Fragment, LayoutResult, NO_BOX, Positioned, has_transform};
+use crate::paint::ScrollAxis;
 use crate::vector::{Pt, Transform};
 use crate::url::percent_decode;
 
@@ -172,6 +173,12 @@ impl PageIndex {
     /// viewport coordinates, for `position: fixed` content), if any: text and images inside a link. Clipping by
     /// `overflow` is not considered.
     pub fn link_at(&self, doc: &Document, layout: &LayoutResult, x: f32, page_y: f32, view_y: f32) -> Option<NodeId> {
+        self.link_at_in(doc, layout, (x, page_y), (x, view_y))
+    }
+
+    /// [`PageIndex::link_at`] for a page that is scrolled sideways too: the point in page coordinates and in viewport
+    /// coordinates (the latter for `position: fixed` content).
+    pub fn link_at_in(&self, doc: &Document, layout: &LayoutResult, (page_x, page_y): (f32, f32), (view_x, view_y): (f32, f32)) -> Option<NodeId> {
         // Later boxes are painted later, so they are on top: the hit with the highest paint rank wins, the last one
         // among equals (tree order is paint order inside a stacking context).
         let mut hit: Option<(u32, NodeId)> = None;
@@ -179,7 +186,7 @@ impl PageIndex {
             if !matches!(f.kind, FragKind::Text { .. } | FragKind::Atomic) {
                 return;
             }
-            let y = if r.fixed { view_y } else { page_y };
+            let (x, y) = if r.fixed { (view_x, view_y) } else { (page_x, page_y) };
             // The pointer in the coordinates the box is laid out in: back through its transform.
             let (x, y) = match self.xf_of.get(r.block as usize).and_then(|&i| self.inverse.get(i as usize)) {
                 Some(t) => {
@@ -203,29 +210,39 @@ impl PageIndex {
     /// The page y (CSS px) where `node` starts: its box, or its first fragment (an inline element or text), or the
     /// block an empty inline element sits in. `None` when it has no box at all (`display: none`).
     pub fn node_y(&self, layout: &LayoutResult, node: NodeId) -> Option<f32> {
+        self.node_start(layout, node, ScrollAxis::Down, 0.0)
+    }
+
+    /// [`PageIndex::node_y`] along the page's scroll axis: where `node` starts in the coordinates the page is scrolled in
+    /// (`vw` is the viewport width, the start of a vertical-rl page is its right edge).
+    pub fn node_start(&self, layout: &LayoutResult, node: NodeId, axis: ScrollAxis, vw: f32) -> Option<f32> {
         let mut best: Option<f32> = None;
         let mut any_box: Option<BoxId> = None;
         let note = |best: &mut Option<f32>, y: f32| *best = Some(best.map_or(y, |b| b.min(y)));
+        let start = |b: BoxId| {
+            let ((x, y), o) = (self.origin_of(b), layout.box_out(b));
+            axis.span_f(vw, x, y, o.w.to_f32(), o.h.to_f32()).0
+        };
         for (i, b) in layout.tree.boxes.iter().enumerate() {
             if b.node != node || self.is_fixed(i as BoxId) {
                 continue;
             }
             any_box = any_box.or(Some(i as BoxId));
             if matches!(b.kind, BoxKind::Block | BoxKind::InlineBlock | BoxKind::Replaced) {
-                note(&mut best, self.origin_of(i as BoxId).1);
+                note(&mut best, start(i as BoxId));
             }
         }
         any_box?;
         self.for_each_fragment(layout, |f, r| {
             if !r.fixed && layout.tree.get(f.box_id).node == node {
-                note(&mut best, r.y);
+                note(&mut best, axis.span_f(vw, r.x, r.y, r.w, r.h).0);
             }
         });
         if best.is_none() {
             // An empty inline element: the block that holds it is as close as we get.
             let p = layout.tree.layout_parent(any_box?);
             if p != NO_BOX {
-                best = Some(self.origin_of(p).1);
+                best = Some(start(p));
             }
         }
         best
@@ -235,20 +252,29 @@ impl PageIndex {
     /// below `scroll_y`, and how far its start is below `scroll_y`. After a relayout, scrolling to
     /// `node_y(node) - offset` keeps it where it was.
     pub fn anchor(&self, layout: &LayoutResult, scroll_y: f32) -> Option<(NodeId, f32)> {
+        self.anchor_on(layout, ScrollAxis::Down, 0.0, scroll_y)
+    }
+
+    /// [`PageIndex::anchor`] along the page's scroll axis (see [`PageIndex::node_start`]): `scroll` is the progress.
+    pub fn anchor_on(&self, layout: &LayoutResult, axis: ScrollAxis, vw: f32, scroll: f32) -> Option<(NodeId, f32)> {
         let mut best: Option<(f32, NodeId)> = None;
         self.for_each_fragment(layout, |f, r| {
-            if r.fixed || !matches!(f.kind, FragKind::Text { .. } | FragKind::Atomic) || r.y + r.h <= scroll_y {
+            if r.fixed || !matches!(f.kind, FragKind::Text { .. } | FragKind::Atomic) {
+                return;
+            }
+            let (s, e) = axis.span_f(vw, r.x, r.y, r.w, r.h);
+            if e <= scroll {
                 return;
             }
             let node = layout.tree.get(f.box_id).node;
-            if node == NONE || best.is_some_and(|(y, _)| y <= r.y) {
+            if node == NONE || best.is_some_and(|(y, _)| y <= s) {
                 return;
             }
-            best = Some((r.y, node));
+            best = Some((s, node));
         });
         let (_, node) = best?;
-        let y = self.node_y(layout, node)?;
-        Some((node, y - scroll_y))
+        let y = self.node_start(layout, node, axis, vw)?;
+        Some((node, y - scroll))
     }
 }
 

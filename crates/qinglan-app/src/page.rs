@@ -11,9 +11,9 @@ use qinglan_engine::net::blocking::{self, Opened};
 use qinglan_engine::net::loader::Loader;
 use qinglan_engine::net::page::{PageResources, Update, probe_response};
 use qinglan_engine::paint::decode::{DecodePool, Finished};
-use qinglan_engine::paint::images::{Band, ImageStore};
+use qinglan_engine::paint::images::ImageStore;
 use qinglan_engine::paint::raster::{Frame, View, render_band};
-use qinglan_engine::paint::{DisplayList, build_display_list, wanted_images};
+use qinglan_engine::paint::{DisplayList, ScrollAxis, build_display_list, wanted_images};
 use qinglan_engine::platform::Platform;
 use qinglan_engine::url::Url;
 use qinglan_win::WicDecoder;
@@ -129,15 +129,21 @@ impl Page {
     /// what the user is looking at where it was: the first text or image at or below the top edge stays put
     /// (simple scroll anchoring). At the very top nothing is anchored.
     pub fn relayout(&mut self, platform: &dyn Platform, vp: Viewport, scroll: f32) -> f32 {
+        let axis = self.axis();
         let anchor = match (&self.index, &self.layout) {
-            (Some(index), Some(layout)) if scroll > 0.0 => index.anchor(layout, scroll),
+            (Some(index), Some(layout)) if scroll > 0.0 => index.anchor_on(layout, axis, vp.w, scroll),
             _ => None,
         };
         self.layout(platform, vp, None);
         match (anchor, &self.index, &self.layout) {
-            (Some((node, offset)), Some(index), Some(layout)) => index.node_y(layout, node).map_or(scroll, |y| y - offset),
+            (Some((node, offset)), Some(index), Some(layout)) => index.node_start(layout, node, self.axis(), vp.w).map_or(scroll, |y| y - offset),
             _ => scroll,
         }
+    }
+
+    /// The way the page scrolls: down, or along the lines of a vertical root. A scroll position is how far along it.
+    pub fn axis(&self) -> ScrollAxis {
+        self.list.as_ref().map_or(ScrollAxis::Down, |l| l.axis)
     }
 
     pub fn is_complete(&self) -> bool {
@@ -149,18 +155,24 @@ impl Page {
     }
 
     pub fn max_scroll(&self, vp: Viewport) -> f32 {
-        // `overflow: hidden` on the root or the body goes to the viewport: the page cannot be scrolled by the user.
-        if self.layout.as_ref().is_some_and(|l| l.tree.viewport_overflow.1 == qinglan_engine::css::types::Overflow::Hidden) {
+        let Some(list) = &self.list else { return 0.0 };
+        // `overflow: hidden` on the root or the body goes to the viewport: the page cannot be scrolled by the user (sideways
+        // for a vertical page, whose scroll axis is horizontal).
+        let hidden = |l: &LayoutResult| {
+            let o = l.tree.viewport_overflow;
+            (if list.axis == ScrollAxis::Down { o.1 } else { o.0 }) == qinglan_engine::css::types::Overflow::Hidden
+        };
+        if self.layout.as_ref().is_some_and(hidden) {
             return 0.0;
         }
-        (self.height() - vp.h).max(0.0)
+        list.max_progress(vp.w, vp.h)
     }
 
     /// Ask for the images near the viewport (all of them when `all`). True when a broken image changed a size, so the
     /// page needs a new layout.
     pub fn request_images(&mut self, loader: &mut Loader, vp: Viewport, scroll: f32, all: bool) -> bool {
         let (Some(layout), Some(list)) = (&self.layout, &self.list) else { return false };
-        let wanted = wanted_images(layout, list, Band::new(scroll, vp.h), all);
+        let wanted = wanted_images(layout, list, list.band(scroll, vp.w, vp.h), all);
         let mut changed = false;
         for n in self.res.request_images(loader, &wanted) {
             changed |= self.break_image(n);
@@ -215,7 +227,7 @@ impl Page {
     /// when some image's bytes are gone from the response cache (they are asked for again).
     pub fn prepare(&mut self, vp: Viewport, scroll: f32, loader: &mut Loader, pool: &mut DecodePool) -> bool {
         let Some(list) = &self.list else { return false };
-        let band = Band::new(scroll, vp.h);
+        let band = list.band(scroll, vp.w, vp.h);
         // Far bitmaps go first: their room is what the near ones are started with.
         self.store.drop_far(list, band);
         let prepared = self.store.prepare_async(list, band, vp.dpr, pool, &mut |u| loader.cache_mut().get(u));
@@ -231,13 +243,19 @@ impl Page {
     /// visible) that now show a picture, if any is on screen; and whether the page needs a new layout because a picture
     /// that has a size from its header turned out not to decode (a WebP on a system without a WebP codec): it is a
     /// broken image then, shown as its `alt`, as one whose header is unreadable.
-    pub fn take_decoded(&mut self, done: Finished, scroll: f32, dpr: f32, height: u32) -> (Option<(u32, u32)>, bool) {
+    pub fn take_decoded(&mut self, done: Finished, scroll: f32, vp: Viewport, height: u32) -> (Option<(u32, u32)>, bool) {
+        let dpr = vp.dpr;
         let accepted = self.store.accept(done);
         let relayout = self.store.take_decode_failed().into_iter().fold(false, |c, n| c | self.break_image(n));
         let Some(list) = self.list.as_ref() else { return (None, relayout) };
         let mut rows: Option<(u32, u32)> = None;
+        let (_, oy) = list.axis.offset(scroll);
         for p in list.images.iter().filter(|p| accepted.nodes.contains(&p.node)) {
-            let (top, bottom) = (p.rect.y.to_f32() - if p.fixed { 0.0 } else { scroll }, p.rect.bottom().to_f32() - if p.fixed { 0.0 } else { scroll });
+            // On a vertical page a picture beyond the sides of the viewport shows nothing: its extent along the axis tells.
+            if !p.fixed && list.axis != ScrollAxis::Down && (p.span.1.to_f32() <= scroll || p.span.0.to_f32() >= scroll + vp.w) {
+                continue;
+            }
+            let (top, bottom) = (p.rect.y.to_f32() - if p.fixed { 0.0 } else { oy }, p.rect.bottom().to_f32() - if p.fixed { 0.0 } else { oy });
             // A row of margin each side for the rounding of the rectangle to device pixels.
             let a = ((top * dpr).floor().max(0.0) as u32).saturating_sub(1);
             let b = ((bottom * dpr).ceil().max(0.0) as u32).saturating_add(1).min(height);
@@ -251,7 +269,8 @@ impl Page {
     /// Paint rows `y0 ..` (device pixels) of the viewport at `scroll` into `frame` (a band of the viewport).
     pub fn raster(&mut self, platform: &dyn Platform, vp: Viewport, scroll: f32, y0: u32, frame: &mut Frame) {
         if let Some(list) = &self.list {
-            render_band(list, platform, &mut self.store, View { scroll_y: scroll, dpr: vp.dpr }, y0, frame);
+            let (scroll_x, scroll_y) = list.axis.offset(scroll);
+            render_band(list, platform, &mut self.store, View { scroll_x, scroll_y, dpr: vp.dpr }, y0, frame);
         }
     }
 
@@ -259,15 +278,17 @@ impl Page {
     /// asks for a new window.
     pub fn link_at(&self, x: f32, y: f32, scroll: f32) -> Option<(Url, bool)> {
         let (index, layout) = (self.index.as_ref()?, self.layout.as_ref()?);
-        let node = index.link_at(&self.doc, layout, x, scroll + y, y)?;
+        let (ox, oy) = self.axis().offset(scroll);
+        let node = index.link_at_in(&self.doc, layout, (x + ox, y + oy), (x, y))?;
         let (href, blank) = link_target(&self.doc, node)?;
         Some((self.res.base().join(&href).ok()?, blank))
     }
 
-    /// The page y (CSS px) of a `#fragment`; the top for an empty one or `top` that matches nothing.
-    pub fn fragment_y(&self, fragment: &str) -> Option<f32> {
+    /// The scroll position (CSS px along the page's axis; `vw` is the viewport width) of a `#fragment`; the start for an empty
+    /// one or `top` that matches nothing.
+    pub fn fragment_y(&self, fragment: &str, vw: f32) -> Option<f32> {
         if let (Some(node), Some(index), Some(layout)) = (fragment_target(&self.doc, fragment), &self.index, &self.layout)
-            && let Some(y) = index.node_y(layout, node)
+            && let Some(y) = index.node_start(layout, node, self.axis(), vw)
         {
             return Some(y);
         }

@@ -114,7 +114,7 @@ fn a_colour_glyph_is_drawn_as_it_is() {
     let (doc, r) = lay_doc("<!doctype html><body style=\"margin:0;font:10px/10px Ahem;color:green\"><p style=\"margin:0\">\u{E000}x</p>", &platform);
     let list = build_display_list(&doc, &r, &platform);
     let mut frame = Frame::new(40, 20);
-    render_frame(&list, &platform, &mut NoBitmaps, View { scroll_y: 0.0, dpr: 1.0 }, &mut frame);
+    render_frame(&list, &platform, &mut NoBitmaps, View { scroll_x: 0.0, scroll_y: 0.0, dpr: 1.0 }, &mut frame);
     // Frame pixels are BGRA. The text colour (green) plays no part in the emoticon, the "x" next to it is green.
     assert_eq!(frame.pixel(2, 4), Some([0, 0, 255, 255]));
     assert_eq!(frame.pixel(7, 4), Some([255, 0, 0, 255]));

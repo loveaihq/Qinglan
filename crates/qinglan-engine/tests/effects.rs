@@ -36,7 +36,7 @@ fn lay(body: &str, vw: u32, vh: u32) -> Page {
 
 fn draw(page: &Page, vw: u32, vh: u32, scroll: f32) -> Frame {
     let mut frame = Frame::new(vw, vh);
-    render_frame(&page.list, &TestPlatform, &mut NoBitmaps, View { scroll_y: scroll, dpr: 1.0 }, &mut frame);
+    render_frame(&page.list, &TestPlatform, &mut NoBitmaps, View { scroll_x: 0.0, scroll_y: scroll, dpr: 1.0 }, &mut frame);
     frame
 }
 

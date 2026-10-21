@@ -47,7 +47,7 @@ fn lay(html: &str, vw: u32, vh: u32, dpr: f32, stop_y: Option<f32>) -> Page {
 fn draw(page: &Page, vw: u32, vh: u32, dpr: f32, scroll: f32, images: &mut dyn ImageSource) -> (Frame, RasterStats) {
     let (vw, vh) = (vw as f32, vh as f32);
     let mut frame = Frame::new((vw * dpr).round() as u32, (vh * dpr).round() as u32);
-    let stats = render_frame(&page.list, &TestPlatform, images, View { scroll_y: scroll, dpr }, &mut frame);
+    let stats = render_frame(&page.list, &TestPlatform, images, View { scroll_x: 0.0, scroll_y: scroll, dpr }, &mut frame);
     (frame, stats)
 }
 
@@ -467,7 +467,7 @@ fn a_viewport_drawn_in_bands_is_the_same_picture() {
             while y0 < h {
                 let bh = 37.min(h - y0);
                 let mut band = Frame::new(w, bh);
-                render_band(&page.list, &TestPlatform, &mut NoBitmaps, View { scroll_y: scroll, dpr }, y0, &mut band);
+                render_band(&page.list, &TestPlatform, &mut NoBitmaps, View { scroll_x: 0.0, scroll_y: scroll, dpr }, y0, &mut band);
                 data.extend_from_slice(&band.data);
                 y0 += bh;
             }

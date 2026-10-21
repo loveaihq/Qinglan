@@ -197,7 +197,57 @@ pub struct ImagePlace {
     pub fixed: bool,
 }
 
-/// Where one of `LayoutResult::images` sits on the page (same order), for lazy loading.
+/// The way a page scrolls: down for horizontal writing, along the lines for a vertical-rl (to the left, the start is the
+/// right edge) or vertical-lr (to the right) root. Scroll positions, the image bands and the anchors are all measured
+/// along it ("progress"), so everything that is not about pixels works the same for the three.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScrollAxis {
+    #[default]
+    Down,
+    Left,
+    Right,
+}
+
+impl ScrollAxis {
+    pub fn of(mode: crate::css::types::WritingMode) -> ScrollAxis {
+        match (mode.vertical(), mode.lr()) {
+            (false, _) => ScrollAxis::Down,
+            (true, false) => ScrollAxis::Left,
+            (true, true) => ScrollAxis::Right,
+        }
+    }
+
+    /// Where the viewport's top left corner is on the page (CSS px) after scrolling `p` px along the axis.
+    pub fn offset(self, p: f32) -> (f32, f32) {
+        match self {
+            ScrollAxis::Down => (0.0, p),
+            ScrollAxis::Left => (-p, 0.0),
+            ScrollAxis::Right => (p, 0.0),
+        }
+    }
+
+    /// The extent of the rectangle `x, y, w, h` (page coordinates) along the axis, measured from the start of the page: for
+    /// `Left` from the right edge of the first viewport (`vw` wide).
+    pub fn span_f(self, vw: f32, x: f32, y: f32, w: f32, h: f32) -> (f32, f32) {
+        match self {
+            ScrollAxis::Down => (y, y + h),
+            ScrollAxis::Left => (vw - x - w, vw - x),
+            ScrollAxis::Right => (x, x + w),
+        }
+    }
+
+    /// [`ScrollAxis::span_f`] in layout units.
+    pub fn span(self, vw: LU, r: &Rect) -> (LU, LU) {
+        match self {
+            ScrollAxis::Down => (r.y, r.bottom()),
+            ScrollAxis::Left => (vw - r.right(), vw - r.x),
+            ScrollAxis::Right => (r.x, r.right()),
+        }
+    }
+}
+
+/// Where one of `LayoutResult::images` sits on the page (same order), for lazy loading. `top` and `bottom` are along the
+/// scroll axis.
 #[derive(Clone, Copy, Debug)]
 pub struct ImageSpot {
     pub top: LU,
@@ -225,6 +275,11 @@ pub struct DisplayList {
     pub canvas: Option<Color>,
     /// The page's height as far as it is laid out (a partial layout gives a temporary value).
     pub height: LU,
+    /// The way the page scrolls (the root's writing mode) and, for a vertical root, how far its content reaches on the
+    /// left and the right (the root's box and what is drawn, clipped); both zero for a horizontal one.
+    pub axis: ScrollAxis,
+    pub x_min: LU,
+    pub x_max: LU,
     pub images: Vec<ImagePlace>,
     pub spots: Vec<ImageSpot>,
     /// The layout this was built from was stopped early (first-screen-first).
@@ -248,11 +303,29 @@ impl DisplayList {
             glyphs: Vec::new(),
             canvas: None,
             height: LU::ZERO,
+            axis: ScrollAxis::Down,
+            x_min: LU::ZERO,
+            x_max: LU::ZERO,
             images: Vec::new(),
             spots: Vec::new(),
             partial: false,
             index: Index::default(),
         }
+    }
+
+    /// How far the page scrolls along its axis (CSS px) in a viewport of `vw` x `vh`: its height below the first screen, or
+    /// how far its lines reach past the edge the first screen starts at (the right edge for vertical-rl).
+    pub fn max_progress(&self, vw: f32, vh: f32) -> f32 {
+        match self.axis {
+            ScrollAxis::Down => (self.height.to_f32() - vh).max(0.0),
+            ScrollAxis::Left => (-self.x_min.to_f32()).max(0.0),
+            ScrollAxis::Right => (self.x_max.to_f32() - vw).max(0.0),
+        }
+    }
+
+    /// The part of the page on screen when `progress` px are scrolled along the axis, for the image decisions.
+    pub fn band(&self, progress: f32, vw: f32, vh: f32) -> Band {
+        Band::new(progress, if self.axis == ScrollAxis::Down { vh } else { vw })
     }
 
     pub(crate) fn build_index(&mut self) {

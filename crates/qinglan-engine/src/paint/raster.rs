@@ -99,9 +99,11 @@ pub(super) fn over(dst: &mut [u8], src: [u8; 4]) {
     }
 }
 
-/// Which part of the page to draw: `scroll_y` in CSS px (rounded to a device pixel), at `dpr` device pixels per CSS px.
+/// Which part of the page to draw: the page position of the viewport's top left corner, `scroll_x` (negative for a vertical-rl
+/// page scrolled to the left) and `scroll_y`, in CSS px (rounded to a device pixel), at `dpr` device pixels per CSS px.
 #[derive(Clone, Copy, Debug)]
 pub struct View {
+    pub scroll_x: f32,
     pub scroll_y: f32,
     pub dpr: f32,
 }
@@ -152,6 +154,7 @@ pub fn render_band(list: &DisplayList, platform: &dyn Platform, images: &mut dyn
     let dpr = f64::from(view.dpr).clamp(0.25, 8.0);
     let band = y0.min(1 << 30) as i32;
     let sy = (f64::from(view.scroll_y.max(0.0)) * dpr).round().min(1.0e9) as i32 + band;
+    let sx = (f64::from(view.scroll_x) * dpr).round().clamp(-1.0e9, 1.0e9) as i32;
     let (w, h) = (frame.width as i32, frame.height as i32);
     let bounds = IRect { x0: 0, y0: 0, x1: w, y1: h };
     let canvas = list.canvas.unwrap_or(Color::WHITE);
@@ -167,7 +170,7 @@ pub fn render_band(list: &DisplayList, platform: &dyn Platform, images: &mut dyn
     for it in list.fixed.iter().take(list.fixed_below) {
         cx.item(frame, it);
     }
-    cx.sy = sy;
+    (cx.sx, cx.sy) = (sx, sy);
     let top_css = view.scroll_y.max(0.0) + (f64::from(band) / dpr) as f32;
     let top = LU::from_f32(top_css);
     let bottom = LU::from_f32(top_css + (h as f32 / dpr as f32) + 1.0);
@@ -178,7 +181,7 @@ pub fn render_band(list: &DisplayList, platform: &dyn Platform, images: &mut dyn
             cx.item(frame, it);
         }
     }
-    cx.sy = band;
+    (cx.sx, cx.sy) = (0, band);
     for it in list.fixed.iter().skip(list.fixed_below) {
         cx.item(frame, it);
     }
