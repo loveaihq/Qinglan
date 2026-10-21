@@ -708,7 +708,7 @@ mod tests {
             prev = c;
         }
         for size in 1..=MID_MAX {
-            assert!(matches!(kind(size, 16), Kind::Small(c) if class_size(c) % 16 == 0 && class_size(c) >= size), "size {size}");
+            assert!(matches!(kind(size, 16), Kind::Small(c) if class_size(c).is_multiple_of(16) && class_size(c) >= size), "size {size}");
         }
         assert_eq!(class_size(SMALL_CLASSES - 1), SMALL_MAX);
         assert_eq!(class_size(CLASSES - 1), MID_MAX);
@@ -858,7 +858,7 @@ mod tests {
             .map(|i| {
                 // SAFETY: a valid, non-zero layout.
                 let p = unsafe { a.alloc(l20) };
-                assert!(!p.is_null() && in_arena(p) && p as usize % 8 == 0);
+                assert!(!p.is_null() && in_arena(p) && (p as usize).is_multiple_of(8));
                 fill(p, 20_000, i as u8);
                 p
             })

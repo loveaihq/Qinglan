@@ -1744,3 +1744,51 @@ gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 
 
 ### 四项检查（2f-2 收尾）
 `cargo test --workspace --no-fail-fast`：除两个**耗时上限**测试外全过；`cargo clippy --workspace --all-targets` 无警告；`qinglan-cli wpt --check` 3313 / 3313；release 的 `hostile` 47 个。两个耗时测试（`hostile::bad_utf8` 限 5 秒、`fonts::brotli_setup_work_is_limited_by_the_input` 限 2 秒）在整套并行跑、机器上有一个忙的 `Emulator.exe` 和大构建后的“慢窗口”时超时（6.1 秒、2.3 秒），单独跑或减少并行（`--test-threads=2/3`）就过，改动（SVG 部分尺寸、测试、工具）没碰 UTF-8 解码和 Brotli；没有在旧提交上对照重跑。
+
+## 第 2 层 · 2f-3 图片 SVG 里的文字、固定盒的两处遗留、分配器的中等块（2026-10-22，起点 `848ace7`；提交 `Text in SVG pictures`、`Fixed boxes`、`Pool the 1-32 KiB blocks`）
+
+### 1. 图片 SVG（`<img>`、背景、`data:`）里的文字
+- **问题**：`svg::rasterize` 在解码线程上跑，平台（DirectWrite 对象，`Rc`，不是 `Send`）只有界面线程有，所以 `<text>` 一直没画（shields.io 徽章缺字）。
+- **做法**：解码线程照旧画出除文字外的一切，场景留在 `DecodedImage::text`（`svg::TextLayer`，里面是整个 `Scene`）。为了能跨线程，`TextRun::families` 从 `Rc<Vec<FontFamily>>` 换成 `Arc<Vec<svg::Family>>`（`FontFamily` 里有 `Rc<str>`，`Family` 是 `Box<str>`/通用族，画的时候转回 `FontFamily`）。`ImageStore` 在 `accept`（线程池）和 `prepare`（同步，命令行 `render`）里记下带文字层的位图（`unfinished`）；`ImageSource::finish(platform)`（新方法，默认什么都不做）在 `render_band` 一开头被调用，窗口、`render`、`bench` 都走它：`svg::add_text` 用 `render::overlay_text` 把文字画在缓存的位图上（同一个 `R::text`：平台整形、字形遮罩、`clip-path`、`fill-opacity`、SVG 自己的 CSS），位图被替换成画好的那张（只画一次，以后每帧用缓存）。
+- **和内联 `<svg>` 的差别**：文字画在所有形状之上（文件里排在 `<text>` 之后的形状盖不住它）；`opacity` 组里的文字乘上外层各组的不透明度，但不开离屏层。徽章这类文字最后画的图没有差别。上限同内联文字（`MAX_OPS`、总工作量 `MAX_WORK`、文字 10 万字节）。
+- **`dominant-baseline`**（新）：`central`（y 是 em 方框的中点：基线下移 (ascent − descent) / 2）和 `middle`（x 高度的一半）；Repology 徽章（`in repositories 48`）用 `central`，不做的话字比 Edge 高 3–4 px。其余值当 `alphabetic`。作为第 24 个 SVG 属性存（`svg_props::NAMES`），内联 SVG 同样生效。
+- **没做**：`textLength`/`lengthAdjust`（shields 的徽章带 `textLength`，Edge 会把字距拉到这个长度，我们按字体自己的宽度排，差几分之一像素到 1 px）、`text-rendering`、文字的旋转和斜切（只取缩放）、渐变填充的文字。
+- **测试**：`tests/paint.rs::the_text_of_an_svg_picture_is_drawn_into_the_frame_by_the_platform`（测试平台，每个字一个 1 em 见方的块，手算位置；SVG 自己的 `<style>` 设颜色和大小，`opacity` 组减半，`dominant-baseline: central` 下移 3 px；同步路径、线程池路径各一次，连画两帧）。
+- **gh-ripgrep 的徽章**（`qinglan-cli render` 回放，1280×2400，对 `tests/out/gh-ripgrep-edge.png`，目测并排）：三个徽章（ci passing、crates.io v15.2.0、in repositories 48）以前只有底色，现在文字都有；字体、字号、左右位置和 Edge 一致，竖直位置在加了 `dominant-baseline` 之后一致；和旧程序比，整页只有徽章那一小条（x 87–376，y 1791–1807）的像素不同。
+
+### 2. 固定盒（2e-2 的遗留 a、b）
+- **a）固定盒里的滚动容器在页面滚过之后滚不动**：固定盒里的 `Scope::view` 是视口坐标，而滚轮、按滚动条、拖滑块给的是页面坐标。`Scope` 多了 `fixed`（建作用域时 `in_fixed`），`scope_at`、`wheel`、`bar_press`、`bar_drag` 多收一个“同一个点在视口里的位置”，固定的作用域用它、其余的用页面坐标；窗口（`qinglan-app/src/app.rs`）三处传 `(鼠标 x, 鼠标 y)`。命中测试（`link_at_scoped`）以前就按 `r.fixed` 走视口坐标，不用改。
+- **b）带 `opacity`/`transform` 的固定盒里的定位孩子丢掉组**：`positioned_in_scopes` 为了让固定盒绕过打开着的窗格，把 `sinks`（打开着的组）整个摘掉，连固定盒自己的那一层组也摘了，里面绝对定位的孩子于是画在组外（没有变形、不透明度）。现在只有进入固定子树时（`positioned` 里 `self.fixed` 刚由假变真）才摘，子树里面的（`saved.0` 为真）保留。固定盒自己带组时本来就对（走 `paint_box` 的 `open_group`），所以“按非固定盒的同一条组路径”其实已经是这样，坏的是它的定位后代。
+- **测试**（`tests/scopes.rs`）：`a_scroll_container_in_a_fixed_box_is_found_by_its_place_in_the_viewport`（页面滚 200 px，鼠标在视口 (310, 10)，页面坐标 (310, 210)：滚轮、按滑块、拖滑块、点轨道都命中；视口里别处的点不动它，吃不下的交给页面）、`a_positioned_child_of_a_transformed_fixed_box_moves_with_it`（修之前红：孩子画在变形前的位置）。
+- **仍没做**：`bar_press` 不检查外层滚动容器的视口是否含这个点；`shift_of` 不计 sticky 位移；组里的 sticky 不动（同 2e-2）。
+
+### 3. 内存：分配器的 1–32 KiB 等级（`qinglan-win/src/sys/heap.rs`）
+- **改了什么**：① **中等块**（1025–32768 字节，对齐 ≤ 8）：20 个新等级，每个倍增 4 档（1280、1536、1792、2048、2560 … 32768，所以 `Vec` 的 2 的幂容量没有内部浪费）；slab 是 256 KiB 的一段（`MID_SLAB`，在同一个 512 MiB 地址范围里占 16 个 16 KiB 单元，起点按范围起点对齐到 256 KiB），**按需提交**：只提交头部的 16 KiB，bump 指针往前走时再按 16 KiB 一份往后提交（`grow`），所以一个只放了一块 8 KiB 的等级只占 16 KiB；一段里没有活块了就整段解除提交、单元还给范围（`release_mid`）；等级的最后一段留着，但只留 64 KiB（`trim_mid`），免得 32 KiB 的块每次分配释放都系统调用。② **大块**的门槛从 ≥ 32 KiB 改成 > 32768（`BIG_MIN` 去掉，`MID_MAX`）。③ **对齐 16** 也进池：`hashbrown` 的表（`FxHashMap`、`HashSet`）按 16 对齐，以前全部落在 Windows 堆里；现在对齐 16 的请求把大小向上取整到 16 的倍数再选等级（等级大小 ≥ 16 时都是 16 的倍数，slab 头 64 字节，块 16 对齐）。取不到 slab 或提交失败时仍回到 `System`（块在哪看布局和地址，规则同 2a-3）。
+- **锁**：不变（每级一把自旋锁，地址范围一把，先级后范围）；`grow` 只在级锁下对自己 slab 的保留范围提交，不拿范围锁。unsafe 仍只在 `sys/heap.rs`，每处有 SAFETY。
+- **测试**（`sys::heap::tests`，4 个）：`classes_round_up_and_cover_every_size`（1–32768 每个大小；每个等级的块数 ≥ 7；对齐 16 的请求给 16 的倍数）、`threads_do_not_share_blocks`（4 个线程随机分配/填充/`realloc`/释放，大小 1–33000 和 29768–129768、对齐 1–16，查字节有没有被别人改）、`empty_slabs_are_given_back`、新增 `mid_slabs_commit_lazily_and_are_given_back`（8 KiB 一块只多提交 16 KiB；300 块 20 KB 占 24 段、各块字节完整；全释放后段数和提交量回落）。
+- **mem-stats 的分项**（窗口 exe，`--bench --mem`，zhwiki-rec 滚到底）：Windows 进程堆 **已提交 10.23 → 4.5 MB（活的 5.0 → 1.1 MB）**（2f-1 的数字是 10.23 / 5.0；改完 4.5 / 1.1，那 1.1 MB 是 DirectWrite、WIC 自己的分配）；池：已提交 15.0 MB，其中空闲链 3.1 MB，23 个中等段共提交 2.7 MB。活堆（Rust 请求的字节）35.2 MB，`teardown` 之后 10.7 MB 是不随页面走的底（代码、DirectWrite、线程栈、池留着的 slab），35.2 + 10.7 = 45.9，滚到底 46.5：**分配器这一侧只剩约 0.6 MB 的余地**，2f-1 估的“堆里 5 MB 空闲”被池里的空闲块和中等段的头部几乎等量地吃掉了（池把它们分开，但没有凭空消失：这些是解析、样式阶段留下的洞，别的块还活着，页面不放就还不了）。
+- **试了没用**：`HeapCompact(GetProcessHeap())`（滚到底之后调）：已提交没变（47,157,248 → 47,157,248，3 次），Windows 堆的 4–6 MB 已提交不是它能收回的空闲块，所以没进产品代码。
+- **5 次新进程（`qinglan.exe --bench`，zhwiki-rec，1920×1080，滚到底 Private Bytes，MB 十进制；旧 = `848ace7`；电脑在电池上、有别的会话在编译，内存数字受影响小，图片到达次序会让每次差 ±0.5 MB）**：
+  - 第一轮（旧新交替）：旧 50.45、46.91、47.01、46.69、47.35（最大 50.45，第 1 次是冷启动 1.2 s 的那次，中位数 47.01）→ 新（只有 1–32 KiB 等级）47.47、46.42、46.08、46.42、47.30（最大 47.47，中位数 46.42）；峰值 55.9–58.1 → 54.7–56.1。
+  - 第二轮（旧、新、新 + 对齐 16 交替）：旧 46.56、47.26、47.65、46.99、47.47（中位数 47.26）；新 46.71、47.17、46.45、47.17、47.48（47.17）；**最终版（新 + 对齐 16）46.37、47.27、47.14、46.65、47.32（中位数 47.14，最大 47.32）**；峰值旧 55.8–56.6 → 最终版 54.9–55.8。
+  - **结论：滚到底中位数 −0.1 … −0.6 MB（在噪声里），峰值 −0.8 … −1.3 MB；目标 ≤ 46.0 没到（46.37–47.32）。** 要再降得减活的数据（盒子和碎片树 8.5 MB、DOM 和样式表 7.9 MB、显示列表 4.0 MB），分配器已经没有可挖的了。预算 50 MB 的余量 2.7 MB。
+
+### 4. 速度（分配器，`qinglan-cli bench`，1920×1080，旧 `848ace7` 和新交替各 5 次，插电 `BatteryStatus = 2`，开始时没有 cargo/rustc 在跑；中位数 / 最小值，旧 → 新）
+- zhwiki-rec：解析 35.9 / 30.6 → 35.7 / 30.1 ms；样式 58.4 / 50.4 → 51.9 / 48.1；首屏 188.9 / 173.1 → 186.3 / 170.1；滚动帧中位数 7.4 → 7.5、p95 10.0 → 10.1；`bench` 滚到底私有字节 58.1 → 56.1 MB（命令行 bench 不丢字形缓存，所以比窗口的 46–47 大，这里 −2.0 MB）。
+- gh-ripgrep：解析 6.9 → 4.9；样式 108.7 / 106.1 → 104.1 / 94.2；首屏 191.9 / 182.2 → 184.4 / 171.2；滚动帧中位数 6.0 → 5.5、p95 9.3 → 8.9；私有字节 32.0 → 31.7。
+- **没有变慢**（分配多的阶段：样式、解析不退，样式略快）。引擎的 `perf` 集成测试用系统分配器，不经过 `PoolAlloc`，量不到这次改动，没跑。窗口 `--bench`（电池/忙的时候量，只看趋势）首屏 180–240 ms 在新旧之间没有差别，滚动帧中位数 9.5–10.8 ms，也没有差别。
+
+### 5. 真实网页（52 页，`qinglan-cli render` 回放 1280×2400，旧 `848ace7` 对新）
+27 页逐字节相同，19 页只差几个像素（DirectWrite 字形遮罩的小抖动，容差同 `corpus_run.py twice`：≤ 1/2000 的像素、每通道 ≤ 24），6 页超出容差：**gh-ripgrep、mdn-flex、rust-book-own 是这一步有意改的**（徽章文字；mdn-flex 的 flex 示意图 SVG 里的字母和标题，图片 SVG 文字；rust-book-own 侧栏里带 `transform` 的固定盒里的 `iframe` 占位框，以前画在变形前的位置，现在跟着移出屏幕，和 Edge 一致），重渲染两次旧、新各自都稳定；kantei-jp、yihui、rustusers-topic 是旧程序自己两次渲染就不同的页（旧 vs 旧 43,193 / 592 / 111 像素），新旧第二次渲染逐字节相同，不是这一步引起的。
+
+### 6. 四项检查（2f-3 收尾，提交 `de3f81b` 之后，只加文档和测试里两处 `is_multiple_of`）
+- `cargo clippy --workspace --all-targets`：无警告（第一次跑有两条 `manual_is_multiple_of`，在新加的堆测试里，已改）。
+- `qinglan-cli wpt --check`：`wpt: 3313 of 3313 listed tests pass`。
+- `cargo test --workspace --no-fail-fast`：42 个测试程序全部 `ok`，没有失败（引擎 `scopes` 13、`paint` 34、`svg` 12、`hostile` debug 版 47 等）。
+- `cargo test --release -p qinglan-cli --test hostile`：**跑完整套测试之后紧接着跑一次，`bad_utf8` 5029 ms 超了 5 s 的限额（110 MB；46 个过，1 个失败，机器上有我自己的真实网页渲染和编译刚做完）；单独重跑：47 个全过，29.70 s。** 限额没改。
+- `qinglan.exe`：2,705,920 → **2,713,600**（+7,680；上限 2,717,000，余 3,400；图片 SVG 文字层 + `dominant-baseline` 约 +9 KB，固定盒修复和分配器的中等等级合起来 −1.5 KB）。第 2 层上限 2,726,297 还剩 12,697。
+
+### 没做 / 下一步
+- 内存 ≤ 46.0 MB 没到（见第 3 节）：该减活的数据，不是分配器。显示列表只建视口附近的带（4.0 MB）、盒子和碎片树（8.5 MB）是最大的两项。
+- 图片 SVG 的文字：`textLength`、文字的渐变填充、文字盖在后画的形状上的顺序。
+- `bar_press` 不检查外层滚动容器的视口是否含这个点；`shift_of` 不计 sticky 位移。
