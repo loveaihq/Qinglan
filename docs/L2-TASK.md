@@ -135,3 +135,5 @@
 - 2d-2b（竖排、注音，2026-10-21）完成：先修了 `bad_utf8`（154 → 109 MB，限额 120；`bidi_levels` 给每个字节分了 8 字节的索引）；竖排按“框架”做（`layout/vertical.rs`：竖排块是正交流的根，里面用横排代码按逻辑方向排，排完整体换成物理坐标），`writing-mode`（含 `sideways-rl`；`sideways-lr` 只解析）、`text-orientation`、`text-combine-upright`（`all`、`digits`）、`direction: rtl` 在竖排里、body 的值传给根；竖排标点用 `vert` 字形；注音（`ruby`/`rb`/`rt`/`rp`、`ruby-position`）做成匿名 `inline-block` 一对；WPT `css-writing-modes` 439 / 843（bug 类 388，每个一行 `notes.txt`，没有修）、`css-ruby` 23 / 118；flex/grid 在竖排里按横排排（31 个靠“竖排被忽略”碰巧通过的 flex/grid 测试退出通过名单）；`qinglan.exe` 2,567,168（+49,664，预算 +60 KB 内）；zhwiki-rec 滚到底最大 48.42 MB；首屏没有合格的数字（量的时候另一个会话在编译）；详见 `docs/decisions.md` “2d-2b”。
 
 - 2c/2d 审查修复 A（2026-10-21，解码器和放大）：Brotli 上下文映射逆移到前改 O(i) 并加准备工作量预算（984 KB 的炸弹字体 8.5 s → 约 50 ms）；发现 `bench` 不取网页字体，改成取并在 `hostile.rs` 里核对；注音对共用样式并计入生成盒子额度（10 万对 `layout` 356 → 156 MB，2.68 → 0.91 s）；WOFF2 临时拷贝改移动、坐标差超出 16 位算坏字体；彩色字形各层像素和外框设上限。详见 `docs/decisions.md` “2c/2d 审查修复”。
+
+- 2c/2d 审查修复 B（2026-10-21，盒阴影 9 宫格）：遮罩只和圆角、模糊半径有关，不再和盒子大小有关（r1_shadow_only 10.3 → 0.22 s，q5_shadow400 3.64 → 0.36 s，2 Mpx 窗口的卡片每帧 65 → 1.7 ms，1260×3300 的包装层现在有阴影）；画面与旧版逐字节相同。详见 `docs/decisions.md` “提交 B”。

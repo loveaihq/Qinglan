@@ -434,3 +434,27 @@ fn a_blurred_text_shadow_is_kept_while_scrolling_and_equals_a_fresh_one() {
     let blue = (0..100u32).any(|x| (0..100u32).any(|y| i32::from(at(&warm[2], x, y)[0]) > i32::from(at(&warm[2], x, y)[2]) + 40));
     assert!(blue, "a blue shadow");
 }
+
+/// A shadow around a big box (its window is over the 4 Mpx a whole-window mask could be) is drawn, and scrolls like a small one.
+#[test]
+fn a_shadow_around_a_big_box_is_drawn_and_scrolls() {
+    let page = lay(
+        "<div style='position:absolute;left:40px;top:40px;width:1280px;height:3300px;border-radius:16px;box-shadow:0 0 12px black, inset 0 0 12px blue'></div>",
+        1400,
+        300,
+    );
+    let a = draw(&page, 1400, 300, 1000.0);
+    // Left of the box, in the middle of the left edge: the outer shadow is there, a little darker towards the box...
+    let (far, near_box) = (at(&a, 30, 150), at(&a, 38, 150));
+    assert!(far[1] > near_box[1] && near_box[1] < 200, "shadow at 30: {far:?}, at 38: {near_box:?}");
+    // ... none further than the blur reaches, none inside the box under the outer shadow, and the inset one (blue) inside.
+    expect(&a, &[(2, 150, WHITE), (700, 150, WHITE)]);
+    assert!(at(&a, 41, 150)[0] > at(&a, 41, 150)[2], "inset shadow: {:?}", at(&a, 41, 150));
+    // Scrolled by 20: the picture moves up by 20 rows (the same masks).
+    let b = draw(&page, 1400, 300, 1020.0);
+    for y in 0..200u32 {
+        for x in (0..1400u32).step_by(7) {
+            assert_eq!(at(&a, x, y + 20), at(&b, x, y), "({x},{y})");
+        }
+    }
+}

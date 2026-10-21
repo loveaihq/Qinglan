@@ -652,3 +652,33 @@ fn ruby_100k_pairs() {
     let html = format!("<!doctype html><meta charset=utf-8><p style=\"width:800px\">{}</p>", "<ruby>字<rt>注音</rt></ruby>".repeat(n(100_000)));
     run(page("ruby: 100,000 pairs", html), "ruby_100k");
 }
+
+// ---- 2c review: shadow masks ---------------------------------------------------------------------------------------------
+
+#[test]
+fn shadows_on_300_screen_sized_boxes() {
+    // Each shadow window is over the 1 Mpx a mask was kept at, so every frame made them again: 300 of them took 10 s.
+    let html = format!(
+        "<!doctype html><style>.b{{position:absolute;left:0;top:0;width:1270px;height:1000px;box-shadow:0 0 4px #000}}</style>{}",
+        "<div class=b></div>".repeat(n(300))
+    );
+    run(page("box-shadow: 300 boxes of 1270 x 1000", html), "shadows_300_big");
+}
+
+#[test]
+fn shadows_on_400_nested_boxes() {
+    let depth = n(400);
+    let html = format!(
+        "<!doctype html><style>.n{{padding:2px;background:rgba(255,0,0,.05);box-shadow:0 0 4px #000;border-radius:5px}}</style>{}x{}",
+        "<div class=n>".repeat(depth),
+        "</div>".repeat(depth)
+    );
+    run(page("box-shadow: 400 nested boxes with rounded corners", html), "shadows_400_nested");
+}
+
+#[test]
+fn shadow_around_a_page_sized_box() {
+    // The shadow window is 1330 x 3370: over what a whole-window mask could be (4 Mpx), so it used to be left out.
+    let html = "<!doctype html><style>body{margin:0}.w{width:1260px;margin:10px;height:3300px;background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.3), inset 0 0 30px #00f}</style><div class=w><p>x</p></div>";
+    run(page("box-shadow: 1260 x 3300 wrapper", html), "shadow_page_sized");
+}

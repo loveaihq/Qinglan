@@ -3,9 +3,13 @@
 //!
 //! * **Blur** (css-backgrounds-3 6.1.2): a Gaussian of standard deviation `blur / 2` is approximated by three box blurs per
 //!   axis (the box sizes of filter-effects-1 `feGaussianBlur`), each a running sum, so the cost does not depend on the radius.
-//! * **Box shadows**: the blurred coverage of the shadow shape is made once for a (shape size, radii, sigma) and kept
-//!   ([`MASKS`]); a frame only blends it, outside the border box for an outer shadow and inside the padding box for an
-//!   inset one (6.1.1). A shadow without blur and with square corners is a rectangle and needs no mask.
+//! * **Box shadows**: the blurred coverage of the shadow shape is made once and kept ([`MASKS`]); a frame only blends it,
+//!   outside the border box for an outer shadow and inside the padding box for an inset one (6.1.1). A shadow without blur
+//!   and with square corners is a rectangle and needs no mask. The mask is a **9-patch** ([`Patch`]): far from the edges
+//!   and corners the blurred shape does not change along an axis, so the columns (rows) in between are cut out, the small
+//!   shape is blurred, and a pixel of the real window reads the small mask at a mapped position. The mask depends on the
+//!   corners and the blur and not on the size of the box, so a card of any size costs the same mask, and 300 boxes of one
+//!   shape share it.
 //! * **Groups**: the items are drawn upright into an offscreen layer at the scale of the transform (so scaled text is
 //!   re-rasterized, not stretched), then the layer is composited through the rest of the transform (a whole-pixel offset,
 //!   or bilinear sampling for rotation and skew) with the group's opacity (css-color-4 12.1, css-compositing-1 3).
@@ -69,13 +73,32 @@ fn reach(sigma: f32) -> i32 {
     if sigma < 0.3 { 0 } else { passes(sigma).iter().map(|&(l, r)| l.max(r) as i32).sum::<i32>() + 1 }
 }
 
+/// `sum / size` rounded, for the sums of a blur (at most 255 * 4097) without a division: `(sum + size / 2) * m >> 40` with
+/// `m = 2^40 / size + 1` is exact there (the error is under `sum / 2^40 < 2^-19`, and a quotient is never within `1 / size`
+/// of the next integer without being it).
+struct Mean {
+    m: u64,
+    half: u32,
+}
+
+impl Mean {
+    fn new(size: u32) -> Mean {
+        Mean { m: (1u64 << 40) / u64::from(size.max(1)) + 1, half: size / 2 }
+    }
+
+    #[inline(always)]
+    fn of(&self, sum: u32) -> u8 {
+        ((u64::from(sum + self.half) * self.m) >> 40) as u8
+    }
+}
+
 /// `dst[i]` = the mean of `src[i - l ..= i + r]` (zero outside).
 fn box_line(src: &[u8], dst: &mut [u8], l: usize, r: usize) {
     let n = src.len();
-    let size = (l + r + 1) as u32;
+    let mean = Mean::new((l + r + 1) as u32);
     let mut sum: u32 = src.iter().take(r + 1).map(|&v| u32::from(v)).sum();
     for i in 0..n {
-        dst[i] = ((sum + size / 2) / size) as u8;
+        dst[i] = mean.of(sum);
         if i + r + 1 < n {
             sum += u32::from(src[i + r + 1]);
         }
@@ -85,10 +108,38 @@ fn box_line(src: &[u8], dst: &mut [u8], l: usize, r: usize) {
     }
 }
 
+/// `box_line` down every column at once: a running sum for each column, moved one row at a time, so that memory is read in
+/// order (going down one column at a time touches a new cache line for every pixel).
+fn box_cols(src: &[u8], dst: &mut [u8], w: usize, h: usize, l: usize, r: usize, sums: &mut [u32]) {
+    let mean = Mean::new((l + r + 1) as u32);
+    sums.fill(0);
+    for y in 0..=r.min(h.saturating_sub(1)) {
+        for (s, &v) in sums.iter_mut().zip(&src[y * w..(y + 1) * w]) {
+            *s += u32::from(v);
+        }
+    }
+    for y in 0..h {
+        for (o, &s) in dst[y * w..(y + 1) * w].iter_mut().zip(sums.iter()) {
+            *o = mean.of(s);
+        }
+        if y + r + 1 < h {
+            for (s, &v) in sums.iter_mut().zip(&src[(y + r + 1) * w..(y + r + 2) * w]) {
+                *s += u32::from(v);
+            }
+        }
+        if y >= l {
+            for (s, &v) in sums.iter_mut().zip(&src[(y - l) * w..(y - l + 1) * w]) {
+                *s -= u32::from(v);
+            }
+        }
+    }
+}
+
 fn blur_mask(data: &mut [u8], w: usize, h: usize, sigma: f32) {
     if sigma < 0.3 || w == 0 || h == 0 || data.len() < w * h {
         return;
     }
+    let data = &mut data[..w * h];
     let ps = passes(sigma);
     let mut tmp = vec![0u8; w.max(h)];
     for row in data.chunks_exact_mut(w) {
@@ -97,18 +148,20 @@ fn blur_mask(data: &mut [u8], w: usize, h: usize, sigma: f32) {
             row.copy_from_slice(&tmp[..w]);
         }
     }
-    let mut col = vec![0u8; h];
-    for x in 0..w {
-        for (y, c) in col.iter_mut().enumerate() {
-            *c = data[y * w + x];
+    // The columns: three passes between the mask and a second buffer, the last one ending in the second buffer.
+    let mut second = vec![0u8; w * h];
+    let mut sums = vec![0u32; w];
+    let mut in_data = true;
+    for &(l, r) in &ps {
+        if in_data {
+            box_cols(data, &mut second, w, h, l, r, &mut sums);
+        } else {
+            box_cols(&second, data, w, h, l, r, &mut sums);
         }
-        for &(l, r) in &ps {
-            box_line(&col, &mut tmp[..h], l, r);
-            col.copy_from_slice(&tmp[..h]);
-        }
-        for (y, c) in col.iter().enumerate() {
-            data[y * w + x] = *c;
-        }
+        in_data = !in_data;
+    }
+    if !in_data {
+        data.copy_from_slice(&second);
     }
 }
 
@@ -166,6 +219,143 @@ fn blend(px: &mut [u8], color: [u8; 4], a: u32) {
     }
 }
 
+/// The geometry of a box-shadow mask, in window pixels: the shape's edges `e` = (left, top, right, bottom), its corner radii
+/// (top-left, top-right, bottom-right, bottom-left; already fitted), the blur, and how far the blur reaches.
+struct ShadowGeometry {
+    inset: bool,
+    w: i32,
+    h: i32,
+    e: [i32; 4],
+    r: [(f32, f32); 4],
+    sigma: f32,
+    pad: i32,
+}
+
+/// The blurred shadow mask of a window, with the stretch cut out (see the module comment): `data` is `w` wide; where `cx`
+/// is `Some((m0, m1))` the window columns `m0..m1` are all the column `m0`, and the columns from `m1` on are `m1 - m0 - 2 * pad`
+/// to the left of where they would be; the rows likewise with `cy`.
+struct Patch {
+    data: Rc<Vec<u8>>,
+    w: i32,
+    cx: Option<(i32, i32)>,
+    cy: Option<(i32, i32)>,
+    pad: i32,
+}
+
+/// Where a window row or column `v` is in the cut-down mask.
+fn mapped(cut: Option<(i32, i32)>, pad: i32, v: i32) -> i32 {
+    match cut {
+        Some((m0, m1)) if v >= m1 => v - (m1 - m0) + 2 * pad,
+        Some((m0, _)) if v >= m0 => m0,
+        _ => v,
+    }
+}
+
+/// The columns (rows) `m0..m1` of a window of `n` whose blurred values are all the same, when the shape's edges are `e0` and
+/// `e1` and its corners reach `r0` and `r1` into it: the shape does not change along the axis between the corners
+/// (`e0 + r0 .. e1 - r1`, inside the window), and a pixel sees `pad` to each side. `None` when that saves little.
+fn axis_cut(e0: i32, e1: i32, r0: i32, r1: i32, n: i32, pad: i32) -> Option<(i32, i32)> {
+    let a = e0.saturating_add(r0).max(0);
+    let b = e1.saturating_sub(r1).min(n);
+    let (m0, m1) = (a.saturating_add(pad), b.saturating_sub(pad));
+    (m1.saturating_sub(m0) > 2 * pad + 8).then_some((m0, m1))
+}
+
+/// The mask of the shape: cut, blurred, and kept in [`MASKS`]. `None` when the (cut) window is too big to draw.
+fn shadow_patch(g: &ShadowGeometry) -> Option<Patch> {
+    // At least one pixel: the repeated column is the first of the cut, so it has to be one that is kept.
+    let pad = g.pad.max(1);
+    let [ex0, ey0, ex1, ey1] = g.e;
+    let [tl, tr, br, bl] = g.r;
+    let reach = |v: f32| v.ceil() as i32;
+    let cx = axis_cut(ex0, ex1, reach(tl.0.max(bl.0)), reach(tr.0.max(br.0)), g.w, pad);
+    let cy = axis_cut(ey0, ey1, reach(tl.1.max(tr.1)), reach(bl.1.max(br.1)), g.h, pad);
+    let (cut_x, cut_y) = (cx.map_or(0, |(m0, m1)| m1 - m0 - 2 * pad), cy.map_or(0, |(m0, m1)| m1 - m0 - 2 * pad));
+    let (pw, ph) = (g.w - cut_x, g.h - cut_y);
+    if pw <= 0 || ph <= 0 || i64::from(pw) * i64::from(ph) > MAX_MASK_PX {
+        return None;
+    }
+    let (px1, py1) = (ex1 - cut_x, ey1 - cut_y);
+    let mut hs = FxHasher::default();
+    hs.write_u8(u8::from(g.inset));
+    for v in [pw, ph, ex0, ey0, px1, py1] {
+        hs.write_i32(v);
+    }
+    for (a, c) in g.r {
+        hs.write_u32(a.to_bits());
+        hs.write_u32(c.to_bits());
+    }
+    hs.write_u32(g.sigma.to_bits());
+    let shape = RR { x0: ex0 as f32, y0: ey0 as f32, x1: px1 as f32, y1: py1 as f32, r: g.r };
+    let data = with_cache(hs.finish(), || {
+        let mut data = shape_buffer(&shape, pw, ph, g.inset)?;
+        blur_mask(&mut data, pw as usize, ph as usize, g.sigma);
+        Some(data)
+    })?;
+    Some(Patch { data, w: pw, cx, cy, pad })
+}
+
+impl Patch {
+    /// The mask row that window row `y` reads.
+    fn row(&self, y: i32) -> &[u8] {
+        let sy = mapped(self.cy, self.pad, y).max(0) as usize;
+        let w = self.w.max(0) as usize;
+        self.data.get(sy * w..(sy + 1) * w).unwrap_or(&[])
+    }
+
+    /// The mask of the window pixels `x0 ..` of window row `y`, `out.len()` of them.
+    fn fill(&self, y: i32, x0: i32, out: &mut [u8]) {
+        let row = self.row(y);
+        let x1 = x0 + out.len() as i32;
+        let mut x = x0;
+        while x < x1 {
+            // The stretch of window columns that are consecutive columns of the mask, or the one column that is repeated.
+            let (end, flat) = match self.cx {
+                Some((m0, _)) if x < m0 => (x1.min(m0), false),
+                Some((_, m1)) if x < m1 => (x1.min(m1), true),
+                _ => (x1, false),
+            };
+            let at = mapped(self.cx, self.pad, x).max(0) as usize;
+            if let Some(dst) = out.get_mut((x - x0) as usize..(end - x0) as usize) {
+                if flat {
+                    dst.fill(row.get(at).copied().unwrap_or(0));
+                } else if let Some(src) = row.get(at..at + dst.len()) {
+                    dst.copy_from_slice(src);
+                } else {
+                    dst.fill(0);
+                }
+            }
+            x = end;
+        }
+    }
+
+    /// The mask value of window pixel (x, y).
+    fn at(&self, x: i32, y: i32) -> u8 {
+        self.row(y).get(mapped(self.cx, self.pad, x).max(0) as usize).copied().unwrap_or(0)
+    }
+}
+
+/// `spans` without the pixels `from .. to`.
+fn cut_spans(spans: &mut Vec<(i32, i32)>, scratch: &mut Vec<(i32, i32)>, from: i32, to: i32) {
+    if from >= to {
+        return;
+    }
+    scratch.clear();
+    for &(a, b) in spans.iter() {
+        if to <= a || from >= b {
+            scratch.push((a, b));
+            continue;
+        }
+        if a < from {
+            scratch.push((a, from));
+        }
+        if to < b {
+            scratch.push((to, b));
+        }
+    }
+    std::mem::swap(spans, scratch);
+}
+
 impl Ctx<'_> {
     /// A box shadow (css-backgrounds-3 6.1).
     #[inline(never)]
@@ -189,31 +379,20 @@ impl Ctx<'_> {
         let (win, fast) = if sh.inset { (IRect { x0: b.x0 - pad, y0: b.y0 - pad, x1: b.x1 + pad, y1: b.y1 + pad }, false) } else { (IRect { x0: s0.0 - pad, y0: s0.1 - pad, x1: s1.0 + pad, y1: s1.1 + pad }, sigma < 0.3 && square) };
         let (w, h) = (win.x1 - win.x0, win.y1 - win.y0);
         let outer_area = if sh.inset { win.intersect(clip).intersect(&b) } else { win.intersect(clip) };
-        if outer_area.is_empty() || w <= 0 || h <= 0 || (!fast && i64::from(w) * i64::from(h) > MAX_MASK_PX) {
+        if outer_area.is_empty() || w <= 0 || h <= 0 {
             return;
         }
-        let mask = if fast {
+        // The shadow shape in window pixels, and its mask: a 9-patch, so that its size is that of the corners and the blur,
+        // not of the box (a window over `MAX_MASK_PX` that has no stretch to cut out is not drawn).
+        let shape = RR { x0: (s0.0 - win.x0) as f32, y0: (s0.1 - win.y0) as f32, x1: (s1.0 - win.x0) as f32, y1: (s1.1 - win.y0) as f32, r: sr }.fit();
+        let patch = if fast {
             None
         } else {
-            let mut hs = FxHasher::default();
-            hs.write_u8(u8::from(sh.inset));
-            for v in [w, h, s0.0 - win.x0, s0.1 - win.y0, s1.0 - win.x0, s1.1 - win.y0] {
-                hs.write_i32(v);
+            let geo = ShadowGeometry { inset: sh.inset, w, h, e: [s0.0 - win.x0, s0.1 - win.y0, s1.0 - win.x0, s1.1 - win.y0], r: shape.r, sigma, pad };
+            match shadow_patch(&geo) {
+                Some(p) => Some(p),
+                None => return,
             }
-            for (a, c) in sr {
-                hs.write_u32(a.to_bits());
-                hs.write_u32(c.to_bits());
-            }
-            hs.write_u32(sigma.to_bits());
-            let shape = RR { x0: (s0.0 - win.x0) as f32, y0: (s0.1 - win.y0) as f32, x1: (s1.0 - win.x0) as f32, y1: (s1.1 - win.y0) as f32, r: sr };
-            let Some(m) = with_cache(hs.finish(), || {
-                let mut data = shape_buffer(&shape.fit(), w, h, sh.inset)?;
-                blur_mask(&mut data, w as usize, h as usize, sigma);
-                Some(data)
-            }) else {
-                return;
-            };
-            Some(m)
         };
         let corners = self.clip_corners(&clip_rr, 0x8000_0000 | i);
         let color = premul(sh.color);
@@ -221,35 +400,62 @@ impl Ctx<'_> {
         if xa >= xb {
             return;
         }
+        // The middle of the border box is covered by the box itself for an outer shadow: nothing of the shadow shows there.
+        // The corners of the box reach no further in than this.
+        let [ctl, ctr, cbr, cbl] = clip_rr.r;
+        let reach_in = |v: f32| v.ceil() as i32 + 1;
+        let covered = (b.x0 + reach_in(ctl.0.max(cbl.0)), b.x1 - reach_in(ctr.0.max(cbr.0)));
         let mut prow = vec![0u8; (xb - xa) as usize];
+        let mut mrow = vec![0u8; (xb - xa) as usize];
+        let mut spans: Vec<(i32, i32)> = Vec::new();
+        let mut scratch: Vec<(i32, i32)> = Vec::new();
         let stride = frame.width as usize * 4;
         self.stats.items += 1;
         for y in outer_area.y0.max(0)..outer_area.y1.min(frame.height as i32) {
-            // How much of the pixel is where the shadow may be drawn: outside the box for an outer shadow, inside for an inset one.
-            if y >= b.y0 && y < b.y1 {
-                cover_row(&b, &corners, y, xa, &mut prow);
-            } else if sh.inset {
+            let in_box = y >= b.y0 && y < b.y1;
+            // An inset shadow is only drawn inside the box.
+            if sh.inset && !in_box {
                 continue;
-            } else {
-                prow.fill(0);
             }
-            let Some(row) = frame.data.get_mut(y as usize * stride + xa as usize * 4..y as usize * stride + xb as usize * 4) else { continue };
-            let mrow = mask.as_ref().and_then(|d| {
-                let at = (y - win.y0) as usize * w as usize + (xa - win.x0) as usize;
-                d.get(at..at + prow.len())
-            });
-            let in_rect = y >= s0.1 && y < s1.1;
-            for (j, (px, &p)) in row.as_chunks_mut::<4>().0.iter_mut().zip(&prow).enumerate() {
-                let p = if sh.inset { u32::from(p) } else { 255 - u32::from(p) };
-                if p == 0 {
+            // The pixels that can show something: not under the box (outer), not where the mask is all one value and
+            // that value is nothing (the middle of the window, for an inset shadow).
+            spans.clear();
+            spans.push((xa, xb));
+            if !sh.inset && in_box {
+                cut_spans(&mut spans, &mut scratch, covered.0, covered.1);
+            }
+            if let Some(p) = &patch
+                && let Some((m0, m1)) = p.cx
+                && p.at(m0, y - win.y0) == 0
+            {
+                cut_spans(&mut spans, &mut scratch, win.x0 + m0, win.x0 + m1);
+            }
+            for &(sa, sb) in &spans {
+                let len = (sb - sa) as usize;
+                let (Some(row), Some(prow), Some(mrow)) =
+                    (frame.data.get_mut(y as usize * stride + sa as usize * 4..y as usize * stride + sb as usize * 4), prow.get_mut(..len), mrow.get_mut(..len))
+                else {
                     continue;
-                }
-                let m = match mrow {
-                    Some(r) => u32::from(r.get(j).copied().unwrap_or(0)),
-                    None => u32::from(in_rect && (xa + j as i32) >= s0.0 && (xa + j as i32) < s1.0) * 255,
                 };
-                if m != 0 {
-                    blend(px, color, if m == 255 { p } else if p == 255 { m } else { div255(m * p) });
+                // How much of the pixel is where the shadow may be drawn: outside the box for an outer shadow, inside for an inset one.
+                if in_box {
+                    cover_row(&b, &corners, y, sa, prow);
+                } else {
+                    prow.fill(0);
+                }
+                if let Some(p) = &patch {
+                    p.fill(y - win.y0, sa - win.x0, mrow);
+                }
+                let in_rect = y >= s0.1 && y < s1.1;
+                for (j, (px, &p)) in row.as_chunks_mut::<4>().0.iter_mut().zip(prow.iter()).enumerate() {
+                    let p = if sh.inset { u32::from(p) } else { 255 - u32::from(p) };
+                    if p == 0 {
+                        continue;
+                    }
+                    let m = if patch.is_some() { u32::from(mrow.get(j).copied().unwrap_or(0)) } else { u32::from(in_rect && (sa + j as i32) >= s0.0 && (sa + j as i32) < s1.0) * 255 };
+                    if m != 0 {
+                        blend(px, color, if m == 255 { p } else if p == 255 { m } else { div255(m * p) });
+                    }
                 }
             }
         }
@@ -639,5 +845,92 @@ fn turn_mask(m: &GlyphMask) -> GlyphMask {
         height: m.width,
         alpha: if m.alpha.len() == w * h { turn(&m.alpha, 1) } else { Vec::new() },
         bgra: if m.bgra.len() == w * h * 4 { turn(&m.bgra, 4) } else { Vec::new() },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The mask the long way: the whole window, shaped and blurred.
+    fn full(g: &ShadowGeometry) -> Vec<u8> {
+        let [ex0, ey0, ex1, ey1] = g.e;
+        let shape = RR { x0: ex0 as f32, y0: ey0 as f32, x1: ex1 as f32, y1: ey1 as f32, r: g.r };
+        let mut data = shape_buffer(&shape, g.w, g.h, g.inset).unwrap();
+        blur_mask(&mut data, g.w as usize, g.h as usize, g.sigma);
+        data
+    }
+
+    fn geometry(inset: bool, sigma: f32, shape: (i32, i32, i32, i32), r: [(f32, f32); 4], window: (i32, i32)) -> ShadowGeometry {
+        ShadowGeometry { inset, w: window.0, h: window.1, e: [shape.0, shape.1, shape.2, shape.3], r, sigma, pad: reach(sigma) }
+    }
+
+    /// Reading the 9-patch gives the mask of the whole window: exactly for square corners, within one level for round ones
+    /// (the corner arcs are flattened from different coordinates).
+    #[test]
+    fn a_patch_reads_as_the_whole_mask() {
+        let round = [(20.0, 20.0), (30.0, 10.0), (5.0, 5.0), (12.0, 25.0)];
+        let square = [(0.0, 0.0); 4];
+        let mut cases = Vec::new();
+        for (sigma, r) in [(0.0, square), (0.0, round), (2.0, square), (2.0, round), (12.0, square), (12.0, round), (30.0, round)] {
+            let pad = reach(sigma);
+            // An outer shadow of a 700 x 500 box.
+            cases.push(geometry(false, sigma, (pad, pad, pad + 700, pad + 500), r, (700 + 2 * pad, 500 + 2 * pad)));
+            // Inset: the hole is the box moved by (7, -5), (-300, 4) (an edge outside the window), or the window is all hole.
+            let (w, h) = (640 + 2 * pad, 420 + 2 * pad);
+            cases.push(geometry(true, sigma, (pad + 7, pad - 5, pad + 7 + 640, pad - 5 + 420), r, (w, h)));
+            cases.push(geometry(true, sigma, (pad - 300, pad + 4, pad - 300 + 640, pad + 4 + 420), r, (w, h)));
+            // A narrow one: only the rows are cut.
+            cases.push(geometry(false, sigma, (pad, pad, pad + 40, pad + 600), r, (40 + 2 * pad, 600 + 2 * pad)));
+        }
+        let mut cut = 0;
+        for g in &cases {
+            let want = full(g);
+            let patch = shadow_patch(g).unwrap();
+            cut += usize::from(patch.cx.is_some() || patch.cy.is_some());
+            let exact = g.r.iter().all(|r| r.0 == 0.0 && r.1 == 0.0);
+            let mut worst = 0;
+            for y in 0..g.h {
+                let mut row = vec![0u8; g.w as usize];
+                patch.fill(y, 0, &mut row);
+                for (x, &got) in row.iter().enumerate() {
+                    let w = want[y as usize * g.w as usize + x];
+                    worst = worst.max(got.abs_diff(w));
+                    assert_eq!(patch.at(x as i32, y), got);
+                }
+            }
+            assert!(worst <= u8::from(!exact), "sigma {} inset {} edges {:?} radii {:?}: worst difference {worst}", g.sigma, g.inset, g.e, g.r);
+        }
+        assert!(cut >= cases.len() / 2, "only {cut} of {} cases were cut", cases.len());
+    }
+
+    /// The multiply-and-shift mean is the division.
+    #[test]
+    fn the_mean_is_the_rounded_quotient() {
+        for size in (1..=4097u32).step_by(7).chain([4096, 4097]) {
+            let mean = Mean::new(size);
+            for sum in (0..=255 * size).step_by(97).chain([255 * size, 255 * size - 1]) {
+                assert_eq!(u32::from(mean.of(sum)), (sum + size / 2) / size, "size {size} sum {sum}");
+            }
+        }
+    }
+
+    /// A box blur by columns is the one by rows of the turned mask.
+    #[test]
+    fn the_column_pass_is_the_row_pass() {
+        let (w, h) = (37usize, 23usize);
+        let src: Vec<u8> = (0..w * h).map(|i| ((i * 7919) % 251) as u8).collect();
+        for (l, r) in [(0, 0), (2, 1), (3, 3), (30, 29)] {
+            let mut cols = vec![0u8; w * h];
+            box_cols(&src, &mut cols, w, h, l, r, &mut vec![0u32; w]);
+            for x in 0..w {
+                let col: Vec<u8> = (0..h).map(|y| src[y * w + x]).collect();
+                let mut want = vec![0u8; h];
+                box_line(&col, &mut want, l, r);
+                for y in 0..h {
+                    assert_eq!(cols[y * w + x], want[y], "l {l} r {r} at ({x}, {y})");
+                }
+            }
+        }
     }
 }
