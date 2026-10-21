@@ -4,6 +4,7 @@
 Stages (run them in this order; each takes optional page names):
   record   qinglan-cli record <url> tests/corpus/local/<name>      (skipped when the recording exists)
   render   qinglan-cli render ... --replay <dir> --width 1280 --height 2400  -> tests/out/<name>-ours.png
+  twice    render every page twice (two processes) and compare the PNG bytes: the same recording must give the same pixels
   edge     Edge headless, JS off, same size, isolated empty --user-data-dir   -> tests/out/<name>-edge.png
            (`--keep-edge` skips the capture and keeps the existing <name>-edge.png: the live pages change from day to day,
            which makes a new capture differ from the recording; the other stages are not affected)
@@ -145,6 +146,21 @@ def render_one(name):
     png = OUT / f"{name}-ours.png"
     rc, out, err, to = run([str(CLI), "render", u, "--replay", str(CORPUS / name), "-o", str(png), "--width", str(W), "--height", str(H)], 90)
     return name, {"rc": rc, "timeout": to, "stdout": out.strip(), "stderr": err.strip()[-400:]}
+
+
+def twice_one(name):
+    """Two separate processes, same recording: the PNGs must be byte for byte the same (step 2f-2, determinism)."""
+    u, st = first_url(name)
+    if not u:
+        return name, None
+    outs = []
+    for i in (1, 2):
+        png = OUT / f"{name}-twice{i}.png"
+        rc, out, err, to = run([str(CLI), "render", u, "--replay", str(CORPUS / name), "-o", str(png), "--width", str(W), "--height", str(H)], 90)
+        outs.append(png.read_bytes() if rc == 0 and png.exists() else None)
+        if png.exists():
+            png.unlink()
+    return name, {"ok": outs[0] is not None and outs[0] == outs[1]}
 
 
 def sweep(prof_name: str) -> int:
@@ -429,6 +445,16 @@ def main():
         for n, r in pmap(render_one, names, 4):
             res.setdefault(n, {})["render"] = r
             print(n, r and (r["rc"], r["timeout"]), flush=True)
+    elif stage == "twice":
+        bad = []
+        for n, r in pmap(twice_one, names, 4):
+            res.setdefault(n, {})["twice"] = r
+            if r is not None and not r["ok"]:
+                bad.append(n)
+        print(f"twice: {len(names)} pages, {len(bad)} differ between two renders" + (": " + " ".join(bad) if bad else ""))
+        if bad:
+            save(res)
+            sys.exit(1)
     elif stage == "edge" and keep_edge:
         for n in names:
             e = OUT / f"{n}-edge.png"

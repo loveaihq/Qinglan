@@ -107,3 +107,26 @@ fn an_image_that_does_not_decode_is_shown_as_its_alt_text() {
     assert_eq!(pixel(&bytes, 100, 60, 25, 5), [255, 255, 255, 255], "no 40 px box");
     assert_eq!(pixel(&bytes, 100, 60, 5, 20), [255, 255, 255, 255], "the alt text is one line high");
 }
+
+/// Rendering the same local page twice, in two processes with the machine's fonts, gives the same bytes (step 2f-2): nothing
+/// that arrives late, is ordered by a per-process hash seed or depends on thread timing may reach the picture. (The
+/// recorded real pages are checked the same way by `tools/corpus_run.py twice`.)
+#[test]
+fn rendering_a_page_twice_gives_the_same_picture() {
+    let pages = ["bidi.html", "decorations.html", "controls.html"];
+    for name in pages {
+        let page = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/pages").join(name);
+        let mut first: Option<Vec<u8>> = None;
+        for i in 0..2 {
+            let png = scratch(&format!("twice-{name}-{i}.png"));
+            let out = cli().args(["render", page.to_str().unwrap(), "-o", png.to_str().unwrap(), "--width", "800", "--height", "900"]).output().unwrap();
+            assert!(out.status.success(), "{name}: {}", String::from_utf8_lossy(&out.stderr));
+            let bytes = std::fs::read(&png).unwrap();
+            let _ = std::fs::remove_file(&png);
+            match &first {
+                None => first = Some(bytes),
+                Some(f) => assert!(*f == bytes, "{name}: two renders of the same page differ"),
+            }
+        }
+    }
+}

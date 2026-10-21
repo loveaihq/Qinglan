@@ -1705,3 +1705,42 @@ gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 
 2. 去掉 2,336 字节：`-inlinehint-threshold=125`（−22 KB，要量速度）或再找几处泛型。
 3. 内存：中等块的碎片、gh-ripgrep 剩下的 3 MB、显示列表按带建。
 4. 重新生成最终的链接映射，确认浮点数转文字有没有去干净。
+
+## 第 2 层 · 2f-2 确定性、SVG 部分固有尺寸（2026-10-21，起点 `906a6a3`；提交 `SVG images with a partial intrinsic size`、`Check that two renders of a page are the same`）
+
+**状态：第 0 项（确定性）没有修好，原因查到了字形遮罩这一层，根因在 DirectWrite 里，没有找到应用这边能关掉的开关；第 1 项做完；第 2–5 项没做（工具调用额度用在第 0 项上，见最后）。**
+
+### 0. 同一份录制渲染两次，像素为什么会不同
+
+**怎么量**：`tools/corpus_run.py twice`（每页用两个进程渲染两次，逐字节比 PNG；有差异的页退出码 1）；`crates/qinglan-cli/tests/render.rs::rendering_a_page_twice_gives_the_same_picture`（`tests/pages` 里 bidi、decorations、controls 三页，Windows 平台，两个进程，逐字节）。
+**结果（同一个二进制，不同时刻）**：整库 52 页：12 个不同、（其中 12 页重跑）7 个不同、0 个不同、0 个不同（2 轮 × 52）；刚做完 3 分钟的 release 构建和测试之后立刻跑：16 个不同、12 个不同、14 个不同（后两次是带了下面“试了没用”的改动）。**不是页面的问题**：同一页有时稳定有时不稳定，挑出来的 hn-front、gov-uk、jvns 在平静时连续 24–48 次逐字节相同。测试在平静时通过（4.5 秒），在上面说的时间窗口里会失败——这是它应该报的东西，不是测试写错。
+
+**查过、排除的**（每条都有数据）：
+- **显示列表和排版是同一个**：给 `render` 临时加了跟踪（FNV 哈希 `list.glyphs` 的 font/glyph/advance/dx/dy、每个文字 run 的 x/基线/大小），不稳定的页在所有进程里这两个哈希都相同；`qinglan-cli layout` 在 24 个并行进程里输出逐字节相同。所以不是排版、不是整形（shaping）、不是 HashMap 遍历次序、不是 CSS 并行读取的合并次序、不是重排次数。
+- **图片/字体到达次序、解码池、font-display**：`render` 的图片是同步取的（`fetch_images` 按节点记尺寸，到达次序不影响结果）、同步解码（不经 `DecodePool`），没有网页字体的页（hn-front、gov-uk）也不稳定。
+- **std 的 `HashMap`/`HashSet`（RandomState）**：全引擎只有 `net::loader` 的 `per_host` 计数、`net::fonts` 的去重集合、`layout::inline` 里的下标表和 `spans`，都只查不遍历；其余全是 `FxHashMap`（固定种子）。
+- **缓存淘汰**：同一进程里的次序是确定的；`glyph_cache` 的容量不影响单个遮罩的内容。
+- **PNG 编码**：同样的像素给出同样的字节（40 页逐字节相同的页多次验证过）。
+
+**找到的**：差别在 DirectWrite 给出的字形遮罩（`WinPlatform::glyph_mask` → `GlyphRunAnalysis::CreateAlphaTexture`）。同一个 (字体, 字形, 大小, 子像素位置) 的遮罩，在不同进程里有 3–10 个像素差 2–12 级（255 制），四个子像素位置一起变；形状上像是内部点的 1/64 像素的偏移（'A' 的横梁里侧）。每页大约 12–50 个字形不同（贴到页面上就是几十个像素）。在“窗口期”里，**同一进程里对同一字形连续光栅化也会得到不同的结果**（临时加了“同一个字形连续光栅化三次比较”，三次里第一次与后两次不同，`RASTER-DIFF` 在 yihui、python-json 里各出现 1–3 次）。窗口期出现在这台机器上大构建（`cargo build --release` 的链接，几分钟）之后的几分钟里；构建进行中、20 个空转进程占满 CPU、内存不足都没有触发它。
+**试了没用/没证明**：
+- `IDWriteFactory2::CreateGlyphRunAnalysis` 带显式的 gridFitMode（默认、启用、禁用）：默认和启用在 3 轮负载下没出现差异，禁用时 hn-item 仍出现了（样本小，没有结论）。
+- `--no-prewarm`：样本太少（几十次里窗口期没出现），看不出差别。
+- 每个 (字体, 大小) 的第一个字形光栅化到连续两次相同：整库 16 → 12 页不同（窗口期的噪声，不能算改善）。
+- **每个字形都光栅化到连续两次相同**（`settled`，最多 6 次，只在 `render` 里开）：整库仍有 14 页不同，没有采用，代码已撤掉。说明窗口期里的噪声不是“偶尔一次坏结果”，而是一段时间里整体偏一点（连续两次都坏），或者问题在遮罩之外还有别处（跟踪里排版部分是相同的，所以多半仍在 DirectWrite）。
+**下一步（没做）**：(a) 在窗口期里记录 DirectWrite 的默认渲染参数（`CreateRenderingParams` 的 gamma、增强对比度、ClearType 等级、像素几何）和 `SystemParametersInfo` 的字体平滑设置，看是否随窗口期变化；(b) 窗口期里 `GetGlyphRunOutline` + 自己的光栅器出的遮罩是否稳定（这条路能让 `render` 和窗口完全确定，但整页文字的样子会变，速度要重量，要先问）；(c) 在 `render` 里把遮罩落到磁盘缓存里（同一台机器上多次渲染用同一份遮罩），只解决 CLI 的比较，不解决窗口。窗口的最终画面同样受影响（只是肉眼看不出的几个像素）。
+
+### 1. SVG 图片的部分固有尺寸（css-images-3 5.3、CSS2 10.3.2）
+- 以前探测 SVG 时把缺的部分用“300×150 里放下这个比例”填上了（`svg::Intrinsic::object_size`），所以只有比例、或只有宽或高的 SVG 一律按 300×150 或它的比例放大缩小。现在 `probe_response` 之外多一个 `probe_partial`/`svg::partial`：SVG 没给全宽高时报告它给了哪几项（`Partial { w, h, ratio }`，缺的就是“未知”），`ImageSizes::set_partial` 记在图片节点上（`set_loaded` 里的宽高仍是填上默认值的，给解码用）。窗口（`qinglan-app/src/page.rs`）、`render`、`bench`/`blocking.rs` 三处调用者都带上。
+- `<img>`、`content: url()`：`replaced.rs::natural` 用 `Partial` 当自然宽、高、比例，后面走已有的 CSS2 10.3.2/10.6.2 算法；什么都没有时默认 300×150（`default_w/h`）。
+- 背景：`BgRef.parts` 带过来，`paint/build.rs::partial_tile` 按 css-images-3 5.3 / css-backgrounds-3 3.9 算贴块大小：`auto auto` 时有比例没尺寸 = 在定位区里做 contain，只有一边又有比例 = 另一边按比例，只有一边没比例 = 另一边取定位区（默认对象大小），什么都没有 = 定位区；`contain`/`cover` 有比例就按比例放，没有就取定位区；`<长度> auto`、`auto <长度>` 同理。
+- 没改：内联 `<svg>`（本来就是 `svg::intrinsic` 的 Option）、列表标记图片（`list-style-image` 仍是 300×150 的默认，没处理）、`object-fit` 里的 SVG。
+- **WPT**：`css/css-backgrounds` 318 → **413 / 446**（+95，bug 类 6，都是以前就有的 `bug (open)`）；`css/css-images` 59 / 129（不变，110 个“部分固有尺寸”的用例几乎全在 `background-size/vector`）；`wpt --check` **3313 / 3313**（原 3218 + 95）。剩下的 14 个用例是 `cover` 配极端比例的 viewBox（`1 × 2147483647`）：贴块 256 × 5.5e11 像素，我们按设备大小解码成位图（上限 1600 万像素），画不出来，记为 `limit (extreme ratio)`；`background-size-cover-svg-view.html` 是 `svgView(...)` 片段，记为 `limit (svg view)`。其余 98 条旧的“partial intrinsic size”备注（已经通过）从 `notes.txt` 删掉。
+- 新测试：`tests/backgrounds.rs::a_background_svg_with_a_ratio_but_no_size_is_contained_in_the_positioning_area`（手算：比例 2 的 100×100 区域 `auto` = 100×50，`cover` = 200×100，`40px auto` = 40×20，只有宽 40 没比例 = 40×100，什么都没有 = 100×100）、`tests/layout_basic.rs::an_svg_image_with_a_partial_size_follows_the_replaced_element_rules`（`<img>`：只有比例 4 = 300×75，宽 80 比例 2 = 80×40，只有高 20 = 300×20，什么都没有 = 300×150）。
+- **体积**：`qinglan.exe` 2,702,336 → **2,705,920**（+3,584；上限 2,717,000）。
+
+### 没做
+第 2 项（图片 SVG 里的文字）、第 3 项（固定盒里的滚动容器、带 `opacity`/`transform` 的固定盒）、第 4 项（zhwiki-rec 内存 ≤ 46.0 MB，分配器加 16/32 KiB 等级）、第 5 项（首屏阶段新旧对比）：工具调用额度用完了，一项都没开始。第 5 项的做法：`git worktree add` 旧提交 `71ba54f` 到临时目录、各自 `--target-dir`，插电、`qinglan-cli bench` 新旧交替各 ≥ 5 轮，按阶段（解析/样式/首屏排版/光栅）比。
+
+### 四项检查（2f-2 收尾）
+`cargo test --workspace --no-fail-fast`：除两个**耗时上限**测试外全过；`cargo clippy --workspace --all-targets` 无警告；`qinglan-cli wpt --check` 3313 / 3313；release 的 `hostile` 47 个。两个耗时测试（`hostile::bad_utf8` 限 5 秒、`fonts::brotli_setup_work_is_limited_by_the_input` 限 2 秒）在整套并行跑、机器上有一个忙的 `Emulator.exe` 和大构建后的“慢窗口”时超时（6.1 秒、2.3 秒），单独跑或减少并行（`--test-threads=2/3`）就过，改动（SVG 部分尺寸、测试、工具）没碰 UTF-8 解码和 Brotli；没有在旧提交上对照重跑。
