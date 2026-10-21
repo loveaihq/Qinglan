@@ -53,6 +53,7 @@ const P_ANCHOR: usize = 12;
 const P_CLIP_PATH: usize = 13;
 const P_STOP_COLOR: usize = 14;
 const P_STOP_OP: usize = 15;
+const P_BASELINE: usize = 23;
 
 fn id_counter() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -115,6 +116,8 @@ struct St {
     clip_rule: FillRule,
     color: Color,
     anchor: i8,
+    /// `dominant-baseline`: 0 alphabetic, 1 central, 2 middle.
+    base: i8,
     /// The clip (1 + index) every descendant is drawn through.
     clip: u32,
 }
@@ -130,7 +133,7 @@ struct B<'a> {
     styles: &'a [Option<Rc<ComputedStyle>>],
     ids: &'a mut Ids,
     sc: Scene,
-    props: [Option<Atom>; 23],
+    props: [Option<Atom>; 24],
     visits: u64,
     segs: usize,
     groups: u32,
@@ -144,7 +147,7 @@ struct B<'a> {
 /// Build the scene of the `svg` element `root`. `ref_size` is what percentages refer to when the root has no viewBox (the
 /// natural size when `None`).
 pub fn scene(doc: &Document, styles: &[Option<Rc<ComputedStyle>>], root: NodeId, ids: &mut Ids, ref_size: Option<(f32, f32)>) -> Scene {
-    let mut props = [None; 23];
+    let mut props = [None; 24];
     for (p, n) in props.iter_mut().zip(crate::css::svg_props::NAMES) {
         *p = doc.atoms.lookup(n);
     }
@@ -168,6 +171,7 @@ pub fn scene(doc: &Document, styles: &[Option<Rc<ComputedStyle>>], root: NodeId,
             clip_rule: FillRule::NonZero,
             color: style.text.color,
             anchor: -1,
+            base: 0,
             clip: 0,
         };
         b.apply(&mut st, style, None, vp);
@@ -295,7 +299,7 @@ impl<'a> B<'a> {
             st.color = style.text.color;
         }
         let diag = ((vp.0 * vp.0 + vp.1 * vp.1) / 2.0).sqrt();
-        for p in 0..P_CLIP_PATH {
+        for p in (0..P_CLIP_PATH).chain([P_BASELINE]) {
             let Some(t) = self.own(style, parent, p) else { continue };
             let t = t.trim();
             match p {
@@ -377,6 +381,14 @@ impl<'a> B<'a> {
                         "middle" => 0,
                         "end" => 1,
                         _ => st.anchor,
+                    }
+                }
+                P_BASELINE => {
+                    st.base = match t {
+                        "central" => 1,
+                        "middle" => 2,
+                        "auto" | "alphabetic" => 0,
+                        _ => st.base,
                     }
                 }
                 _ => {}
@@ -949,7 +961,7 @@ impl<'a> B<'a> {
         };
         let (x, y) = (pos(self, n, "x", vp.0, style).unwrap_or(0.0), pos(self, n, "y", vp.1, style).unwrap_or(0.0));
         let mut chunks: Vec<TextOp> = Vec::new();
-        let mut cur = TextOp { x, y, ctm: *ctm, anchor: st.anchor, runs: Vec::new(), clip: st.clip };
+        let mut cur = TextOp { x, y, ctm: *ctm, anchor: st.anchor, base: st.base, runs: Vec::new(), clip: st.clip };
         self.space = true;
         self.text_run(n, style, st, vp, &mut cur, &mut chunks, 0);
         if let Some(r) = cur.runs.last_mut()
@@ -977,7 +989,7 @@ impl<'a> B<'a> {
             let first = |s: &Self, name: &str, r: f32| s.attr(n, name).and_then(|v| v.split([',', ' ']).find(|t| !t.is_empty())).and_then(data::length).map(|(v, u)| unit_px(v, u, style.font.size, r));
             let (ax, ay) = (first(self, "x", vp.0), first(self, "y", vp.1));
             if ax.is_some() || ay.is_some() {
-                let mut next = TextOp { x: ax.unwrap_or(cur.x), y: ay.unwrap_or(cur.y), ctm: cur.ctm, anchor: st.anchor, runs: Vec::new(), clip: cur.clip };
+                let mut next = TextOp { x: ax.unwrap_or(cur.x), y: ay.unwrap_or(cur.y), ctm: cur.ctm, anchor: st.anchor, base: st.base, runs: Vec::new(), clip: cur.clip };
                 std::mem::swap(cur, &mut next);
                 chunks.push(next);
             }
@@ -1010,7 +1022,7 @@ impl<'a> B<'a> {
                         continue;
                     }
                     let f = &style.font;
-                    cur.runs.push(TextRun { text: s, fill, size: f.size, weight: f.weight, slant: slant_of(f.style), families: f.family.clone(), dx: pending.0, dy: pending.1 });
+                    cur.runs.push(TextRun { text: s, fill, size: f.size, weight: f.weight, slant: slant_of(f.style), families: std::sync::Arc::new(f.family.iter().map(super::Family::of).collect()), dx: pending.0, dy: pending.1 });
                     pending = (0.0, 0.0);
                 }
                 Some(NodeData::Element(_)) if self.is_svg(c) && matches!(self.name(c), "tspan" | "a") => {

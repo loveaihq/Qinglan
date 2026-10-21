@@ -136,7 +136,7 @@ impl ImageDecoder for WicDecoder {
         }
         let (tw, th) = clamp_target(width, height);
         match wic::decode_scaled(bytes, tw, th, MAX_IMAGE_PIXELS) {
-            Ok(p) => Ok(DecodedImage { width: p.width, height: p.height, natural_width: p.natural_width, natural_height: p.natural_height, bgra: p.bgra }),
+            Ok(p) => Ok(DecodedImage { width: p.width, height: p.height, natural_width: p.natural_width, natural_height: p.natural_height, bgra: p.bgra, text: None }),
             Err(DecodeFail::TooLarge { width, height }) => Err(ImageError::TooLarge { width, height }),
             Err(DecodeFail::Hr(hr)) => Err(error_for(hr)),
         }

@@ -171,7 +171,7 @@ fn bitmap(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 4]) -> Arc<DecodedImage> 
             bgra.extend_from_slice(&f(x, y));
         }
     }
-    Arc::new(DecodedImage { width: w, height: h, natural_width: w, natural_height: h, bgra })
+    Arc::new(DecodedImage { width: w, height: h, natural_width: w, natural_height: h, bgra, text: None })
 }
 
 #[test]
@@ -402,7 +402,7 @@ impl ImageDecoder for FakeDecoder {
     }
     fn decode(&self, _bytes: &[u8], width: u32, height: u32) -> Result<DecodedImage, ImageError> {
         self.decodes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(DecodedImage { width, height, natural_width: 10, natural_height: 10, bgra: RED.repeat((width * height) as usize) })
+        Ok(DecodedImage { width, height, natural_width: 10, natural_height: 10, bgra: RED.repeat((width * height) as usize), text: None })
     }
 }
 
@@ -541,7 +541,7 @@ impl ImageDecoder for GateDecoder {
         while !*open {
             open = self.cv.wait(open).unwrap();
         }
-        Ok(DecodedImage { width, height, natural_width: 10, natural_height: 10, bgra: RED.repeat((width * height) as usize) })
+        Ok(DecodedImage { width, height, natural_width: 10, natural_height: 10, bgra: RED.repeat((width * height) as usize), text: None })
     }
 }
 
@@ -736,4 +736,55 @@ fn a_nested_stacking_context_keeps_its_positioned_children_inside_it() {
         100,
     );
     expect(&f, &[(5, 5, BLUE), (45, 45, RED), (30, 30, YELLOW)]);
+}
+
+/// Decodes SVG bytes with the engine's own rasterizer (no platform: the text is left for the frame).
+struct SvgDecoder;
+
+impl ImageDecoder for SvgDecoder {
+    fn probe(&self, _bytes: &[u8]) -> Result<ImageInfo, ImageError> {
+        Ok(ImageInfo { width: 40, height: 20 })
+    }
+    fn decode(&self, bytes: &[u8], width: u32, height: u32) -> Result<DecodedImage, ImageError> {
+        qinglan_engine::svg::rasterize(bytes, width, height)
+    }
+}
+
+#[test]
+fn the_text_of_an_svg_picture_is_drawn_into_the_frame_by_the_platform() {
+    // The shapes are drawn on the decode thread, the text with the platform on the frame's thread. TestPlatform draws every
+    // character as a square of the font size whose top is 0.8 em above the baseline: "A" at x 4, y 14, size 10 covers
+    // x 4..14, y 6..16. The style sheet of the SVG sets the colour and size; the group's opacity halves the red; dominant-baseline central drops the text by (ascent - descent) / 2 = 3 px.
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='20'><style>text { fill: #f00; font-size: 10px } .h { opacity: 0.5 }</style>\
+               <rect width='40' height='20' fill='#00f'/><text x='4' y='14'>A</text><text x='14' y='14' dominant-baseline='central' style='fill:#0f0'>C</text><g class='h'><text x='24' y='14'>B</text></g></svg>";
+    let page = lay("<body style='margin:0'><img src='t.svg' width='40' height='20' style='display:block'></body>", 40, 20, 1.0, None);
+    let url = "http://x.test/t.svg";
+    let resp = Arc::new(Response { url: Url::parse(url, None).unwrap(), status: 200, headers: vec![], body: svg.as_bytes().to_vec() });
+    let node = page.res.images[0].node;
+    let check = |f: &Frame| {
+        expect(f, &[(8, 10, RED), (36, 10, BLUE), (8, 3, BLUE), (8, 17, BLUE), (3, 10, BLUE), (18, 17, GREEN), (18, 7, BLUE), (18, 18, GREEN), (18, 19, BLUE)]);
+        // Half red over blue, premultiplied: (blue 255 - 128 + 0, red 128).
+        let p = at(f, 28, 10);
+        assert!((127..=128).contains(&p[0]) && (127..=129).contains(&p[2]), "{p:?}");
+    };
+    // The synchronous path (the command-line render).
+    let mut store = ImageStore::new();
+    store.set_url(node, url);
+    let mut lookup = |u: &str| (u == url).then(|| resp.clone());
+    assert_eq!(store.prepare(&page.list, Band::new(0.0, 20.0), 1.0, &SvgDecoder, &mut lookup).decoded, 1);
+    let (f, _) = draw(&page, 40, 20, 1.0, 0.0, &mut store);
+    check(&f);
+    // A second frame draws the same (the text went into the cached bitmap once).
+    let (f, _) = draw(&page, 40, 20, 1.0, 0.0, &mut store);
+    check(&f);
+    // The decode pool (the window).
+    let mut store = ImageStore::new();
+    store.set_url(node, url);
+    let mut pool = DecodePool::new(Arc::new(SvgDecoder), 1, Arc::new(|| {}));
+    store.prepare_async(&page.list, Band::new(0.0, 20.0), 1.0, &mut pool, &mut lookup);
+    for f in drain(&mut pool, 1) {
+        assert_eq!(store.accept(f).nodes.len(), 1);
+    }
+    let (f, _) = draw(&page, 40, 20, 1.0, 0.0, &mut store);
+    check(&f);
 }

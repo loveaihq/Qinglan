@@ -93,7 +93,7 @@ impl<F: Fn(u32, u32, u32, u32) -> [u8; 4]> ImageSource for Gen<F> {
                 bgra.extend_from_slice(&(self.0)(x, y, w, h));
             }
         }
-        Some(Arc::new(DecodedImage { width: w, height: h, natural_width: w, natural_height: h, bgra }))
+        Some(Arc::new(DecodedImage { width: w, height: h, natural_width: w, natural_height: h, bgra, text: None }))
     }
 }
 

@@ -170,6 +170,7 @@ pub fn render_band(list: &DisplayList, platform: &dyn Platform, images: &mut dyn
     for p in frame.data.as_chunks_mut::<4>().0 {
         *p = px;
     }
+    images.finish(platform);
     let mut cx = Ctx { list, platform, images, dpr, sx: 0, sy: band, bounds, stats: RasterStats::default(), corner_cache: Vec::new(), depth: 0, base_dpr: dpr, port: None };
     for it in list.fixed.iter().take(list.fixed_below) {
         cx.item(frame, it);

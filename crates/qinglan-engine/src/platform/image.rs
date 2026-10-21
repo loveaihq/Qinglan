@@ -57,6 +57,9 @@ pub struct DecodedImage {
     pub natural_width: u32,
     pub natural_height: u32,
     pub bgra: Vec<u8>,
+    /// An SVG whose text is still to be drawn (it is shaped by the platform, which only the UI thread has): see
+    /// [`crate::svg::add_text`]. `None` for every other picture and once the text is in.
+    pub text: Option<Arc<crate::svg::TextLayer>>,
 }
 
 pub trait ImageDecoder: Send + Sync {

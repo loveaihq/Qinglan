@@ -23,6 +23,7 @@ use crate::layout::LayoutResult;
 use crate::layout::image::ImageRequest;
 use crate::layout::units::LayoutUnit as LU;
 use crate::net::Response;
+use crate::platform::Platform;
 use crate::platform::image::{DecodedCache, DecodedImage, ImageDecoder, MAX_DECODED_PIXELS};
 
 /// Images this far from the viewport (in screens) are requested up front.
@@ -89,6 +90,10 @@ pub fn far_images(list: &DisplayList, band: Band) -> Vec<NodeId> {
 pub trait ImageSource {
     /// The bitmap of the image of `node` for a destination of `width` x `height` device pixels, if it is ready.
     fn bitmap(&mut self, node: NodeId, width: u32, height: u32) -> Option<Arc<DecodedImage>>;
+
+    /// Called before a frame is drawn, on the thread that has the platform: the place to draw what the decode threads could
+    /// not (the text of SVG pictures).
+    fn finish(&mut self, _platform: &dyn Platform) {}
 }
 
 /// No images are ready.
@@ -129,6 +134,8 @@ pub struct ImageStore {
     reserved: usize,
     /// The last [`ImageStore::prepare_async`] left images undone for lack of room.
     deferred: bool,
+    /// Bitmaps in the cache that are SVGs with text not drawn yet ([`DecodedImage::text`]); [`ImageSource::finish`] does it.
+    unfinished: Vec<(String, u32, u32)>,
 }
 
 /// A decode on a worker thread.
@@ -179,6 +186,7 @@ impl ImageStore {
             inflight: Vec::new(),
             reserved: 0,
             deferred: false,
+            unfinished: Vec::new(),
         }
     }
 
@@ -219,7 +227,10 @@ impl ImageStore {
                 continue;
             };
             match self.cache.get_or_decode(dec, &url, &resp.body, w, h) {
-                Ok(_) => {
+                Ok(img) => {
+                    if img.text.is_some() && !self.unfinished.contains(&(url.clone(), w, h)) {
+                        self.unfinished.push((url.clone(), w, h));
+                    }
                     self.refetched.remove(&p.node);
                     if let Some((u, ow, oh)) = self.keys.insert(p.node, (url.clone(), w, h))
                         && (u != url || ow != w || oh != h)
@@ -343,6 +354,9 @@ impl ImageStore {
         }
         match result {
             Ok(img) => {
+                if img.text.is_some() && !self.unfinished.contains(&key) {
+                    self.unfinished.push(key.clone());
+                }
                 self.cache.insert(&key.0, key.1, key.2, Arc::new(img));
                 for &node in &p.nodes {
                     self.refetched.remove(&node);
@@ -417,6 +431,15 @@ impl ImageStore {
 }
 
 impl ImageSource for ImageStore {
+    fn finish(&mut self, platform: &dyn Platform) {
+        for (u, w, h) in std::mem::take(&mut self.unfinished) {
+            let Some(img) = self.cache.get(&u, w, h) else { continue };
+            if let Some(done) = crate::svg::add_text(&img, platform) {
+                self.cache.insert(&u, w, h, Arc::new(done));
+            }
+        }
+    }
+
     fn bitmap(&mut self, node: NodeId, width: u32, height: u32) -> Option<Arc<DecodedImage>> {
         let url = self.urls.get(&node)?;
         self.cache.get(url, width, height)

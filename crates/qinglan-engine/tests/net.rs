@@ -451,7 +451,7 @@ impl ImageDecoder for SizeDecoder {
     }
     fn decode(&self, bytes: &[u8], width: u32, height: u32) -> Result<DecodedImage, ImageError> {
         self.probe(bytes)?;
-        Ok(DecodedImage { width, height, natural_width: 1, natural_height: 1, bgra: vec![0; (width * height * 4) as usize] })
+        Ok(DecodedImage { width, height, natural_width: 1, natural_height: 1, bgra: vec![0; (width * height * 4) as usize], text: None })
     }
 }
 

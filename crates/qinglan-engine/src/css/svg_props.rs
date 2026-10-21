@@ -5,16 +5,16 @@
 //! them): the cascade then gives them the origin, specificity, `!important` and inheritance order of any other property,
 //! and `svg::build` reads them as text. They are only parsed when the document has SVG in it.
 
-pub const NAMES: [&str; 23] = [
+pub const NAMES: [&str; 24] = [
     "fill", "stroke", "fill-opacity", "stroke-opacity", "fill-rule", "clip-rule", "stroke-width", "stroke-linecap", "stroke-linejoin",
     "stroke-miterlimit", "stroke-dasharray", "stroke-dashoffset", "text-anchor", "clip-path", "stop-color", "stop-opacity",
     // SVG 2 geometry properties (geometry 10): `rx: 40px` in a style sheet is the same as the attribute.
-    "cx", "cy", "r", "rx", "ry", "x", "y",
+    "cx", "cy", "r", "rx", "ry", "x", "y", "dominant-baseline",
 ];
 
 /// Is `name` one of [`NAMES`] (property names are ASCII case-insensitive)?
 pub fn is_svg_prop(name: &str) -> bool {
-    matches!(name.as_bytes().first(), Some(b'f' | b'F' | b's' | b'S' | b'c' | b'C' | b't' | b'T' | b'r' | b'R' | b'x' | b'X' | b'y' | b'Y')) && NAMES.iter().any(|n| n.eq_ignore_ascii_case(name))
+    matches!(name.as_bytes().first(), Some(b'd' | b'D' | b'f' | b'F' | b's' | b'S' | b'c' | b'C' | b't' | b'T' | b'r' | b'R' | b'x' | b'X' | b'y' | b'Y')) && NAMES.iter().any(|n| n.eq_ignore_ascii_case(name))
 }
 
 /// The presentation attributes of SVG elements that are ordinary CSS properties.

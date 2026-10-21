@@ -16,7 +16,6 @@ pub mod data;
 pub mod render;
 pub mod xml;
 
-use std::rc::Rc;
 
 use crate::css::color::Color;
 use crate::html::dom::{Document, NodeId};
@@ -206,7 +205,7 @@ pub struct TextRun {
     pub size: f32,
     pub weight: f32,
     pub slant: crate::platform::FontSlant,
-    pub families: Rc<Vec<FontFamily>>,
+    pub families: std::sync::Arc<Vec<Family>>,
     pub dx: f32,
     pub dy: f32,
 }
@@ -218,6 +217,8 @@ pub struct TextOp {
     pub y: f32,
     pub ctm: Transform,
     pub anchor: i8,
+    /// `dominant-baseline`: 0 alphabetic (y is the baseline), 1 central, 2 middle (y is the middle of the em box / of the x-height).
+    pub base: i8,
     pub runs: Vec<TextRun>,
     pub clip: u32,
 }
@@ -274,8 +275,8 @@ pub fn probe(bytes: &[u8]) -> Result<(u32, u32), ImageError> {
     Ok((w as u32, h as u32))
 }
 
-/// Draw a standalone SVG into `width` x `height` device pixels. Text is not drawn (it needs the platform, which lives on
-/// the UI thread).
+/// Draw a standalone SVG into `width` x `height` device pixels. Text is not drawn here (it needs the platform, which lives on
+/// the UI thread): when the SVG has any, the result carries a [`TextLayer`] that [`add_text`] draws there.
 pub fn rasterize(bytes: &[u8], width: u32, height: u32) -> Result<DecodedImage, ImageError> {
     let mut doc = xml::parse(bytes).map_err(|_| ImageError::Corrupt)?;
     let root = doc.document_element();
@@ -290,7 +291,8 @@ pub fn rasterize(bytes: &[u8], width: u32, height: u32) -> Result<DecodedImage, 
     let out = crate::css::style_document(&mut doc, None, &mut crate::css::NoResources, &opts);
     let scene = build::scene(&doc, &out.tree.styles, root, &mut Ids::default(), None);
     let canvas = render::render(&scene, w, h, None, None).ok_or(ImageError::Corrupt)?;
-    Ok(DecodedImage { width: canvas.w, height: canvas.h, natural_width: nw as u32, natural_height: nh as u32, bgra: canvas.data })
+    let text = scene.ops.iter().any(|o| matches!(o, Op::Text(_))).then(|| std::sync::Arc::new(TextLayer { w: canvas.w, h: canvas.h, scene }));
+    Ok(DecodedImage { width: canvas.w, height: canvas.h, natural_width: nw as u32, natural_height: nh as u32, bgra: canvas.data, text })
 }
 
 /// The bitmaps of inline SVGs drawn lately, kept so that a scroll repaints a page of icons without rendering each again.
@@ -309,7 +311,7 @@ pub fn cached_bitmap(sc: &Scene, w: u32, h: u32, platform: &dyn crate::platform:
         return Some(hit);
     }
     let canvas = render::render(sc, w, h, Some(platform), Some(dpr))?;
-    let img = std::sync::Arc::new(DecodedImage { width: canvas.w, height: canvas.h, natural_width: w, natural_height: h, bgra: canvas.data });
+    let img = std::sync::Arc::new(DecodedImage { width: canvas.w, height: canvas.h, natural_width: w, natural_height: h, bgra: canvas.data, text: None });
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
         let cost = |e: &CacheEntry| e.3.bgra.len();
@@ -321,4 +323,59 @@ pub fn cached_bitmap(sc: &Scene, w: u32, h: u32, platform: &dyn crate::platform:
         }
     });
     Some(img)
+}
+
+/// The text of a standalone SVG picture, kept with it until the UI thread can draw it. [`rasterize`] runs on a decode
+/// thread, where the platform (DirectWrite objects, not `Send`) is out of reach, so it draws everything but the text and
+/// leaves the scene here; [`add_text`] shapes the text and lays its glyph masks over the bitmap. Dropped with the layer once
+/// the text is in.
+#[derive(Debug)]
+pub struct TextLayer {
+    scene: Scene,
+    w: u32,
+    h: u32,
+}
+
+impl PartialEq for TextLayer {
+    fn eq(&self, other: &TextLayer) -> bool {
+        self.scene.id == other.scene.id && self.w == other.w && self.h == other.h
+    }
+}
+
+impl Eq for TextLayer {}
+
+/// `img` with its SVG text drawn (the same text, clips, group opacity and shaping as an inline SVG gets). The text goes on top
+/// of the shapes: a shape painted after a `<text>` in the file does not cover it. `None` when `img` has no text layer.
+pub fn add_text(img: &DecodedImage, platform: &dyn crate::platform::Platform) -> Option<DecodedImage> {
+    let layer = img.text.as_ref()?;
+    let canvas = Canvas { w: img.width, h: img.height, data: img.bgra.clone() };
+    if (layer.w, layer.h) != (img.width, img.height) {
+        return None;
+    }
+    let canvas = render::overlay_text(&layer.scene, canvas, platform);
+    Some(DecodedImage { width: canvas.w, height: canvas.h, natural_width: img.natural_width, natural_height: img.natural_height, bgra: canvas.data, text: None })
+}
+
+/// An entry of a `font-family` list as a scene keeps it: [`FontFamily`] holds an `Rc`, and a scene has to cross threads (see
+/// [`TextLayer`]).
+#[derive(Clone, Debug)]
+pub enum Family {
+    Named(Box<str>),
+    Generic(crate::css::types::GenericFamily),
+}
+
+impl Family {
+    pub fn of(f: &FontFamily) -> Family {
+        match f {
+            FontFamily::Named(n) => Family::Named((&**n).into()),
+            FontFamily::Generic(g) => Family::Generic(*g),
+        }
+    }
+
+    pub fn font(&self) -> FontFamily {
+        match self {
+            Family::Named(n) => FontFamily::Named((&**n).into()),
+            Family::Generic(g) => FontFamily::Generic(*g),
+        }
+    }
 }

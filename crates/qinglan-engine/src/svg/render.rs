@@ -9,7 +9,8 @@ use crate::fmath::Fclamp;
 use std::rc::Rc;
 
 use super::build::path_bounds;
-use super::{Fill, Grad, Op, Paint, Par, Scene, Shape, TextOp, view_transform};
+use super::{Family, Fill, Grad, Op, Paint, Par, Scene, Shape, TextOp, view_transform};
+use crate::css::types::FontFamily;
 use crate::css::color::Color;
 use crate::platform::{FontQuery, Platform};
 use crate::vector::{FillRule, IRect, Poly, Pt, Transform, fill_polys, stroke_polys};
@@ -78,6 +79,8 @@ struct R<'a> {
     work: u64,
     masks: Vec<(u32, Rc<Vec<u8>>)>,
     luts: Vec<Option<Rc<Vec<[u8; 4]>>>>,
+    /// The opacity (0..=255) the text drawn now gets from the groups it is in, when only the text is drawn ([`overlay_text`]).
+    gain: u32,
 }
 
 /// The transform from the user space of the outermost svg to a `w` x `h` canvas: the viewBox mapping; without a viewBox a user
@@ -111,6 +114,7 @@ pub fn render(sc: &Scene, w: u32, h: u32, platform: Option<&dyn Platform>, scale
         work: 0,
         masks: Vec::new(),
         luts: vec![None; sc.grads.len()],
+        gain: 255,
     };
     if root.a.is_finite() && root.d.is_finite() && root.e.is_finite() && root.f.is_finite() && root.b.is_finite() && root.c.is_finite() {
         for op in &sc.ops {
@@ -129,6 +133,34 @@ pub fn render(sc: &Scene, w: u32, h: u32, platform: Option<&dyn Platform>, scale
         r.end_layer();
     }
     r.layers.pop().map(|l| l.canvas)
+}
+
+/// Draw only the text of `sc` onto `canvas`, which holds the rest of the picture (drawn by [`render`] without a platform, at
+/// this size and without a `scale`). Each text gets the opacity of the groups it is in; it lands on top of the shapes.
+pub fn overlay_text(sc: &Scene, canvas: Canvas, platform: &dyn Platform) -> Canvas {
+    let (w, h) = (canvas.w, canvas.h);
+    let root = root_transform(sc, w as f32, h as f32, None);
+    let mut r = R { sc, platform: Some(platform), w, h, root, layers: vec![Layer { canvas, alpha: 255 }], skipped: 0, work: 0, masks: Vec::new(), luts: Vec::new(), gain: 255 };
+    if [root.a, root.b, root.c, root.d, root.e, root.f].iter().all(|v| v.is_finite()) {
+        let mut groups: Vec<u32> = Vec::new();
+        for op in &sc.ops {
+            if r.work > MAX_WORK {
+                break;
+            }
+            match op {
+                Op::Begin(a) => groups.push(u32::from(*a)),
+                Op::End => {
+                    groups.pop();
+                }
+                Op::Text(t) => {
+                    r.gain = groups.iter().fold(255, |g, a| div255(g * a));
+                    r.text(t);
+                }
+                Op::Shape(_) => {}
+            }
+        }
+    }
+    r.layers.pop().map_or_else(|| Canvas::new(w.min(1), h.min(1)), |l| l.canvas)
 }
 
 impl R<'_> {
@@ -306,7 +338,8 @@ impl R<'_> {
         for (ri, run) in t.runs.iter().enumerate() {
             pen += run.dx * k;
             dy += run.dy * k;
-            let q = FontQuery { families: &run.families, weight: run.weight, slant: run.slant, lang: None };
+            let families: Vec<FontFamily> = run.families.iter().map(Family::font).collect();
+            let q = FontQuery { families: &families, weight: run.weight, slant: run.slant, lang: None };
             for g in pl.shape(&run.text, &q, run.size * k) {
                 glyphs.push((g.font, g.glyph, pen + g.offset_x, dy + g.offset_y, ri));
                 pen += g.advance;
@@ -317,6 +350,15 @@ impl R<'_> {
             0 => -pen / 2.0,
             _ => -pen,
         };
+        // dominant-baseline: y is not the baseline but the middle of the em box (central) or of the x-height (middle).
+        let drop = match (t.base, glyphs.first()) {
+            (1.., Some(&(font, _, _, _, ri))) => {
+                let size = t.runs.get(ri).map_or(0.0, |r| r.size) * k;
+                let fm = pl.font_metrics(font, size);
+                if t.base == 1 { (fm.ascent - fm.descent) / 2.0 } else { fm.x_height.unwrap_or(size / 2.0) / 2.0 }
+            }
+            _ => 0.0,
+        };
         let o = m.apply(Pt::new(t.x, t.y));
         let (w, h) = (self.w as i32, self.h as i32);
         let wu = self.w as usize;
@@ -324,11 +366,12 @@ impl R<'_> {
         for (font, glyph, gx, gy, ri) in glyphs {
             let Some(run) = t.runs.get(ri) else { continue };
             let px = o.x + shift + gx;
-            let (ix, by) = (px.floor(), (o.y + gy).round());
+            let (ix, by) = (px.floor(), (o.y + drop + gy).round());
             let sub = (((px - ix) * 4.0) as u8).min(3);
             let Some(mask) = pl.glyph_mask(font, glyph, run.size * k, sub) else { continue };
+            let alpha = div255(u32::from(run.fill.alpha) * self.gain);
             let color = match run.fill.paint {
-                Paint::Color(c) => premul(c, u32::from(run.fill.alpha)),
+                Paint::Color(c) => premul(c, alpha),
                 Paint::Grad(_) => continue,
             };
             let colored = !mask.bgra.is_empty();
@@ -353,7 +396,7 @@ impl R<'_> {
                     let src = if colored {
                         let b = mi * 4;
                         let Some(&[p0, p1, p2, p3]) = mask.bgra.get(b..b + 4) else { continue };
-                        scaled([p0, p1, p2, p3], div255(cov * u32::from(run.fill.alpha)))
+                        scaled([p0, p1, p2, p3], div255(cov * alpha))
                     } else {
                         scaled(color, cov)
                     };
