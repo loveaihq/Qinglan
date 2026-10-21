@@ -94,6 +94,10 @@ impl Layouter<'_> {
                 "audio" => n.default_h = 54.0,
                 _ => {}
             },
+            Some(ReplacedKind::Svg) => {
+                let i = crate::svg::intrinsic(self.doc, bx.node);
+                (n.w, n.h, n.ratio) = (i.w.map(f64::from), i.h.map(f64::from), i.ratio.map(f64::from));
+            }
             Some(ReplacedKind::Check) => {
                 n.w = Some(13.0);
                 n.h = Some(13.0);

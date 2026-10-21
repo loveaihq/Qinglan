@@ -276,6 +276,19 @@ impl Ctx<'_> {
                     draw_image(frame, &img, r, &d);
                 }
             }
+            ItemKind::Svg(i) => {
+                let d = r.intersect(clip);
+                if d.is_empty() {
+                    return;
+                }
+                let (dw, dh) = device_size(&it.bounds, self.base_dpr as f32);
+                if let Some(sc) = self.list.svgs.get(i as usize)
+                    && let Some(img) = crate::svg::cached_bitmap(sc, dw, dh, self.platform, self.base_dpr as f32)
+                {
+                    self.stats.images += 1;
+                    draw_image(frame, &img, r, &d);
+                }
+            }
             ItemKind::Bg(i) => {
                 let d = r.intersect(clip);
                 if let Some(b) = self.list.bgs.get(i as usize).copied()

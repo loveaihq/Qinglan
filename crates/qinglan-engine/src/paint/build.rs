@@ -912,6 +912,16 @@ impl Builder<'_> {
                     }
                 }
             }
+            Some(ReplacedKind::Svg) => {
+                if let Some(sc) = res.tree.svgs.get(&bx.node)
+                    && !content.is_empty()
+                    && self.visible(&content)
+                {
+                    self.list.svgs.push(sc.clone());
+                    let i = (self.list.svgs.len() - 1) as u32;
+                    self.push(content, ItemKind::Svg(i));
+                }
+            }
             Some(ReplacedKind::Placeholder(name)) => {
                 // A thin border and the name, no fill: a placeholder must never hide what is under it (mdBook's
                 // `position: fixed` sidebar frame covered 300 px of the text).

@@ -160,3 +160,6 @@ marquee { display: inline-block; text-align: initial; overflow: hidden !importan
 
 q::before { content: open-quote }
 q::after { content: close-quote }
+
+/* SVG: nested viewports clip to their box (SVG 2 struct 5.? UA style sheet). */
+svg:not(:root), symbol { overflow: hidden; }

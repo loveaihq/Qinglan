@@ -157,6 +157,7 @@ fn dump_head(doc: &Document, res: &LayoutResult, id: BoxId, pos: (LU, LU), depth
         },
         Some(ReplacedKind::Placeholder(k)) => out.push_str(&format!(" [placeholder:{k}]")),
         Some(ReplacedKind::Check) => out.push_str(" [check]"),
+        Some(ReplacedKind::Svg) => out.push_str(" [svg]"),
         Some(ReplacedKind::Fixed(_, _, k)) => out.push_str(&format!(" [control:{k}]")),
         None => {}
     }

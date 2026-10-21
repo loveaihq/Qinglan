@@ -63,6 +63,8 @@ pub enum ReplacedKind {
     Check,
     /// A control drawn as a fixed-size box (`meter`, `progress`, `input type=range` ...).
     Fixed(f32, f32, &'static str),
+    /// An inline `<svg>`: drawn from `BoxTree::svgs`.
+    Svg,
 }
 
 /// Form controls whose intrinsic size does not come from their text.
@@ -244,6 +246,8 @@ pub struct BoxTree {
     pub viewport_overflow: (Overflow, Overflow),
     /// The `url()` background layers of the boxes that have any.
     pub bgs: crate::html::atoms::FxHashMap<BoxId, Vec<BgRef>>,
+    /// The scenes of the inline `<svg>` elements, by DOM node.
+    pub svgs: crate::html::atoms::FxHashMap<NodeId, Rc<crate::svg::Scene>>,
     dummy: LayoutBox,
 }
 
@@ -339,6 +343,9 @@ fn internal(r: Role) -> bool {
 }
 
 /// What an element becomes beyond the plain box of its `display`.
+/// Scene work (element visits and operations) all the inline SVG of one page may cost; the rest are drawn empty.
+pub const MAX_SVG_WORK: u64 = 3_000_000;
+
 enum Special {
     Plain,
     Replaced(ReplacedKind),
@@ -380,6 +387,10 @@ struct Builder<'a> {
     progress: Option<Atom>,
     /// Some element uses a vertical writing mode (the frames of vertical.rs are only worked out then).
     vertical: bool,
+    svgs: crate::html::atoms::FxHashMap<NodeId, Rc<crate::svg::Scene>>,
+    svg_ids: crate::svg::Ids,
+    /// Work spent on the scenes of the page so far, against [`MAX_SVG_WORK`].
+    svg_work: u64,
 }
 
 /// The styles of the three boxes a ruby pair is made of, and the two styles they were made from (kept so that the
@@ -424,6 +435,9 @@ pub fn build_box_tree_with(doc: &Document, styles: &StyleTree, env: &BuildEnv<'_
         meter: doc.atoms.lookup("meter"),
         progress: doc.atoms.lookup("progress"),
         vertical: false,
+        svgs: Default::default(),
+        svg_ids: Default::default(),
+        svg_work: 0,
     };
     let root_el = doc.document_element();
     let mut viewport_overflow = (Overflow::Auto, Overflow::Auto);
@@ -479,7 +493,7 @@ pub fn build_box_tree_with(doc: &Document, styles: &StyleTree, env: &BuildEnv<'_
         super::vertical::assign_frames(&mut b.boxes, root);
     }
     let dummy = LayoutBox::new(BoxKind::Block, NONE, init, true);
-    BoxTree { boxes: b.boxes, root, images: b.images, cut: b.gen_cut, viewport_overflow, bgs: b.bgs, dummy }
+    BoxTree { boxes: b.boxes, root, images: b.images, cut: b.gen_cut, viewport_overflow, bgs: b.bgs, svgs: b.svgs, dummy }
 }
 
 /// HTML 2.3.4.? "rules for parsing integers" (leading white space, sign, digits; the rest is ignored).
@@ -780,6 +794,16 @@ impl Builder<'_> {
         if name == a::IMG {
             return self.image_special(n, style);
         }
+        if name == a::SVG && doc.element(n).is_some_and(|e| e.ns == Namespace::Svg) {
+            // The root of a standalone document is as big as the window unless it says otherwise; an inline one refers to its own size.
+            let ref_size = (n == doc.document_element()).then_some((self.env.viewport_w, self.env.viewport_h));
+            if self.svg_work < MAX_SVG_WORK {
+                let sc = crate::svg::scene(doc, &self.styles.styles, n, &mut self.svg_ids, ref_size);
+                self.svg_work += sc.work + 8;
+                self.svgs.insert(n, Rc::new(sc));
+            }
+            return Special::Replaced(ReplacedKind::Svg);
+        }
         if name == a::IFRAME {
             return Special::Replaced(ReplacedKind::Placeholder("iframe"));
         }
@@ -890,7 +914,7 @@ impl Builder<'_> {
             }
             NodeData::Element(e) => {
                 // SVG and MathML are not shown in layer 1.
-                if e.ns != Namespace::Html {
+                if e.ns != Namespace::Html && !(e.ns == Namespace::Svg && e.name == a::SVG) {
                     return;
                 }
                 let Some(mut style) = self.styles.get(n).cloned() else { return };

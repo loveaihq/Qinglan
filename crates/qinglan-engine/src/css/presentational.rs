@@ -115,9 +115,53 @@ impl HintBuilder {
         }
     }
 
+    /// SVG presentation attributes (SVG 2 styling 6.? "presentation attributes"): declarations of the weakest author level.
+    /// The SVG-only ones are kept as `svg_props` entries, the ones that are CSS properties are parsed as CSS.
+    fn svg_hints(&mut self, doc: &Document, e: &crate::html::dom::ElementData) -> Option<Rc<DeclBlock>> {
+        use super::{parse_prop::{ParseEnv, parse_declaration}, svg_props, syntax::parse_cvs};
+        let mut key = String::from("svg");
+        let mut decls = Vec::new();
+        let env = ParseEnv { quirks: false, base: None };
+        for at in e.attrs.iter().filter(|x| x.ns == Namespace::None) {
+            let name = doc.atoms.get(at.name);
+            let custom = svg_props::is_svg_prop(name);
+            if !custom && !svg_props::is_css_attr(name) {
+                continue;
+            }
+            let value = doc.value(at).trim();
+            key.push('|');
+            key.push_str(name);
+            key.push('=');
+            key.push_str(value);
+            if custom {
+                decls.push(Declaration { prop: DeclProp::Custom(at.name, Rc::new(parse_cvs(value))), value: Specified::Unset, important: false });
+            } else {
+                // A bare number is a length in user units (px).
+                let text = if name == "font-size" && value.parse::<f32>().is_ok() { format!("{value}px") } else { value.to_string() };
+                let mut var_id = 0u32;
+                for (prop, v) in parse_declaration(name, &parse_cvs(&text), &env, &mut var_id).unwrap_or_default() {
+                    decls.push(Declaration { prop: DeclProp::Known(prop), value: v, important: false });
+                }
+            }
+        }
+        if decls.is_empty() {
+            return None;
+        }
+        if let Some(found) = self.cache.get(&key) {
+            return found.clone();
+        }
+        self.next_id += 1;
+        let block = Rc::new(DeclBlock { decls, id: self.next_id });
+        self.cache.insert(key, Some(block.clone()));
+        Some(block)
+    }
+
     /// The hint declarations of `el`, if it has any.
     pub fn hints_for(&mut self, doc: &Document, el: NodeId) -> Option<Rc<DeclBlock>> {
         let e = doc.element(el)?;
+        if e.ns == Namespace::Svg {
+            return self.svg_hints(doc, e);
+        }
         let is_cell = e.ns == Namespace::Html && matches!(e.name, a::TD | a::TH);
         if e.ns != Namespace::Html || (e.attrs.is_empty() && !is_cell) {
             return None;

@@ -22,6 +22,8 @@ pub struct DocFacts {
     attr_names: Set,
     /// (attribute name, value) pairs, the value as written.
     attr_pairs: Set,
+    /// Some element is in the SVG namespace: the SVG-only properties are worth parsing.
+    pub has_svg: bool,
 }
 
 /// FNV-1a over the bytes, upper case letters folded to lower case when `fold`.
@@ -43,6 +45,7 @@ impl DocFacts {
         let mut f = DocFacts::default();
         for n in 0..doc.nodes.len() {
             let Some(e) = u32::try_from(n).ok().and_then(|n| doc.element(n)) else { continue };
+            f.has_svg |= e.ns == crate::html::dom::Namespace::Svg;
             f.tags.insert(hash(doc.atoms.get(e.name), true));
             for at in &e.attrs {
                 let name = doc.atoms.get(at.name);

@@ -209,6 +209,13 @@ pub fn parse_declaration_block(cvs: Vec<Cv>, ctx: &mut SheetCtx<'_>) -> Rc<DeclB
             });
             continue;
         }
+        if super::svg_props::is_svg_prop(&d.name) {
+            if ctx.facts.is_none_or(|f| f.has_svg) {
+                let name = ctx.atoms.intern(&d.name.to_ascii_lowercase());
+                decls.push(Declaration { prop: DeclProp::Custom(name, Rc::new(trim_ws(&d.value).to_vec())), value: super::types::Specified::Unset, important: d.important });
+            }
+            continue;
+        }
         let Some(parsed) = parse_declaration(&d.name, &d.value, &env, ctx.var_id) else { continue };
         let logical = d.name.len() > 12 && flips_with_direction(&d.name);
         for (prop, value) in parsed {

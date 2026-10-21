@@ -117,8 +117,10 @@ fn damaged_files_are_broken_not_crashes() {
     assert_eq!(d.probe(b""), Err(ImageError::Corrupt));
     assert!(d.probe(b"not an image at all").is_err());
     assert!(d.decode(b"not an image at all", 10, 10).is_err());
-    assert_eq!(d.probe(b"<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'/>"), Err(ImageError::Svg));
-    assert_eq!(d.decode(b"<?xml version='1.0'?><svg/>", 10, 10), Err(ImageError::Svg));
+    // SVG is drawn by the engine: a good file has a size and pixels, a broken one is broken.
+    assert_eq!(d.probe(b"<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'/>"), Ok(ImageInfo { width: 10, height: 10 }));
+    assert_eq!(d.decode(b"<?xml version='1.0'?><svg/>", 10, 10).map(|i| (i.width, i.height)), Ok((10, 10)));
+    assert_eq!(d.probe(b"<svg><g></svg>"), Err(ImageError::Corrupt));
     // A WebP header without (valid) data: refused or broken, whether or not the system has the codec.
     let fake_webp = b"RIFF\x20\x00\x00\x00WEBPVP8 \x14\x00\x00\x00garbagegarbagegarbage";
     assert!(d.probe(fake_webp).is_err());

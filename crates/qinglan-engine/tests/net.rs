@@ -486,7 +486,7 @@ fn images_are_requested_once_per_address_and_sizes_fed_back() {
     assert_eq!(report.pending, 0);
     assert_eq!(sizes.get(1), Some(ImageState::Loaded { width: 30, height: 20 }));
     assert_eq!(sizes.get(2), Some(ImageState::Loaded { width: 30, height: 20 }));
-    assert_eq!(sizes.get(3), Some(ImageState::Broken), "SVG is not decoded: alt text");
+    assert_eq!(sizes.get(3), Some(ImageState::Loaded { width: 300, height: 150 }), "an SVG without a size is the default object size");
     assert_eq!(sizes.get(4), Some(ImageState::Broken));
     assert_eq!(sizes.get(5), Some(ImageState::Broken));
     assert_eq!(sizes.get(6), Some(ImageState::Broken));

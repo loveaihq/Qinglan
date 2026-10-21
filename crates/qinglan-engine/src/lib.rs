@@ -13,6 +13,7 @@ pub mod net;
 pub mod paint;
 pub mod platform;
 pub mod sorting;
+pub mod svg;
 pub mod textclass;
 pub mod url;
 pub mod vector;

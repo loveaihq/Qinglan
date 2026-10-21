@@ -151,6 +151,8 @@ pub enum ItemKind {
     Shadow(u32),
     /// A group (`opacity`, `transform`): `DisplayList::groups[i]`, drawn in `Item::bounds` (its transformed extent).
     Group(u32),
+    /// An inline `<svg>`: `DisplayList::svgs[i]`, drawn in `Item::bounds`.
+    Svg(u32),
 }
 
 /// A `box-shadow` (css-backgrounds-3 6.1). Outer: `rect` is the border box and the shadow is cast outside it; inset: `rect` is
@@ -270,6 +272,7 @@ pub struct DisplayList {
     pub borders: Vec<BorderDraw>,
     pub shadows: Vec<ShadowDraw>,
     pub groups: Vec<Group>,
+    pub svgs: Vec<std::rc::Rc<crate::svg::Scene>>,
     pub glyphs: Vec<PaintGlyph>,
     /// The canvas background colour (None: white).
     pub canvas: Option<Color>,
@@ -300,6 +303,7 @@ impl DisplayList {
             borders: Vec::new(),
             shadows: Vec::new(),
             groups: Vec::new(),
+            svgs: Vec::new(),
             glyphs: Vec::new(),
             canvas: None,
             height: LU::ZERO,

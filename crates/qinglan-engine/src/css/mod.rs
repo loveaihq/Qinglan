@@ -19,6 +19,7 @@ pub mod presentational;
 pub mod scan;
 pub mod selector;
 pub mod stylesheet;
+pub mod svg_props;
 pub mod syntax;
 pub mod tokenizer;
 pub mod types;
@@ -159,7 +160,7 @@ fn collect_sources(doc: &Document, base: Option<&Url>) -> Vec<Source> {
         let n = cur;
         cur = next_in_tree(doc, n);
         let Some(e) = doc.element(n) else { continue };
-        if e.ns != Namespace::Html {
+        if e.ns != Namespace::Html && !(e.ns == Namespace::Svg && e.name == a::STYLE) {
             continue;
         }
         let attr = |name: &str| e.attrs.iter().find(|x| x.ns == Namespace::None && doc.atoms.get(x.name) == name).map(|x| doc.value(x));
@@ -355,7 +356,7 @@ pub fn style_document_with(
     let mut attr_texts: Vec<(NodeId, String)> = Vec::new();
     for n in 0..doc.nodes.len() as NodeId {
         if let Some(e) = doc.element(n)
-            && e.ns == Namespace::Html
+            && matches!(e.ns, Namespace::Html | Namespace::Svg)
             && let Some(v) = e.attrs.iter().find(|x| x.ns == Namespace::None && x.name == a::STYLE).map(|x| doc.value(x).to_string())
         {
             attr_texts.push((n, v));

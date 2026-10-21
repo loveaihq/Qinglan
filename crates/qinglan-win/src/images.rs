@@ -106,7 +106,7 @@ impl ImageDecoder for WicDecoder {
             return Err(ImageError::Corrupt);
         }
         if is_svg_bytes(bytes) {
-            return Err(ImageError::Svg);
+            return qinglan_engine::svg::probe(bytes).map(|(width, height)| ImageInfo { width, height });
         }
         if is_truncated(bytes) {
             return Err(ImageError::Corrupt);
@@ -129,7 +129,7 @@ impl ImageDecoder for WicDecoder {
             return Err(ImageError::Corrupt);
         }
         if is_svg_bytes(bytes) {
-            return Err(ImageError::Svg);
+            return qinglan_engine::svg::rasterize(bytes, width, height);
         }
         if is_truncated(bytes) {
             return Err(ImageError::Corrupt);

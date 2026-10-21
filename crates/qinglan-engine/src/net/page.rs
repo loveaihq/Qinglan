@@ -277,11 +277,11 @@ impl ResourceLoader for PageResources {
     }
 }
 
-/// Read the header of an image response: SVG is refused (`alt` text instead), anything else goes to
+/// Read the header of an image response: SVG is read by the engine ([`crate::svg::probe`]), anything else goes to
 /// the decoder's [`ImageDecoder::probe`].
 pub fn probe_response(dec: &dyn ImageDecoder, resp: &Response) -> Result<ImageInfo, ImageError> {
     if content::is_svg(resp) {
-        return Err(ImageError::Svg);
+        return crate::svg::probe(&resp.body).map(|(width, height)| ImageInfo { width, height });
     }
     dec.probe(&resp.body)
 }
