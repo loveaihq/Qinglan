@@ -29,10 +29,22 @@ pub enum ImageState {
     Broken,
 }
 
+/// The parts of its natural size that an image file gives when some are missing: a standalone SVG with only a `viewBox`
+/// (a ratio), or with a `width` and no `height`. CSS Images 3 5.3 treats the missing parts as unknown (the "default
+/// sizing algorithm"), where `ImageState::Loaded` carries a size with the 300 x 150 default object size filled in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Partial {
+    pub w: Option<f32>,
+    pub h: Option<f32>,
+    pub ratio: Option<f32>,
+}
+
 /// The image sizes the host has learned so far (the "image-size callback" is `set_loaded`).
 #[derive(Clone, Debug, Default)]
 pub struct ImageSizes {
     map: FxHashMap<NodeId, ImageState>,
+    /// Images whose file leaves part of the natural size open (see [`Partial`]); the rest have a full entry in `map` only.
+    partial: FxHashMap<NodeId, Partial>,
 }
 
 impl ImageSizes {
@@ -45,9 +57,24 @@ impl ImageSizes {
         self.map.insert(node, ImageState::Loaded { width, height }) != Some(ImageState::Loaded { width, height })
     }
 
+    /// Record which parts of the natural size the file of `node`'s image leaves open (`None`: none). Returns true if this
+    /// changes what layout knows.
+    pub fn set_partial(&mut self, node: NodeId, partial: Option<Partial>) -> bool {
+        match partial {
+            Some(p) => self.partial.insert(node, p) != Some(p),
+            None => self.partial.remove(&node).is_some(),
+        }
+    }
+
     /// Record that the image of `node` cannot be shown.
     pub fn set_broken(&mut self, node: NodeId) -> bool {
+        self.partial.remove(&node);
         self.map.insert(node, ImageState::Broken) != Some(ImageState::Broken)
+    }
+
+    /// The open parts of the natural size of `node`'s image, if the file leaves any.
+    pub fn partial(&self, node: NodeId) -> Option<Partial> {
+        self.partial.get(&node).copied()
     }
 
     pub fn get(&self, node: NodeId) -> Option<ImageState> {

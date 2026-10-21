@@ -22,7 +22,7 @@ use crate::css::{MAX_SHEETS, ResourceLoader, StyleOptions, StyleOutput, base_url
 use crate::encoding::{Encoding, decode_stylesheet};
 use crate::html::atoms::FxHashMap;
 use crate::html::dom::{Document, NodeId};
-use crate::layout::image::{ImageRequest, ImageSizes};
+use crate::layout::image::{ImageRequest, ImageSizes, Partial};
 use crate::platform::Platform;
 use crate::platform::image::{ImageDecoder, ImageError, ImageInfo};
 use crate::url::Url;
@@ -286,12 +286,17 @@ pub fn probe_response(dec: &dyn ImageDecoder, resp: &Response) -> Result<ImageIn
     dec.probe(&resp.body)
 }
 
+/// The parts of its natural size that the response (an SVG) leaves open (see [`Partial`]).
+pub fn probe_partial(resp: &Response) -> Option<Partial> {
+    if content::is_svg(resp) { crate::svg::partial(&resp.body) } else { None }
+}
+
 /// Record what the probe found in the layout's image table. Returns whether layout needs to run again.
-pub fn apply_probe(sizes: &mut ImageSizes, nodes: &[NodeId], probe: &Result<ImageInfo, ImageError>) -> bool {
+pub fn apply_probe(sizes: &mut ImageSizes, nodes: &[NodeId], probe: &Result<ImageInfo, ImageError>, partial: Option<Partial>) -> bool {
     let mut changed = false;
     for &n in nodes {
         changed |= match probe {
-            Ok(info) => sizes.set_loaded(n, info.width, info.height),
+            Ok(info) => sizes.set_loaded(n, info.width, info.height) | sizes.set_partial(n, partial),
             Err(_) => sizes.set_broken(n),
         };
     }

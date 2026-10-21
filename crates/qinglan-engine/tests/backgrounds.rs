@@ -10,6 +10,7 @@ use qinglan_engine::encoding::decode_document;
 use qinglan_engine::html::dom::NodeId;
 use qinglan_engine::html::treebuilder::parse_document;
 use qinglan_engine::layout::{ImageSizes, LayoutOptions, LayoutResult, layout_document_with};
+use qinglan_engine::layout::image::Partial;
 use qinglan_engine::paint::images::{ImageSource, NoBitmaps};
 use qinglan_engine::paint::raster::{Frame, View, render_frame};
 use qinglan_engine::paint::{DisplayList, build_display_list};
@@ -434,4 +435,37 @@ fn a_table_with_direction_rtl_puts_its_first_column_on_the_right() {
         <td style='padding:0;width:50px;height:10px;background:blue'></td></tr></table>";
     let f = paint(html, 100, 20);
     expect(&f, &[(5, 5, BLUE), (49, 5, BLUE), (51, 5, RED), (79, 5, RED), (85, 5, WHITE)]);
+}
+
+/// The bitmap sizes asked for by an SVG background that leaves part of its natural size open (`partial`), in a 100x100 box.
+fn partial_bg_sizes(size: &str, partial: Partial) -> Vec<(u32, u32)> {
+    let html = format!("<body style='margin:0'><div style=\"width:100px;height:100px;background:url(a.svg) no-repeat;background-size:{size}\"></div>");
+    let first = lay(&html, 120, 120, 1.0, None, &ImageSizes::new());
+    let node = first.res.images[0].node;
+    let mut sizes = ImageSizes::new();
+    sizes.set_loaded(node, 300, 150);
+    sizes.set_partial(node, Some(partial));
+    let page = lay(&html, 120, 120, 1.0, None, &sizes);
+    let mut src = Gen(|_, _, _, _| RED, Vec::new());
+    let _ = draw(&page, 120, 120, 1.0, 0.0, &mut src);
+    src.1
+}
+
+#[test]
+fn a_background_svg_with_a_ratio_but_no_size_is_contained_in_the_positioning_area() {
+    // css-images-3 5.3: a ratio alone is not 300 x 150; with `auto` the image is the largest of its ratio that fits the box.
+    let ratio2 = Partial { w: None, h: None, ratio: Some(2.0) };
+    assert_eq!(partial_bg_sizes("auto", ratio2), [(100, 50)]);
+    assert_eq!(partial_bg_sizes("contain", ratio2), [(100, 50)]);
+    assert_eq!(partial_bg_sizes("cover", ratio2), [(200, 100)]);
+    // One side given by the size property, the other follows the ratio.
+    assert_eq!(partial_bg_sizes("40px auto", ratio2), [(40, 20)]);
+    assert_eq!(partial_bg_sizes("auto 30px", ratio2), [(60, 30)]);
+    // One side given by the file and a ratio: the other follows it.
+    assert_eq!(partial_bg_sizes("auto", Partial { w: Some(40.0), h: None, ratio: Some(2.0) }), [(40, 20)]);
+    // One side given by the file and no ratio: the other is the box's.
+    assert_eq!(partial_bg_sizes("auto", Partial { w: Some(40.0), h: None, ratio: None }), [(40, 100)]);
+    assert_eq!(partial_bg_sizes("auto", Partial { w: None, h: Some(30.0), ratio: None }), [(100, 30)]);
+    // Nothing at all: the box.
+    assert_eq!(partial_bg_sizes("auto", Partial { w: None, h: None, ratio: None }), [(100, 100)]);
 }

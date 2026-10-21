@@ -860,11 +860,11 @@ impl Builder<'_> {
         let refs = res.tree.bgs.get(&id);
         for i in (0..n).rev() {
             let Some(img) = bg.images.get(i) else { continue };
-            let (nat, node) = match img {
+            let (nat, node, partial) = match img {
                 BgImage::None => continue,
-                BgImage::Gradient(_) => (None, NONE),
+                BgImage::Gradient(_) => (None, NONE, None),
                 BgImage::Url(_) => match refs.and_then(|v| v.iter().find(|b| usize::from(b.layer) == i)) {
-                    Some(BgRef { nat: Some(n), node, .. }) => (Some((n.0 as f32, n.1 as f32)), *node),
+                    Some(BgRef { nat: Some(n), node, parts, .. }) => (Some((n.0 as f32, n.1 as f32)), *node, *parts),
                     _ => continue,
                 },
             };
@@ -876,6 +876,7 @@ impl Builder<'_> {
             let (pw, ph) = (orig.w.to_f32(), orig.h.to_f32());
             let size = Backgrounds::nth(&bg.size, i).unwrap_or(&BgSize::AUTO);
             let (tw, th) = match (size, nat) {
+                _ if partial.is_some() => partial_tile(size, partial.as_ref(), pw, ph),
                 (BgSize::Cover | BgSize::Contain, Some((nw, nh))) if nw > 0.0 && nh > 0.0 => {
                     let (sx, sy) = (pw / nw, ph / nh);
                     let s = if *size == BgSize::Cover { sx.max(sy) } else { sx.min(sy) };
@@ -1441,4 +1442,30 @@ fn inset_radii(r: [(f32, f32); 4], d: [f32; 4]) -> [(f32, f32); 4] {
     let s = |v: f32, d: f32| (v - d).max(0.0);
     let fix = |(a, b): (f32, f32)| if a > 0.0 && b > 0.0 { (a, b) } else { (0.0, 0.0) };
     [fix((s(tl.0, l), s(tl.1, t))), fix((s(tr.0, rt), s(tr.1, t))), fix((s(br.0, rt), s(br.1, b))), fix((s(bl.0, l), s(bl.1, b)))]
+}
+
+/// The tile size of a background image that gives only part of its natural size (css-images-3 5.3, css-backgrounds-3 3.9): an SVG
+/// with a ratio but no width or height, or with one of them. `(pw, ph)` is the positioning area, which is the default object size.
+fn partial_tile(size: &BgSize, p: Option<&crate::layout::image::Partial>, pw: f32, ph: f32) -> (f32, f32) {
+    let Some(p) = p else { return (pw, ph) };
+    let ratio = p.ratio.filter(|r| *r > 0.0 && r.is_finite());
+    // The largest (contain) or smallest (cover) box of the ratio that fits (covers) the positioning area.
+    let fit = |r: f32, cover: bool| if (pw > ph * r) != cover { (ph * r, ph) } else { (pw, pw / r) };
+    match size {
+        BgSize::Cover | BgSize::Contain => ratio.map_or((pw, ph), |r| fit(r, *size == BgSize::Cover)),
+        BgSize::Lens(a, b) => match (a.as_ref().map(|l| l.resolve(pw)), b.as_ref().map(|l| l.resolve(ph))) {
+            (Some(w), Some(h)) => (w, h),
+            (Some(w), None) => ratio.map_or((w, p.h.unwrap_or(ph)), |r| (w, w / r)),
+            (None, Some(h)) => ratio.map_or((p.w.unwrap_or(pw), h), |r| (h * r, h)),
+            (None, None) => match (p.w, p.h, ratio) {
+                (Some(w), Some(h), _) => (w, h),
+                (Some(w), None, Some(r)) => (w, w / r),
+                (None, Some(h), Some(r)) => (h * r, h),
+                (None, None, Some(r)) => fit(r, false),
+                (Some(w), None, None) => (w, ph),
+                (None, Some(h), None) => (pw, h),
+                (None, None, None) => (pw, ph),
+            },
+        },
+    }
 }

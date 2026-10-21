@@ -253,3 +253,33 @@ fn a_million_blank_lines_finish() {
     assert!(res.lines.len() > 1000 || res.incomplete, "{} lines", res.lines.len());
     assert!(took < std::time::Duration::from_secs(5), "{n} blank lines took {took:?}");
 }
+
+/// An SVG `<img>` that leaves part of its size open is sized by CSS2 10.3.2 / 10.6.2 from what the file does give, with the
+/// 300 x 150 default only for what nothing decides (not by the "300 x 150 contained" size the probe reports).
+#[test]
+fn an_svg_image_with_a_partial_size_follows_the_replaced_element_rules() {
+    use qinglan_engine::layout::ImageSizes;
+    use qinglan_engine::layout::image::Partial;
+    let html = "<body style='margin:0'><div style='width:200px'><img id=a src=a.svg></div>";
+    let (_, res) = lay_opts(html, &LayoutOptions::default(), &ImageSizes::new());
+    let node = res.images[0].node;
+    let sized = |p: Partial| {
+        let mut sizes = ImageSizes::new();
+        sizes.set_loaded(node, 300, 150);
+        sizes.set_partial(node, Some(p));
+        lay_opts(html, &LayoutOptions::default(), &sizes).0
+    };
+    // A ratio alone (a viewBox of 4 x 1): no width to use, so the box takes the 300 px default object width. (An inline image is
+    // not stretched to the block; the width is 300 and the height follows the ratio.)
+    let d = sized(Partial { w: None, h: None, ratio: Some(4.0) });
+    assert!(d.contains("replaced img#a (0,0 300x75)"), "{d}");
+    // A width and a ratio: the height follows.
+    let d = sized(Partial { w: Some(80.0), h: None, ratio: Some(2.0) });
+    assert!(d.contains("replaced img#a (0,0 80x40)"), "{d}");
+    // A height and no ratio: the width is the default 300.
+    let d = sized(Partial { w: None, h: Some(20.0), ratio: None });
+    assert!(d.contains("replaced img#a (0,0 300x20)"), "{d}");
+    // Nothing: 300 x 150.
+    let d = sized(Partial { w: None, h: None, ratio: None });
+    assert!(d.contains("replaced img#a (0,0 300x150)"), "{d}");
+}

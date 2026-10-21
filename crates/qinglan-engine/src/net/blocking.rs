@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use super::content::{self, ContentKind};
 use super::loader::{LoadEvent, LoadRequest, Loader, Ticket};
-use super::page::{PageResources, Update, apply_probe, probe_response};
+use super::page::{PageResources, Update, apply_probe, probe_partial, probe_response};
 use super::{ResourceKind, Response};
 use crate::css::StyleOutput;
 use crate::encoding::{Encoding, decode_document};
@@ -211,7 +211,7 @@ pub fn load_images(
                         } else {
                             report.broken += nodes.len();
                         }
-                        apply_probe(sizes, &nodes, &probe);
+                        apply_probe(sizes, &nodes, &probe, probe_partial(&resp));
                     }
                     Err(_) => {
                         for n in &nodes {

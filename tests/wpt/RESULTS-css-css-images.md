@@ -1,6 +1,6 @@
 # WPT `css/css-images`
 
-测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-images`，用时 1.0 秒。
+测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-images`，用时 1.2 秒。
 
 - 通过 **59 / 129**（45.7%）
 - bug 类失败：**0**

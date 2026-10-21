@@ -14,7 +14,7 @@ use qinglan_engine::layout::image::ImageSizes;
 use qinglan_engine::layout::{LayoutOptions, LayoutResult, layout_document_with};
 use qinglan_engine::net::blocking::Opened;
 use qinglan_engine::net::loader::Loader;
-use qinglan_engine::net::page::{PageResources, Update, apply_probe, probe_response};
+use qinglan_engine::net::page::{PageResources, Update, apply_probe, probe_partial, probe_response};
 use qinglan_engine::paint::images::{Band, ImageStore, NoBitmaps};
 use qinglan_engine::paint::raster::{Frame, View, render_frame};
 use qinglan_engine::paint::{DisplayList, ScrollAxis, build_display_list, wanted_images};
@@ -78,7 +78,7 @@ pub fn fetch_images(cx: &mut Ctx<'_>, layout: &LayoutResult, list: &DisplayList,
             match result {
                 Ok(resp) => {
                     let probe = probe_response(&WicDecoder, &resp);
-                    changed |= apply_probe(sizes, &nodes, &probe);
+                    changed |= apply_probe(sizes, &nodes, &probe, probe_partial(&resp));
                     if probe.is_ok() {
                         for n in &nodes {
                             store.set_url(*n, &url.serialize(true));

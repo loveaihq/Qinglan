@@ -75,6 +75,11 @@ impl Layouter<'_> {
                         n.w = Some(w);
                         n.h = Some(h);
                         n.ratio = ratio_of(w, h);
+                        // An SVG that leaves its size open: only what the file gives, the rest by CSS2 10.3.2 and the default 300 x 150.
+                        if let Some(p) = self.images.partial(bx.node) {
+                            (n.w, n.h, n.ratio) = (p.w.map(|v| f64::from(v) / d), p.h.map(|v| f64::from(v) / d), p.ratio.map(f64::from));
+                            (n.default_w, n.default_h) = (300.0, 150.0);
+                        }
                     }
                     // Not there yet: the attributes' ratio reserves the space (HTML 15.4.3).
                     _ => {

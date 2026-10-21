@@ -9,7 +9,7 @@ use qinglan_engine::layout::{LayoutOptions, LayoutResult, layout_document_with};
 use qinglan_engine::net::Response;
 use qinglan_engine::net::blocking::{self, Opened};
 use qinglan_engine::net::loader::Loader;
-use qinglan_engine::net::page::{PageResources, Update, probe_response};
+use qinglan_engine::net::page::{PageResources, Update, probe_partial, probe_response};
 use qinglan_engine::paint::decode::{DecodePool, Finished};
 use qinglan_engine::paint::images::ImageStore;
 use qinglan_engine::paint::raster::{Frame, View, render_band};
@@ -204,7 +204,8 @@ impl Page {
             Ok(resp) => match probe_response(&WicDecoder, &resp) {
                 Ok(info) => {
                     let keeps_boxes = nodes.iter().all(|&n| self.keeps_box(n, info.width, info.height));
-                    let changed = nodes.iter().fold(false, |c, &n| c | self.sizes.set_loaded(n, info.width, info.height));
+                    let partial = probe_partial(&resp);
+                    let changed = nodes.iter().fold(false, |c, &n| c | self.sizes.set_loaded(n, info.width, info.height) | self.sizes.set_partial(n, partial));
                     for n in nodes {
                         self.store.set_url(*n, &url.serialize(true));
                     }

@@ -229,6 +229,8 @@ pub struct BgRef {
     pub layer: u8,
     pub node: NodeId,
     pub nat: Option<(u32, u32)>,
+    /// Set for an SVG that leaves part of its natural size open (`nat` then holds the 300 x 150 default object size).
+    pub parts: Option<super::image::Partial>,
 }
 
 /// At most this many background images are requested per page.
@@ -556,7 +558,7 @@ impl Builder<'_> {
                 Some(ImageState::Loaded { width, height }) => Some((width, height)),
                 _ => None,
             };
-            refs.push(BgRef { layer: i.min(255) as u8, node, nat });
+            refs.push(BgRef { layer: i.min(255) as u8, node, nat, parts: self.env.images.partial(node) });
         }
         if !refs.is_empty() {
             self.bgs.insert(id, refs);

@@ -255,6 +255,14 @@ pub struct Scene {
     pub complete: bool,
 }
 
+/// What a standalone SVG leaves open of its natural size: `None` when it gives both a width and a height, else the parts it
+/// does give (css-images-3 5.3: a missing one is unknown, not 300 or 150). Bad XML: `None` (the probe reports it).
+pub fn partial(bytes: &[u8]) -> Option<crate::layout::image::Partial> {
+    let doc = xml::parse(bytes).ok()?;
+    let i = intrinsic(&doc, doc.document_element());
+    (i.w.is_none() || i.h.is_none()).then_some(crate::layout::image::Partial { w: i.w, h: i.h, ratio: i.ratio.filter(|r| *r > 0.0 && r.is_finite()) })
+}
+
 /// Header of a standalone SVG for `<img>` and backgrounds: its natural size in px.
 pub fn probe(bytes: &[u8]) -> Result<(u32, u32), ImageError> {
     let doc = xml::parse(bytes).map_err(|_| ImageError::Corrupt)?;
