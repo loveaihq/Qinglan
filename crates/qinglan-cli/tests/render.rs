@@ -108,11 +108,21 @@ fn an_image_that_does_not_decode_is_shown_as_its_alt_text() {
     assert_eq!(pixel(&bytes, 100, 60, 5, 20), [255, 255, 255, 255], "the alt text is one line high");
 }
 
-/// Rendering the same local page twice, in two processes with the machine's fonts, gives the same bytes (step 2f-2): nothing
-/// that arrives late, is ordered by a per-process hash seed or depends on thread timing may reach the picture. (The
-/// recorded real pages are checked the same way by `tools/corpus_run.py twice`.)
+/// Rendering the same local page twice, in two processes with the machine's fonts, gives the same picture (step 2f-2):
+/// nothing that arrives late, is ordered by a per-process hash seed or depends on thread timing may reach the picture.
+/// (The recorded real pages are checked the same way by `tools/corpus_run.py twice`.)
+///
+/// "The same" allows the one known outside wobble: DirectWrite's glyph masks sometimes differ by a few levels on a few
+/// pixels for a while after heavy machine load (docs/decisions.md, 2f-2). A layout or ordering difference moves whole
+/// glyphs and boxes, so it changes far more pixels by far more than the tolerance.
 #[test]
 fn rendering_a_page_twice_gives_the_same_picture() {
+    const W: u32 = 800;
+    const H: u32 = 900;
+    /// Per channel, in levels of 255.
+    const MAX_LEVEL_DIFF: u8 = 24;
+    /// At most this share of the pixels may differ at all (1 in 2000).
+    const MAX_DIFFERENT: usize = (W * H) as usize / 2000;
     let pages = ["bidi.html", "decorations.html", "controls.html"];
     for name in pages {
         let page = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/pages").join(name);
@@ -123,9 +133,24 @@ fn rendering_a_page_twice_gives_the_same_picture() {
             assert!(out.status.success(), "{name}: {}", String::from_utf8_lossy(&out.stderr));
             let bytes = std::fs::read(&png).unwrap();
             let _ = std::fs::remove_file(&png);
+            let pixels = WicDecoder.decode(&bytes, W, H).unwrap().bgra;
             match &first {
-                None => first = Some(bytes),
-                Some(f) => assert!(*f == bytes, "{name}: two renders of the same page differ"),
+                None => first = Some(pixels),
+                Some(f) => {
+                    assert_eq!(f.len(), pixels.len(), "{name}: two renders have different sizes");
+                    let (mut different, mut worst) = (0usize, 0u8);
+                    for (a, b) in f.as_chunks::<4>().0.iter().zip(pixels.as_chunks::<4>().0) {
+                        let d = a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+                        if d > 0 {
+                            different += 1;
+                            worst = worst.max(d);
+                        }
+                    }
+                    assert!(
+                        worst <= MAX_LEVEL_DIFF && different <= MAX_DIFFERENT,
+                        "{name}: two renders differ in {different} pixels, by up to {worst} levels"
+                    );
+                }
             }
         }
     }

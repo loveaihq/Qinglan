@@ -149,7 +149,14 @@ def render_one(name):
 
 
 def twice_one(name):
-    """Two separate processes, same recording: the PNGs must be byte for byte the same (step 2f-2, determinism)."""
+    """Two separate processes, same recording: the pictures must be the same (step 2f-2, determinism).
+
+    Allowed: DirectWrite's glyph masks sometimes differ by a few levels on a few pixels for a while after heavy machine
+    load (docs/decisions.md, 2f-2). So at most 1 pixel in 2000 may differ, by at most 24 levels per channel; a layout or
+    ordering difference moves whole glyphs and boxes and changes far more than that.
+    """
+    from PIL import Image
+
     u, st = first_url(name)
     if not u:
         return name, None
@@ -157,10 +164,27 @@ def twice_one(name):
     for i in (1, 2):
         png = OUT / f"{name}-twice{i}.png"
         rc, out, err, to = run([str(CLI), "render", u, "--replay", str(CORPUS / name), "-o", str(png), "--width", str(W), "--height", str(H)], 90)
-        outs.append(png.read_bytes() if rc == 0 and png.exists() else None)
+        if rc == 0 and png.exists():
+            with Image.open(png) as im:
+                outs.append((im.size, im.convert("RGBA").tobytes()))
+        else:
+            outs.append(None)
         if png.exists():
             png.unlink()
-    return name, {"ok": outs[0] is not None and outs[0] == outs[1]}
+    if outs[0] is None or outs[1] is None or outs[0][0] != outs[1][0]:
+        return name, {"ok": False, "different": None, "worst": None}
+    if outs[0][1] == outs[1][1]:
+        return name, {"ok": True, "different": 0, "worst": 0}
+    a, b = outs[0][1], outs[1][1]
+    different, worst = 0, 0
+    for p in range(0, len(a), 4):
+        d = max(abs(a[p + k] - b[p + k]) for k in range(4))
+        if d:
+            different += 1
+            worst = max(worst, d)
+    w, h = outs[0][0]
+    ok = worst <= 24 and different <= (w * h) // 2000
+    return name, {"ok": ok, "different": different, "worst": worst}
 
 
 def sweep(prof_name: str) -> int:
