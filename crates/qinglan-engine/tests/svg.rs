@@ -24,7 +24,7 @@ fn px(i: &DecodedImage, x: u32, y: u32) -> [u8; 4] {
 }
 
 fn coverage(i: &DecodedImage) -> f32 {
-    i.bgra.chunks_exact(4).map(|p| f32::from(p[3])).sum::<f32>() / 255.0
+    i.bgra.as_chunks::<4>().0.iter().map(|p| f32::from(p[3])).sum::<f32>() / 255.0
 }
 
 const RED: [u8; 4] = [0, 0, 255, 255];
@@ -198,4 +198,18 @@ fn an_svg_without_size_is_300_by_150_and_a_ratio_gives_the_height() {
     assert_eq!((f.pixel(299, 149), f.pixel(300, 100), f.pixel(100, 150)), (Some(RED), Some(WHITE), Some(WHITE)));
     let f = page("<body style='margin:0'><svg width='100' viewBox='0 0 2 1' style='display:block'><rect width='2' height='1' fill='#f00'/></svg>", 200, 100);
     assert_eq!((f.pixel(99, 49), f.pixel(99, 50)), (Some(RED), Some(WHITE)));
+}
+
+#[test]
+fn links_inside_an_inline_svg_are_found_by_their_box() {
+    use qinglan_engine::interact::PageIndex;
+    let html = "<body style='margin:0'><svg width='40' height='20' viewBox='0 0 4 2'><a href='/x'><rect x='1' width='1' height='2'/></a></svg><a href='/y'><svg width='10' height='10'></svg></a>";
+    let mut doc = parse_document(html.to_string());
+    let sopts = StyleOptions { viewport_w: 100.0, viewport_h: 100.0, ..StyleOptions::default() };
+    let styled = style_document_with(&mut doc, None, &mut NoResources, &sopts, Some(&TestPlatform as &dyn Platform));
+    let res = layout_document_with(&doc, &styled.tree, &TestPlatform, &LayoutOptions { viewport_w: 100.0, viewport_h: 100.0, ..LayoutOptions::default() }, &ImageSizes::new());
+    let index = PageIndex::new(&res);
+    let href = |x: f32, y: f32| index.link_at(&doc, &res, x, y, y).and_then(|n| doc.attr(n, doc.atoms.lookup("href").unwrap()).map(str::to_string));
+    // The rect covers x 10..20 (scale 10) of the 40 x 20 box; the second svg (x 40..50) sits inside an HTML `a`.
+    assert_eq!((href(15.0, 5.0), href(5.0, 5.0), href(30.0, 5.0), href(45.0, 15.0)), (Some("/x".to_string()), None, None, Some("/y".to_string())));
 }

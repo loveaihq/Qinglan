@@ -444,3 +444,15 @@ WPT 和表格的细节（没做的）在 `docs/decisions.md` 的 2a-2 一节。
 | vert-tategaki（縦書きWeb普及委員会，https://tategaki.github.io/；`writing-mode: vertical-rl` 的大标题、导语列、小标题，横排段落夹在其中） | 和 Edge 接近 | 竖排块在横排页里按正交流排：高度是内容或视口，列从右往左，英文和数字转 90°，全角括号和句读用竖排字形（`vert`），「」在右上角位置；剩下的差别是横排英文段落的列宽（和 Edge 不同，与竖排无关）和页首被 JS 渲染的大标题（Edge 关 JS 也只显示一部分，竖排标题在两边都出来了） | 7.0 |
 
 没有在真实网页里用到 `text-orientation`、`text-combine-upright`、竖排注音（公开网页里正文里用这几个的很少）；这些由手算快照 `tests/pages/vertical.html`、`ruby.html` 和 WPT 覆盖。
+
+## 第 2e-1 步：SVG（2026-10-21）
+
+重跑三页（`tools/corpus_run.py render` 和 `compose`，对 `tests/out/*-edge.png`，Edge 的图没有重取）：
+
+| 页 | 结论 | 说明 | 差值（越小越像） |
+|---|---|---|---|
+| gh-ripgrep（GitHub 仓库页） | 和 Edge 接近 | 网页里的 `<svg>` 图标全部出来了：顶栏的 GitHub 标志、搜索、菜单，标签栏（Code、Issues、Pull requests 等）、文件列表的文件夹和文件图标、Star/Fork/Watch 按钮、侧栏的小图标，位置和颜色和 Edge 一致；剩下的差别：README 里的徽章（`<img src=*.svg>` 的 shields.io）只有色块没有字，因为图片 SVG 里的文字没做（解码在工作线程，排版在界面线程） | 10.3 |
+| enwiki-main（英文维基首页） | 没有逐项看 | 渲染成功；本步只细看了 GitHub 页，这页只记差值（22.2），没有逐项对比 SVG 标志和图标 | 22.2 |
+| mdn-flex（MDN） | 没有逐项看 | 渲染成功；只记差值（14.5），没有逐项对比 SVG 图标 | 14.5 |
+
+文字完整度、坏图检查和上一步一样。

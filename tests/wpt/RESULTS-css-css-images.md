@@ -1,12 +1,12 @@
 # WPT `css/css-images`
 
-测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-images`，用时 1.2 秒。
+测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-images`，用时 1.0 秒。
 
-- 通过 **58 / 126**（46.0%）
+- 通过 **59 / 129**（45.7%）
 - bug 类失败：**0**
 - 跳过：无
 
-失败分类：limit (calc in gradients) 5，limit (gradient color spaces) 18，limit (relative colors, ::first-line) 1，not planned 44
+失败分类：limit (calc in gradients) 5，limit (gradient color spaces) 18，limit (image()) 2，limit (relative colors, ::first-line) 1，not planned 44
 
 ## 失败
 
@@ -15,6 +15,8 @@
 | conic-gradient-calc-angle-percentage.html | limit (calc in gradients) | calc() with infinity / calc() as a conic angle or stop position is not done; the declaration is dropped (30000 pixels differ (largest difference 255); first at (8,8): #ff0000, the reference has #00ff00) |
 | css-image-fallbacks-and-annotations.html | not planned | the image() function (colors and fallbacks as images) is not done (40000 pixels differ (largest difference 255); first at (8,48): #ff0000, the reference has #008000) |
 | css-image-fallbacks-and-annotations002.html | not planned | the image() function (colors and fallbacks as images) is not done (40000 pixels differ (largest difference 255); first at (8,48): #ff0000, the reference has #008000) |
+| css-image-fallbacks-and-annotations003.html | limit (image()) | the `image()` notation (with fallbacks) is not implemented (40000 pixels differ (largest difference 255); first at (8,48): #ff0000, the reference has #008000) |
+| css-image-fallbacks-and-annotations004.html | limit (image()) | the `image()` notation (with fallbacks) is not implemented (40000 pixels differ (largest difference 255); first at (8,48): #ff0000, the reference has #008000) |
 | css-image-fallbacks-and-annotations005.html | not planned | the image() function (colors and fallbacks as images) is not done (48320 pixels differ (largest difference 255); first at (536,16): #ffffff, the reference has #000000) |
 | gradient/conic-gradient-001.html | limit (calc in gradients) | calc() with infinity / calc() as a conic angle or stop position is not done; the declaration is dropped (56172 pixels differ (largest difference 255); first at (178,48): #ff0000, the reference has #00ff00) |
 | gradient/display-p3-linear-gradient.html | limit (gradient color spaces) | gradients interpolate in premultiplied sRGB only; `in <color-space>` is parsed and ignored (decisions.md 2c-1) (23900 pixels differ (largest difference 74); first at (9,8): #fe0100, the reference has #ff0700) |
@@ -138,6 +140,7 @@
 - object-view-box-same-size.html
 - out-of-range-color-stop-conic.html
 - repeating-conic-gradient.html
+- svg-images-are-ignored.html
 - tiled-conic-gradients.html
 - tiled-gradients.html
 - tiled-radial-gradients.html

@@ -97,6 +97,11 @@ impl Layouter<'_> {
             Some(ReplacedKind::Svg) => {
                 let i = crate::svg::intrinsic(self.doc, bx.node);
                 (n.w, n.h, n.ratio) = (i.w.map(f64::from), i.h.map(f64::from), i.ratio.map(f64::from));
+                // The root of a standalone SVG document is as big as the window unless it says otherwise (SVG 2 struct 5.? "100%").
+                if bx.node == self.doc.document_element() {
+                    n.w = n.w.or(Some(f64::from(self.viewport.0.to_f32())));
+                    n.h = n.h.or(Some(f64::from(self.viewport.1.to_f32())));
+                }
             }
             Some(ReplacedKind::Check) => {
                 n.w = Some(13.0);

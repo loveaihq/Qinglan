@@ -203,16 +203,19 @@ fn scan(text: String) -> TestInfo {
     let mut info = TestInfo::default();
     for id in 0..doc.nodes.len() as NodeId {
         let Some(e) = doc.element(id) else { continue };
-        if e.name == a::SCRIPT {
+        // The XML tests write `<html:link>` / `<h:meta>` inside the SVG.
+        let full = doc.atoms.get(e.name);
+        let local = full.rsplit(':').next().unwrap_or(full);
+        if local == "script" {
             info.script = true;
-        } else if e.name == a::LINK {
+        } else if local == "link" {
             let rel = attr_of(&doc, id, "rel").unwrap_or_default().to_ascii_lowercase();
             if (rel == "match" || rel == "mismatch")
                 && let Some(href) = attr_of(&doc, id, "href")
             {
                 info.refs.push((rel == "match", href));
             }
-        } else if e.name == a::META && attr_of(&doc, id, "name").is_some_and(|n| n == "fuzzy") {
+        } else if local == "meta" && attr_of(&doc, id, "name").is_some_and(|n| n == "fuzzy") {
             info.fuzzy = attr_of(&doc, id, "content").and_then(|c| parse_fuzzy(&c));
         } else if e.name == a::HTML {
             let class = attr_of(&doc, id, "class").unwrap_or_default();
@@ -430,8 +433,14 @@ fn classify(src: &str) -> Option<(&'static str, &'static str)> {
     if has(&["<rtc", "ruby-align", "ruby-merge", "ruby-overhang"]) {
         return Some(("2d", "complex ruby (rtc, ruby-align, overhang)"));
     }
-    if has(&["<svg", "position:sticky", "overflow:auto", "overflow:scroll", "<input", "<button", "<select", "<textarea"]) {
-        return Some(("2e", "svg, scrolling, sticky or form controls"));
+    if has(&["<filter", "<mask", "<pattern", "<marker", "<foreignobject", "<animate", "<image", "mask:", "filter:", "marker-", "vector-effect", "paint-order"]) {
+        return Some(("none", "SVG filters, masks, patterns, markers, images, foreignObject, animation (not done in 2e-1)"));
+    }
+    if has(&["<text", "<tspan", "textpath"]) {
+        return Some(("2e", "SVG text beyond the simple subset"));
+    }
+    if has(&["position:sticky", "overflow:auto", "overflow:scroll", "<input", "<button", "<select", "<textarea"]) {
+        return Some(("2e", "scrolling, sticky or form controls (2e-2)"));
     }
     // `columns:` as a property of its own, not the end of `grid-template-columns:`.
     let columns = s.match_indices("columns:").any(|(i, _)| s[..i].chars().next_back().is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '-')));
@@ -462,13 +471,13 @@ fn walk(dir: &Path, rel: &str, out: &mut Vec<String>) {
         let path = e.path();
         let child = format!("{rel}/{name}");
         if path.is_dir() {
-            if !matches!(name.as_str(), "support" | "reference" | "references" | "crashtests" | "resources" | "reftests" | "tools") {
+            if !matches!(name.as_str(), "support" | "reference" | "references" | "crashtests" | "resources" | "tools") && (name != "reftests" || rel.starts_with("svg/")) {
                 walk(&path, &child, out);
             }
             continue;
         }
         let lower = name.to_ascii_lowercase();
-        let page = [".html", ".htm", ".xht", ".xhtml"].iter().any(|x| lower.ends_with(x));
+        let page = [".html", ".htm", ".xht", ".xhtml", ".svg"].iter().any(|x| lower.ends_with(x));
         let is_ref = ["-ref.", "-ref2.", "-ref3.", "-notref.", "-notref2.", "_ref.", "-ref-"].iter().any(|x| lower.contains(x));
         if page && !is_ref {
             out.push(child);

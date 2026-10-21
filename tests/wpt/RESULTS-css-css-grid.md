@@ -1,100 +1,110 @@
 # WPT `css/css-grid`
 
-测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-grid`，用时 10.0 秒。
-2026-10-19：删掉了 `grid-lanes`（瀑布流，不打算做）的 860 个测试，其中 102 个是碰巧通过（测试页和参考页都退成同样的样子，不说明我们做对了什么）。下面的分类计数是删除前的，没有重算。
+测试平台（每个字 1em 见方），800×600，`qinglan-cli wpt css/css-grid`，用时 6.3 秒。
 
-- 通过 **462 / 713**（不算已删除的 `grid-lanes`）
-- bug 类失败：**71**
+- 通过 **440 / 713**（61.7%）
+- bug 类失败：**160**
 - 跳过：no reftest 6
 
-失败分类：bug (open) 71，limit (not supported) 4，limit (placeholder boxes) 19，not planned 836，step 2c 7，step 2d 62，step 2e 10
+失败分类：bug 66，bug (flex/grid with vertical writing) 23，bug (open) 71，limit (not supported) 4，limit (placeholder boxes) 19，limit (replaced stretch) 1，not planned 81，step 2d-2b (vertical writing modes) 2，step 2e 6
 
 ## 失败
 
 | 测试 | 类别 | 说明 |
 |---|---|---|
-| abspos/descendant-static-position-001.html | bug (open) | out-of-flow children of a grid container (css-grid-1 9): the grid area as containing block and the static position inside it are done; this test differs for a reason that was not analysed one by one (6711 pixels differ (largest difference 255); first at (12,31): #008000, the reference has #ffffff) |
-| abspos/descendant-static-position-002.html | step 2d | uses text features (5774 pixels differ (largest difference 255); first at (32,31): #808080, the reference has #ffffff) |
-| abspos/descendant-static-position-003.html | bug (open) | out-of-flow children of a grid container (css-grid-1 9): the grid area as containing block and the static position inside it are done; this test differs for a reason that was not analysed one by one (1088 pixels differ (largest difference 255); first at (72,31): #008000, the reference has #ffffff) |
-| abspos/descendant-static-position-004.html | step 2d | uses text features (6882 pixels differ (largest difference 255); first at (82,31): #808080, the reference has #ffffff) |
-| abspos/grid-abspos-staticpos-align-self-rtl-001.html | step 2d | uses text features (1872 pixels differ (largest difference 255); first at (16,12): #008080, the reference has #ffff00) |
-| abspos/grid-abspos-staticpos-align-self-rtl-002.html | step 2d | uses text features (1872 pixels differ (largest difference 255); first at (16,12): #008080, the reference has #ffff00) |
-| abspos/grid-abspos-staticpos-align-self-rtl-003.html | step 2d | uses text features (1872 pixels differ (largest difference 255); first at (11,10): #008080, the reference has #ffff00) |
-| abspos/grid-abspos-staticpos-align-self-rtl-004.html | step 2d | uses text features (1872 pixels differ (largest difference 255); first at (11,10): #008080, the reference has #ffff00) |
-| abspos/grid-abspos-staticpos-align-self-rtl-last-baseline-001.html | step 2d | uses text features (144 pixels differ (largest difference 255); first at (37,6): #ffffff, the reference has #008080) |
-| abspos/grid-abspos-staticpos-align-self-rtl-last-baseline-002.html | step 2d | uses text features (144 pixels differ (largest difference 255); first at (37,6): #ffffff, the reference has #008080) |
-| abspos/grid-abspos-staticpos-align-self-rtl-last-baseline-003.html | step 2d | uses text features (144 pixels differ (largest difference 255); first at (40,6): #ffffff, the reference has #008080) |
-| abspos/grid-abspos-staticpos-align-self-rtl-last-baseline-004.html | step 2d | uses text features (144 pixels differ (largest difference 255); first at (40,6): #ffffff, the reference has #008080) |
-| abspos/grid-abspos-staticpos-align-self-safe-001.html | step 2d | uses text features (2594 pixels differ (largest difference 255); first at (77,4): #008080, the reference has #ffffff) |
-| abspos/grid-abspos-staticpos-align-self-safe-outer-cb-001.tentative.html | step 2d | uses text features (4432 pixels differ (largest difference 255); first at (0,9): #008080, the reference has #ffffff) |
-| abspos/grid-abspos-staticpos-align-self-safe-outer-cb-003.tentative.html | step 2d | uses text features (1020 pixels differ (largest difference 255); first at (31,9): #008080, the reference has #0000ff) |
-| abspos/grid-abspos-staticpos-align-self-vertWM-001.html | step 2d | uses text features (2492 pixels differ (largest difference 255); first at (13,13): #008080, the reference has #ffff00) |
-| abspos/grid-abspos-staticpos-align-self-vertWM-002.html | step 2d | uses text features (2448 pixels differ (largest difference 255); first at (13,13): #008080, the reference has #ffff00) |
-| abspos/grid-abspos-staticpos-align-self-vertWM-003.html | step 2d | uses text features (2016 pixels differ (largest difference 255); first at (10,11): #008080, the reference has #ffff00) |
-| abspos/grid-abspos-staticpos-align-self-vertWM-004.html | step 2d | uses text features (1888 pixels differ (largest difference 255); first at (10,11): #008080, the reference has #ffff00) |
-| abspos/grid-abspos-staticpos-align-self-vertWM-last-baseline-001.html | step 2d | uses text features (192 pixels differ (largest difference 255); first at (52,5): #008080, the reference has #ffffff) |
-| abspos/grid-abspos-staticpos-align-self-vertWM-last-baseline-002.html | step 2d | uses text features (192 pixels differ (largest difference 255); first at (52,5): #008080, the reference has #ffffff) |
-| abspos/grid-abspos-staticpos-align-self-vertWM-last-baseline-003.html | step 2d | uses text features (144 pixels differ (largest difference 255); first at (49,7): #008080, the reference has #ffffff) |
-| abspos/grid-abspos-staticpos-align-self-vertWM-last-baseline-004.html | step 2d | uses text features (144 pixels differ (largest difference 255); first at (49,7): #008080, the reference has #ffffff) |
-| abspos/grid-abspos-staticpos-justify-self-rtl-001.html | step 2d | uses text features (480 pixels differ (largest difference 255); first at (18,14): #008080, the reference has #ffff00) |
-| abspos/grid-abspos-staticpos-justify-self-rtl-002.html | step 2d | uses text features (800 pixels differ (largest difference 255); first at (18,14): #008080, the reference has #ffff00) |
-| abspos/grid-abspos-staticpos-justify-self-rtl-003.html | step 2d | uses text features (480 pixels differ (largest difference 255); first at (10,11): #008080, the reference has #ffff00) |
-| abspos/grid-abspos-staticpos-justify-self-rtl-004.html | step 2d | uses text features (800 pixels differ (largest difference 255); first at (10,11): #008080, the reference has #ffff00) |
-| abspos/grid-abspos-staticpos-justify-self-vertWM-001.html | step 2d | uses text features (2440 pixels differ (largest difference 255); first at (22,12): #ffff00, the reference has #008080) |
-| abspos/grid-abspos-staticpos-justify-self-vertWM-002.html | step 2d | uses text features (2440 pixels differ (largest difference 255); first at (22,12): #ffff00, the reference has #008080) |
-| abspos/grid-abspos-staticpos-justify-self-vertWM-003.html | step 2d | uses text features (1936 pixels differ (largest difference 255); first at (11,10): #008080, the reference has #ffff00) |
-| abspos/grid-abspos-staticpos-justify-self-vertWM-004.html | step 2d | uses text features (1936 pixels differ (largest difference 255); first at (11,10): #008080, the reference has #ffff00) |
-| abspos/grid-abspos-staticpos-justify-self-vertWM-last-baseline-001.html | step 2d | uses text features (192 pixels differ (largest difference 255); first at (37,6): #ffffff, the reference has #008080) |
-| abspos/grid-abspos-staticpos-justify-self-vertWM-last-baseline-002.html | step 2d | uses text features (192 pixels differ (largest difference 255); first at (37,6): #ffffff, the reference has #008080) |
-| abspos/grid-abspos-staticpos-justify-self-vertWM-last-baseline-003.html | step 2d | uses text features (160 pixels differ (largest difference 255); first at (40,6): #ffffff, the reference has #008080) |
-| abspos/grid-abspos-staticpos-justify-self-vertWM-last-baseline-004.html | step 2d | uses text features (160 pixels differ (largest difference 255); first at (40,6): #ffffff, the reference has #008080) |
+| abspos/descendant-static-position-001.html | bug (open) | out-of-flow children of a grid container (css-grid-1 9): the grid area as containing block and the static position inside it are done; this test differs for a reason that was not analysed one by one (6581 pixels differ (largest difference 255); first at (12,31): #008000, the reference has #ffffff) |
+| abspos/descendant-static-position-002.html | bug | 15064 pixels differ (largest difference 255); first at (12,31): #008000, the reference has #ffffff |
+| abspos/descendant-static-position-003.html | bug (open) | out-of-flow children of a grid container (css-grid-1 9): the grid area as containing block and the static position inside it are done; this test differs for a reason that was not analysed one by one (808 pixels differ (largest difference 255); first at (72,31): #008000, the reference has #ffffff) |
+| abspos/descendant-static-position-004.html | bug | 15750 pixels differ (largest difference 255); first at (51,31): #ff0000, the reference has #ffffff |
+| abspos/grid-abspos-staticpos-align-self-rtl-001.html | bug | 1872 pixels differ (largest difference 255); first at (16,12): #008080, the reference has #ffff00 |
+| abspos/grid-abspos-staticpos-align-self-rtl-002.html | bug | 1872 pixels differ (largest difference 255); first at (16,12): #008080, the reference has #ffff00 |
+| abspos/grid-abspos-staticpos-align-self-rtl-003.html | bug | 1872 pixels differ (largest difference 255); first at (11,10): #008080, the reference has #ffff00 |
+| abspos/grid-abspos-staticpos-align-self-rtl-004.html | bug | 1872 pixels differ (largest difference 255); first at (11,10): #008080, the reference has #ffff00 |
+| abspos/grid-abspos-staticpos-align-self-rtl-last-baseline-001.html | bug | 144 pixels differ (largest difference 255); first at (37,6): #ffffff, the reference has #008080 |
+| abspos/grid-abspos-staticpos-align-self-rtl-last-baseline-002.html | bug | 144 pixels differ (largest difference 255); first at (37,6): #ffffff, the reference has #008080 |
+| abspos/grid-abspos-staticpos-align-self-rtl-last-baseline-003.html | bug | 144 pixels differ (largest difference 255); first at (40,6): #ffffff, the reference has #008080 |
+| abspos/grid-abspos-staticpos-align-self-rtl-last-baseline-004.html | bug | 144 pixels differ (largest difference 255); first at (40,6): #ffffff, the reference has #008080 |
+| abspos/grid-abspos-staticpos-align-self-safe-001.html | bug | 2594 pixels differ (largest difference 255); first at (77,4): #008080, the reference has #ffffff |
+| abspos/grid-abspos-staticpos-align-self-safe-outer-cb-001.tentative.html | bug | 2070 pixels differ (largest difference 255); first at (152,6): #ffffff, the reference has #008080 |
+| abspos/grid-abspos-staticpos-align-self-safe-outer-cb-003.tentative.html | bug | 1110 pixels differ (largest difference 255); first at (192,6): #ffffff, the reference has #008080 |
+| abspos/grid-abspos-staticpos-align-self-vertWM-001.html | bug | 2492 pixels differ (largest difference 255); first at (13,13): #008080, the reference has #ffff00 |
+| abspos/grid-abspos-staticpos-align-self-vertWM-002.html | bug | 2448 pixels differ (largest difference 255); first at (13,13): #008080, the reference has #ffff00 |
+| abspos/grid-abspos-staticpos-align-self-vertWM-003.html | bug | 2016 pixels differ (largest difference 255); first at (10,11): #008080, the reference has #ffff00 |
+| abspos/grid-abspos-staticpos-align-self-vertWM-004.html | bug | 1888 pixels differ (largest difference 255); first at (10,11): #008080, the reference has #ffff00 |
+| abspos/grid-abspos-staticpos-align-self-vertWM-last-baseline-001.html | bug | 192 pixels differ (largest difference 255); first at (52,5): #008080, the reference has #ffffff |
+| abspos/grid-abspos-staticpos-align-self-vertWM-last-baseline-002.html | bug | 192 pixels differ (largest difference 255); first at (52,5): #008080, the reference has #ffffff |
+| abspos/grid-abspos-staticpos-align-self-vertWM-last-baseline-003.html | bug | 144 pixels differ (largest difference 255); first at (49,7): #008080, the reference has #ffffff |
+| abspos/grid-abspos-staticpos-align-self-vertWM-last-baseline-004.html | bug | 144 pixels differ (largest difference 255); first at (49,7): #008080, the reference has #ffffff |
+| abspos/grid-abspos-staticpos-justify-self-rtl-001.html | bug | 480 pixels differ (largest difference 255); first at (18,14): #008080, the reference has #ffff00 |
+| abspos/grid-abspos-staticpos-justify-self-rtl-002.html | bug | 800 pixels differ (largest difference 255); first at (18,14): #008080, the reference has #ffff00 |
+| abspos/grid-abspos-staticpos-justify-self-rtl-003.html | bug | 480 pixels differ (largest difference 255); first at (10,11): #008080, the reference has #ffff00 |
+| abspos/grid-abspos-staticpos-justify-self-rtl-004.html | bug | 800 pixels differ (largest difference 255); first at (10,11): #008080, the reference has #ffff00 |
+| abspos/grid-abspos-staticpos-justify-self-vertWM-001.html | bug | 2440 pixels differ (largest difference 255); first at (22,12): #ffff00, the reference has #008080 |
+| abspos/grid-abspos-staticpos-justify-self-vertWM-002.html | bug | 2440 pixels differ (largest difference 255); first at (22,12): #ffff00, the reference has #008080 |
+| abspos/grid-abspos-staticpos-justify-self-vertWM-003.html | bug | 1936 pixels differ (largest difference 255); first at (11,10): #008080, the reference has #ffff00 |
+| abspos/grid-abspos-staticpos-justify-self-vertWM-004.html | bug | 1936 pixels differ (largest difference 255); first at (11,10): #008080, the reference has #ffff00 |
+| abspos/grid-abspos-staticpos-justify-self-vertWM-last-baseline-001.html | bug | 192 pixels differ (largest difference 255); first at (37,6): #ffffff, the reference has #008080 |
+| abspos/grid-abspos-staticpos-justify-self-vertWM-last-baseline-002.html | bug | 192 pixels differ (largest difference 255); first at (37,6): #ffffff, the reference has #008080 |
+| abspos/grid-abspos-staticpos-justify-self-vertWM-last-baseline-003.html | bug | 160 pixels differ (largest difference 255); first at (40,6): #ffffff, the reference has #008080 |
+| abspos/grid-abspos-staticpos-justify-self-vertWM-last-baseline-004.html | bug | 160 pixels differ (largest difference 255); first at (40,6): #ffffff, the reference has #008080 |
 | abspos/grid-paint-positioned-children-001.html | bug (open) | out-of-flow children of a grid container (css-grid-1 9): the grid area as containing block and the static position inside it are done; this test differs for a reason that was not analysed one by one (1000 pixels differ (largest difference 255); first at (10,114): #808080, the reference has #800080) |
-| abspos/grid-positioned-children-writing-modes-001.html | step 2d | uses text features (8800 pixels differ (largest difference 128); first at (243,111): #008000, the reference has #808080) |
+| abspos/grid-positioned-children-writing-modes-001.html | bug | 8000 pixels differ (largest difference 128); first at (223,111): #008000, the reference has #808080 |
 | abspos/grid-positioned-items-background-rtl-001.html | bug (open) | out-of-flow children of a grid container (css-grid-1 9): the grid area as containing block and the static position inside it are done; this test differs for a reason that was not analysed one by one (3000 pixels differ (largest difference 255); first at (458,179): #008000, the reference has #ffffff) |
-| abspos/positioned-grid-descendant-containing-block-009.html | step 2c | uses painting effects (4400 pixels differ (largest difference 255); first at (128,116): #008000, the reference has #ffffff) |
-| abspos/positioned-grid-descendant-containing-block-010.html | step 2c | uses painting effects (38400 pixels differ (largest difference 255); first at (128,116): #008000, the reference has #ffffff) |
-| abspos/positioned-grid-descendant-containing-block-013.html | step 2c | uses painting effects (38400 pixels differ (largest difference 255); first at (128,116): #008000, the reference has #ffffff) |
+| abspos/orthogonal-positioned-grid-items-005.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (32000 pixels differ (largest difference 255); first at (191,93): #ffffff, the reference has #000000) |
+| abspos/orthogonal-positioned-grid-items-010.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (109000 pixels differ (largest difference 255); first at (55,93): #ff00ff, the reference has #ffffff) |
+| abspos/orthogonal-positioned-grid-items-012.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (32000 pixels differ (largest difference 255); first at (186,93): #ffffff, the reference has #000000) |
+| abspos/orthogonal-positioned-grid-items-014.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (1568 pixels differ (largest difference 255); first at (23,243): #ff00ff, the reference has #ffffff) |
+| abspos/orthogonal-positioned-grid-items-015.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (4096 pixels differ (largest difference 255); first at (23,73): #000000, the reference has #ffffff) |
+| abspos/orthogonal-positioned-grid-items-016.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (3008 pixels differ (largest difference 255); first at (23,223): #ff00ff, the reference has #ffffff) |
+| abspos/orthogonal-positioned-grid-items-017.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (3008 pixels differ (largest difference 255); first at (33,223): #ff00ff, the reference has #ffffff) |
+| abspos/positioned-grid-descendant-containing-block-009.html | bug | 4681 pixels differ (largest difference 255); first at (129,115): #0000ff, the reference has #ff0000 |
+| abspos/positioned-grid-descendant-containing-block-010.html | bug | 39081 pixels differ (largest difference 255); first at (129,115): #0000ff, the reference has #ff0000 |
+| abspos/positioned-grid-descendant-containing-block-013.html | bug | 39081 pixels differ (largest difference 255); first at (129,115): #0000ff, the reference has #ff0000 |
 | abspos/positioned-grid-descendant-containing-block-014.html | bug (open) | out-of-flow children of a grid container (css-grid-1 9): the grid area as containing block and the static position inside it are done; this test differs for a reason that was not analysed one by one (10000 pixels differ (largest difference 255); first at (8,148): #008000, the reference has #ffffff) |
 | abspos/positioned-grid-descendant-containing-block-015.html | bug (open) | out-of-flow children of a grid container (css-grid-1 9): the grid area as containing block and the static position inside it are done; this test differs for a reason that was not analysed one by one (10000 pixels differ (largest difference 255); first at (108,48): #008000, the reference has #ffffff) |
 | abspos/positioned-grid-descendants-017.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (8125 pixels differ (largest difference 255); first at (8,48): #008000, the reference has #ff69b4) |
 | abspos/positioned-grid-items-023.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (625 pixels differ (largest difference 255); first at (58,98): #008000, the reference has #ff0000) |
+| abspos/positioned-grid-items-sizing-001.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (19600 pixels differ (largest difference 255); first at (70,210): #000000, the reference has #808080) |
 | alignment/grid-align-baseline-005.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (1016 pixels differ (largest difference 118); first at (8,64): #767676, the reference has #008000) |
 | alignment/grid-align-baseline-explicit-placement.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (2000 pixels differ (largest difference 255); first at (8,80): #008000, the reference has #ffffff) |
 | alignment/grid-baseline-align-001.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (5272 pixels differ (largest difference 255); first at (13,71): #000000, the reference has #ffffff) |
-| alignment/grid-baseline-justify-001.html | step 2d | uses text features (33744 pixels differ (largest difference 255); first at (76,68): #ffffff, the reference has #c0c0c0) |
+| alignment/grid-baseline-align-cycles-001.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (25992 pixels differ (largest difference 255); first at (39,84): #ffffff, the reference has #c0c0c0) |
+| alignment/grid-baseline-justify-001.html | bug | 30868 pixels differ (largest difference 255); first at (36,68): #ffffff, the reference has #c0c0c0 |
 | alignment/grid-gutters-009.html | bug (open) | percentage `gap` whose basis is indefinite (shrink-to-fit inline grid, auto height): it is 0 while the tracks are sized and resolved against the used size afterwards (css-align-3 8.3); the order of the steps differs from the browsers (18180 pixels differ (largest difference 255); first at (8,170): #c0c0c0, the reference has #008000) |
 | alignment/grid-gutters-010.html | bug (open) | percentage `gap` whose basis is indefinite (shrink-to-fit inline grid, auto height): it is 0 while the tracks are sized and resolved against the used size afterwards (css-align-3 8.3); the order of the steps differs from the browsers (18180 pixels differ (largest difference 255); first at (8,170): #c0c0c0, the reference has #008000) |
-| alignment/grid-gutters-014.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (2550 pixels differ (largest difference 255); first at (28,113): #00ffff, the reference has #ffffff) |
+| alignment/grid-gutters-014.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (2520 pixels differ (largest difference 255); first at (28,113): #00ffff, the reference has #ffffff) |
 | alignment/grid-gutters-015.html | bug (open) | percentage `gap` whose basis is indefinite (shrink-to-fit inline grid, auto height): it is 0 while the tracks are sized and resolved against the used size afterwards (css-align-3 8.3); the order of the steps differs from the browsers (2560 pixels differ (largest difference 255); first at (21,61): #008000, the reference has #ffffff) |
 | alignment/grid-gutters-016.html | bug (open) | percentage `gap` whose basis is indefinite (shrink-to-fit inline grid, auto height): it is 0 while the tracks are sized and resolved against the used size afterwards (css-align-3 8.3); the order of the steps differs from the browsers (4480 pixels differ (largest difference 255); first at (21,61): #008000, the reference has #ffffff) |
-| alignment/grid-item-content-baseline-001.html | step 2d | uses text features (179251 pixels differ (largest difference 255); first at (5,5): #000000, the reference has #00ff00) |
-| alignment/grid-item-content-baseline-002.html | step 2d | uses text features (92528 pixels differ (largest difference 255); first at (5,5): #000000, the reference has #00ff00) |
-| alignment/grid-item-content-baseline-003.html | step 2d | uses text features (177350 pixels differ (largest difference 255); first at (221,1): #ffffff, the reference has #000000) |
-| alignment/grid-item-content-baseline-004.html | step 2d | uses text features (177350 pixels differ (largest difference 255); first at (221,1): #ffffff, the reference has #000000) |
-| alignment/grid-item-mixed-baseline-001.html | step 2d | uses text features (13240 pixels differ (largest difference 255); first at (36,4): #000000, the reference has #00ff00) |
-| alignment/grid-item-mixed-baseline-002.html | step 2d | uses text features (13240 pixels differ (largest difference 255); first at (36,4): #000000, the reference has #00ff00) |
-| alignment/grid-item-mixed-baseline-003.html | step 2d | uses text features (13240 pixels differ (largest difference 255); first at (36,4): #000000, the reference has #00ff00) |
-| alignment/grid-item-mixed-baseline-004.html | step 2d | uses text features (4308 pixels differ (largest difference 255); first at (3,105): #000000, the reference has #ffffff) |
-| alignment/grid-item-self-baseline-001.html | step 2d | uses text features (51553 pixels differ (largest difference 255); first at (4,4): #000000, the reference has #ffffff) |
-| alignment/grid-justify-baseline-001.html | step 2d | uses text features (1280 pixels differ (largest difference 128); first at (8,44): #808080, the reference has #000000) |
-| alignment/grid-self-alignment-stretch-input-range.html | step 2e | uses svg, scrolling, sticky or form controls (91924 pixels differ (largest difference 137); first at (138,9): #ffffff, the reference has #767676) |
+| alignment/grid-inline-baseline.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (5632 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #000000) |
+| alignment/grid-item-content-baseline-001.html | bug | 23607 pixels differ (largest difference 255); first at (5,5): #000000, the reference has #00ff00 |
+| alignment/grid-item-content-baseline-002.html | bug | 114936 pixels differ (largest difference 255); first at (5,5): #000000, the reference has #00ff00 |
+| alignment/grid-item-content-baseline-003.html | bug | 92645 pixels differ (largest difference 255); first at (161,1): #ffffff, the reference has #000000 |
+| alignment/grid-item-content-baseline-004.html | bug | 98953 pixels differ (largest difference 255); first at (161,1): #ffffff, the reference has #000000 |
+| alignment/grid-item-mixed-baseline-001.html | bug | 10605 pixels differ (largest difference 255); first at (36,4): #000000, the reference has #00ff00 |
+| alignment/grid-item-mixed-baseline-002.html | bug | 10293 pixels differ (largest difference 255); first at (36,4): #000000, the reference has #00ff00 |
+| alignment/grid-item-mixed-baseline-003.html | bug | 10293 pixels differ (largest difference 255); first at (36,4): #000000, the reference has #00ff00 |
+| alignment/grid-item-mixed-baseline-004.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (4308 pixels differ (largest difference 255); first at (3,105): #000000, the reference has #ffffff) |
+| alignment/grid-item-no-aspect-ratio-stretch-1.html | limit (replaced stretch) | an inline `<svg>` without viewBox is a replaced box of 300 x 150; a grid item that is replaced and has no aspect ratio should stretch with align/justify normal or stretch (css-grid-1 6.2), the grid code does not stretch replaced items; passed before 2e-1 only because `svg` was ignored (80000 pixels differ (largest difference 128); first at (318,18): #800080, the reference has #008000) |
+| alignment/grid-item-self-baseline-001.html | bug | 86818 pixels differ (largest difference 255); first at (215,1): #ffffff, the reference has #000000 |
+| alignment/grid-justify-baseline-001.html | bug | 7200 pixels differ (largest difference 255); first at (8,56): #808080, the reference has #000000 |
+| alignment/grid-self-alignment-stretch-input-range.html | step 2e | uses scrolling, sticky or form controls (2e-2) (91924 pixels differ (largest difference 137); first at (138,9): #ffffff, the reference has #767676) |
 | alignment/replaced-alignment-with-aspect-ratio-001.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (9961 pixels differ (largest difference 255); first at (8,64): #767676, the reference has #008000) |
 | alignment/replaced-alignment-with-aspect-ratio-002.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (9961 pixels differ (largest difference 255); first at (8,64): #767676, the reference has #008000) |
 | alignment/replaced-alignment-with-aspect-ratio-003.tentative.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (9931 pixels differ (largest difference 255); first at (8,64): #767676, the reference has #008000) |
 | alignment/replaced-alignment-with-aspect-ratio-004.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (8750 pixels differ (largest difference 255); first at (33,64): #ff0000, the reference has #008000) |
-| alignment/replaced-alignment-with-aspect-ratio-005.html | step 2d | uses text features (8750 pixels differ (largest difference 255); first at (33,64): #ff0000, the reference has #008000) |
+| alignment/replaced-alignment-with-aspect-ratio-005.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (8750 pixels differ (largest difference 255); first at (33,64): #ff0000, the reference has #008000) |
 | alignment/replaced-alignment-with-aspect-ratio-006.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (7500 pixels differ (largest difference 255); first at (58,64): #ff0000, the reference has #008000) |
 | alignment/replaced-alignment-with-aspect-ratio-007.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (7500 pixels differ (largest difference 255); first at (58,64): #ff0000, the reference has #008000) |
 | alignment/replaced-alignment-with-aspect-ratio-008.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (7500 pixels differ (largest difference 255); first at (58,64): #ff0000, the reference has #008000) |
 | alignment/replaced-alignment-with-aspect-ratio-009.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (7500 pixels differ (largest difference 255); first at (58,64): #ff0000, the reference has #008000) |
-| alignment/self-baseline/grid-self-baseline-001.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (205378 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-002-b.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (21342 pixels differ (largest difference 128); first at (17,79): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-002.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (163643 pixels differ (largest difference 255); first at (180,69): #808080, the reference has #ffffff) |
-| alignment/self-baseline/grid-self-baseline-003.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (174113 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-004.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (122349 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-005.html | step 2d | uses text features (201128 pixels differ (largest difference 255); first at (445,53): #ffffff, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-006.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (110229 pixels differ (largest difference 255); first at (325,53): #ffffff, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-007.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (158141 pixels differ (largest difference 255); first at (450,53): #ffffff, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-001.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (233905 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-002-b.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (37052 pixels differ (largest difference 255); first at (17,79): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-002.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (173112 pixels differ (largest difference 255); first at (180,69): #808080, the reference has #ffffff) |
+| alignment/self-baseline/grid-self-baseline-003.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (68547 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-004.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (170433 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-005.html | bug | 174283 pixels differ (largest difference 255); first at (445,53): #ffffff, the reference has #808080 |
+| alignment/self-baseline/grid-self-baseline-006.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (163184 pixels differ (largest difference 255); first at (5,53): #808080, the reference has #ffffff) |
+| alignment/self-baseline/grid-self-baseline-007.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (184229 pixels differ (largest difference 255); first at (450,53): #ffffff, the reference has #808080) |
 | alignment/self-baseline/grid-self-baseline-008.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (48064 pixels differ (largest difference 255); first at (8,8): #767676, the reference has #008000) |
 | alignment/self-baseline/grid-self-baseline-changes-grid-area-size-001.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (400 pixels differ (largest difference 255); first at (28,84): #ff0000, the reference has #008000) |
 | alignment/self-baseline/grid-self-baseline-changes-grid-area-size-002.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (350 pixels differ (largest difference 255); first at (58,81): #ff0000, the reference has #008000) |
@@ -102,41 +112,46 @@
 | alignment/self-baseline/grid-self-baseline-changes-grid-area-size-004.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (400 pixels differ (largest difference 255); first at (28,84): #ff0000, the reference has #008000) |
 | alignment/self-baseline/grid-self-baseline-changes-grid-area-size-005.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (560 pixels differ (largest difference 255); first at (28,84): #ff0000, the reference has #008000) |
 | alignment/self-baseline/grid-self-baseline-changes-grid-area-size-006.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (520 pixels differ (largest difference 255); first at (58,88): #ff0000, the reference has #008000) |
-| alignment/self-baseline/grid-self-baseline-changes-grid-area-size-007.html | step 2d | uses text features (550 pixels differ (largest difference 255); first at (28,64): #ff0000, the reference has #008000) |
-| alignment/self-baseline/grid-self-baseline-changes-grid-area-size-008.html | step 2d | uses text features (1210 pixels differ (largest difference 255); first at (31,64): #ff0000, the reference has #008000) |
-| alignment/self-baseline/grid-self-baseline-changes-grid-area-size-009.html | step 2d | uses text features (500 pixels differ (largest difference 255); first at (48,74): #ff0000, the reference has #008000) |
-| alignment/self-baseline/grid-self-baseline-changes-grid-area-size-010.html | step 2d | uses text features (1200 pixels differ (largest difference 255); first at (13,64): #ff0000, the reference has #008000) |
-| alignment/self-baseline/grid-self-baseline-changes-grid-area-size-011.html | step 2d | uses text features (1200 pixels differ (largest difference 255); first at (13,64): #ff0000, the reference has #008000) |
-| alignment/self-baseline/grid-self-baseline-changes-grid-area-size-012.html | step 2d | uses text features (500 pixels differ (largest difference 255); first at (48,74): #ff0000, the reference has #008000) |
+| alignment/self-baseline/grid-self-baseline-changes-grid-area-size-007.html | bug | 500 pixels differ (largest difference 255); first at (38,64): #ff0000, the reference has #008000 |
+| alignment/self-baseline/grid-self-baseline-changes-grid-area-size-008.html | bug | 850 pixels differ (largest difference 255); first at (31,64): #ff0000, the reference has #008000 |
+| alignment/self-baseline/grid-self-baseline-changes-grid-area-size-009.html | bug | 400 pixels differ (largest difference 255); first at (58,64): #ff0000, the reference has #008000 |
+| alignment/self-baseline/grid-self-baseline-changes-grid-area-size-010.html | bug | 920 pixels differ (largest difference 255); first at (13,64): #ff0000, the reference has #008000 |
+| alignment/self-baseline/grid-self-baseline-changes-grid-area-size-011.html | bug | 930 pixels differ (largest difference 255); first at (13,64): #ff0000, the reference has #008000 |
+| alignment/self-baseline/grid-self-baseline-changes-grid-area-size-012.html | bug | 400 pixels differ (largest difference 255); first at (58,64): #ff0000, the reference has #008000 |
 | alignment/self-baseline/grid-self-baseline-horiz-001.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (16064 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-horiz-002.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (54405 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-horiz-003.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (21072 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-horiz-004.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (36282 pixels differ (largest difference 255); first at (235,45): #ffffff, the reference has #000000) |
-| alignment/self-baseline/grid-self-baseline-horiz-005.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (267848 pixels differ (largest difference 255); first at (107,53): #ffffff, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-horiz-006.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (282934 pixels differ (largest difference 255); first at (107,53): #ffffff, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-horiz-007.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (37194 pixels differ (largest difference 128); first at (17,79): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-vertical-lr-001.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (11688 pixels differ (largest difference 128); first at (17,63): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-vertical-lr-002.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (46355 pixels differ (largest difference 255); first at (301,53): #808080, the reference has #ffffff) |
-| alignment/self-baseline/grid-self-baseline-vertical-lr-003.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (29678 pixels differ (largest difference 255); first at (149,63): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-vertical-lr-004.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (42654 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-vertical-lr-005.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (175321 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-horiz-002.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (110535 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-horiz-003.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (54366 pixels differ (largest difference 128); first at (17,63): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-horiz-004.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (16061 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-horiz-005.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (110881 pixels differ (largest difference 255); first at (39,53): #808080, the reference has #000000) |
+| alignment/self-baseline/grid-self-baseline-horiz-006.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (109327 pixels differ (largest difference 255); first at (43,53): #ffffff, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-horiz-007.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (36784 pixels differ (largest difference 255); first at (17,79): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-vertical-lr-001.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (67315 pixels differ (largest difference 255); first at (107,53): #808080, the reference has #ffffff) |
+| alignment/self-baseline/grid-self-baseline-vertical-lr-002.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (107968 pixels differ (largest difference 255); first at (39,53): #808080, the reference has #000000) |
+| alignment/self-baseline/grid-self-baseline-vertical-lr-003.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (34832 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-vertical-lr-004.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (42482 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-vertical-lr-005.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (170171 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
 | alignment/self-baseline/grid-self-baseline-vertical-lr-006.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (176220 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-vertical-lr-007.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (57138 pixels differ (largest difference 255); first at (17,79): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-vertical-rl-001.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (11688 pixels differ (largest difference 128); first at (17,63): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-vertical-rl-002.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (46355 pixels differ (largest difference 255); first at (301,53): #808080, the reference has #ffffff) |
-| alignment/self-baseline/grid-self-baseline-vertical-rl-003.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (30442 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-vertical-rl-004.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (43380 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-vertical-rl-005.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (175321 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-vertical-rl-006.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (176220 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
-| alignment/self-baseline/grid-self-baseline-vertical-rl-007.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (57138 pixels differ (largest difference 255); first at (17,79): #000000, the reference has #808080) |
-| grid-child-percent-basis-resize-1.html | step 2e | uses svg, scrolling, sticky or form controls (3520 pixels differ (largest difference 255); first at (8,108): #ffffff, the reference has #000000) |
+| alignment/self-baseline/grid-self-baseline-vertical-lr-007.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (29976 pixels differ (largest difference 255); first at (17,79): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-vertical-rl-001.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (67427 pixels differ (largest difference 255); first at (107,53): #808080, the reference has #ffffff) |
+| alignment/self-baseline/grid-self-baseline-vertical-rl-002.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (127973 pixels differ (largest difference 255); first at (46,53): #808080, the reference has #000000) |
+| alignment/self-baseline/grid-self-baseline-vertical-rl-003.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (35840 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-vertical-rl-004.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (43826 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-vertical-rl-005.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (172175 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-vertical-rl-006.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (176404 pixels differ (largest difference 255); first at (17,63): #000000, the reference has #808080) |
+| alignment/self-baseline/grid-self-baseline-vertical-rl-007.html | bug (open) | baseline alignment of grid items (css-grid-1 6.3, 11.5 "shim baseline-aligned items", css-align-3 9) is not done: `baseline` lays out as `start`, there are no baseline-sharing groups (34122 pixels differ (largest difference 255); first at (0,79): #ffffff, the reference has #000000) |
+| firefox-bug-1881495.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (8280 pixels differ (largest difference 255); first at (42,110): #808080, the reference has #000000) |
+| grid-child-percent-basis-resize-1.html | step 2e | uses scrolling, sticky or form controls (2e-2) (3520 pixels differ (largest difference 255); first at (8,108): #ffffff, the reference has #000000) |
+| grid-container-baseline-synthesized-001.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (2664 pixels differ (largest difference 255); first at (54,92): #00ffff, the reference has #000000) |
+| grid-container-baseline-synthesized-002.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (3330 pixels differ (largest difference 255); first at (54,8): #00ffff, the reference has #000000) |
+| grid-container-baseline-synthesized-003.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (2664 pixels differ (largest difference 255); first at (54,92): #00ffff, the reference has #000000) |
+| grid-container-baseline-synthesized-004.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (3330 pixels differ (largest difference 255); first at (54,8): #00ffff, the reference has #000000) |
 | grid-definition/fr-unit-with-percentage.html | bug (open) | not the grid (its boxes are right in the layout dump): the helper table with height:100% shares its extra height among the rows in proportion to their heights (table.rs), the browsers give it to the auto-height rows first (css-tables-3, extra height distribution) (14340 pixels differ (largest difference 255); first at (8,94): #000000, the reference has #ffffff) |
 | grid-definition/fr-unit.html | bug (open) | not the grid (its boxes are right in the layout dump): the helper table with height:100% shares its extra height among the rows in proportion to their heights (table.rs), the browsers give it to the auto-height rows first (css-tables-3, extra height distribution) (14340 pixels differ (largest difference 255); first at (8,94): #000000, the reference has #ffffff) |
 | grid-definition/grid-auto-repeat-aspect-ratio-001.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (7000 pixels differ (largest difference 255); first at (58,48): #ffffff, the reference has #008000) |
 | grid-definition/grid-auto-repeat-aspect-ratio-002.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (5000 pixels differ (largest difference 255); first at (58,48): #ffffff, the reference has #008000) |
 | grid-definition/grid-item-grid-container-percentage-rows-002.html | bug (open) | percentage row tracks / heights against an indefinite container height: treated as `auto` and not resolved again after the rows are sized (css-grid-1 7.2.1, 11.1) (1260 pixels differ (largest difference 128); first at (273,303): #00ffff, the reference has #808080) |
 | grid-definition/grid-template-columns-fit-content-001.html | bug (open) | not analysed one by one: a css-grid-1 test whose intrinsic sizing or placement still differs from the reference (fit-content(), spanning flexible tracks, max-content sizing with percentages, floats beside a grid) (48263 pixels differ (largest difference 255); first at (203,226): #800080, the reference has #ffa500) |
-| grid-definition/grid-template-rows-fit-content-001.html | step 2d | uses text features (75740 pixels differ (largest difference 255); first at (393,64): #808080, the reference has #800080) |
+| grid-definition/grid-template-rows-fit-content-001.html | bug | 20926 pixels differ (largest difference 255); first at (140,64): #808080, the reference has #000000 |
 | grid-flex-spanning-items-001.html | bug (open) | not analysed one by one: a css-grid-1 test whose intrinsic sizing or placement still differs from the reference (fit-content(), spanning flexible tracks, max-content sizing with percentages, floats beside a grid) (5900 pixels differ (largest difference 255); first at (58,8): #ff00ff, the reference has #ffffff) |
 | grid-in-table-cell-with-img.html | bug (open) | percentage heights of replaced items in a row of the grid (cyclic percentage, css-sizing-4 5.2.2): the width an image contributes to its column depends on the row size, which is not known yet; the columns are not sized again after the rows (css-grid-1 11.1) (10000 pixels differ (largest difference 255); first at (108,48): #008000, the reference has #ffffff) |
 | grid-item-percentage-quirk-001.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (/quirks/reference/green-100px-square-no-red.html answered HTTP 404) |
@@ -144,36 +159,36 @@
 | grid-items/aspect-ratio-001.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (10000 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #008000) |
 | grid-items/aspect-ratio-002.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (10000 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #008000) |
 | grid-items/aspect-ratio-003.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (10000 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #008000) |
-| grid-items/aspect-ratio-004.html | step 2c | uses painting effects (5000 pixels differ (largest difference 255); first at (58,48): #ffffff, the reference has #008000) |
+| grid-items/aspect-ratio-004.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (5000 pixels differ (largest difference 255); first at (58,48): #ffffff, the reference has #008000) |
 | grid-items/aspect-ratio-005.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (10000 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #008000) |
 | grid-items/grid-img-item-percent-max-height-001.html | bug (open) | percentage heights of replaced items in a row of the grid (cyclic percentage, css-sizing-4 5.2.2): the width an image contributes to its column depends on the row size, which is not known yet; the columns are not sized again after the rows (css-grid-1 11.1) (10000 pixels differ (largest difference 255); first at (108,48): #008000, the reference has #ffffff) |
 | grid-items/grid-item-aspect-ratio-percent-width-001.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (40880 pixels differ (largest difference 255); first at (31,11): #000000, the reference has #00ffff) |
-| grid-items/grid-item-direction-rtl-001.html | step 2d | uses text features (5000 pixels differ (largest difference 255); first at (8,64): #008000, the reference has #ffffff) |
+| grid-items/grid-item-direction-rtl-001.html | bug | 5000 pixels differ (largest difference 255); first at (8,64): #008000, the reference has #ffffff |
 | grid-items/grid-item-inline-contribution-001.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (8131 pixels differ (largest difference 255); first at (28,64): #ffffff, the reference has #008000) |
 | grid-items/grid-item-inline-contribution-002.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (9061 pixels differ (largest difference 255); first at (18,64): #ffffff, the reference has #008000) |
 | grid-items/grid-item-inline-contribution-003.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (9061 pixels differ (largest difference 255); first at (18,64): #ffffff, the reference has #008000) |
 | grid-items/grid-item-inline-contribution-004.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (4526 pixels differ (largest difference 255); first at (63,64): #ffffff, the reference has #008000) |
 | grid-items/grid-item-inline-contribution-005.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (9061 pixels differ (largest difference 255); first at (18,64): #ffffff, the reference has #008000) |
+| grid-items/grid-item-margins-and-writing-modes-001.html | step 2d-2b (vertical writing modes) | used to pass only because logical margins were mapped as in ltr in every direction; with `direction: rtl` now flipping them, the cases with writing-mode: vertical-* (2d-2b) differ from the reference (4930 pixels differ (largest difference 128); first at (25,100): #008000, the reference has #808080) |
 | grid-items/grid-item-minmax-img-001.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (2600 pixels differ (largest difference 255); first at (8,64): #ffffff, the reference has #008000) |
-| grid-items/grid-item-minmax-img-002.html | step 2c | uses painting effects (15712 pixels differ (largest difference 255); first at (8,8): #ffffff, the reference has #daa520) |
-| grid-items/grid-item-percentage-sizes-001.html | step 2d | uses text features (18459 pixels differ (largest difference 255); first at (199,2): #00ffff, the reference has #ffffff) |
-| grid-items/grid-item-percentage-sizes-002.html | step 2d | uses text features (18270 pixels differ (largest difference 255); first at (201,2): #00ffff, the reference has #ffffff) |
-| grid-items/grid-item-percentage-sizes-003.html | step 2d | uses text features (21427 pixels differ (largest difference 255); first at (82,2): #00ffff, the reference has #ffffff) |
-| grid-items/grid-item-text-background-not-interleaved-001.html | bug (open) | grid items paint like inline blocks (each one atomically, css-grid-1 appendix, CSS2 E.2 step 7); the painter draws the text of all block-level items after their backgrounds, so a later item does not cover an earlier item's text (224 pixels differ (largest difference 128); first at (108,112): #000000, the reference has #808080) |
+| grid-items/grid-item-minmax-img-002.html | bug | 1325 pixels differ (largest difference 255); first at (8,8): #ffffff, the reference has #daa520 |
+| grid-items/grid-item-paddings-and-writing-modes-001.html | step 2d-2b (vertical writing modes) | same as grid-item-margins-and-writing-modes-001 (6400 pixels differ (largest difference 128); first at (24,112): #008000, the reference has #808080) |
+| grid-items/grid-item-percentage-sizes-001.html | bug | 18459 pixels differ (largest difference 255); first at (199,2): #00ffff, the reference has #ffffff |
+| grid-items/grid-item-percentage-sizes-002.html | bug | 18270 pixels differ (largest difference 255); first at (201,2): #00ffff, the reference has #ffffff |
+| grid-items/grid-item-percentage-sizes-003.html | bug | 20537 pixels differ (largest difference 255); first at (82,2): #00ffff, the reference has #ffffff |
+| grid-items/grid-item-text-background-not-interleaved-001.html | bug (open) | grid items now paint atomically like inline blocks (css-grid-1 9, CSS2 E.2 step 7) and the other tests of this family pass; this one still differs (items with a `z-index` or overlapping lines of text), not analysed one by one (224 pixels differ (largest difference 128); first at (108,112): #000000, the reference has #808080) |
 | grid-items/grid-items-relative-positioned-containing-block-004.html | bug (open) | out-of-flow children of a grid container (css-grid-1 9): the grid area as containing block and the static position inside it are done; this test differs for a reason that was not analysed one by one (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
 | grid-items/grid-items-relative-positioned-containing-block-005.html | bug (open) | out-of-flow children of a grid container (css-grid-1 9): the grid area as containing block and the static position inside it are done; this test differs for a reason that was not analysed one by one (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
 | grid-items/grid-items-relative-positioned-containing-block-006.html | bug (open) | out-of-flow children of a grid container (css-grid-1 9): the grid area as containing block and the static position inside it are done; this test differs for a reason that was not analysed one by one (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
-| grid-items/grid-items-sizing-alignment-001.html | step 2e | uses svg, scrolling, sticky or form controls (42292 pixels differ (largest difference 255); first at (608,64): #ffffff, the reference has #767676) |
-| grid-items/grid-layout-z-order-a.html | bug (open) | grid items paint like inline blocks (each one atomically, css-grid-1 appendix, CSS2 E.2 step 7); the painter draws the text of all block-level items after their backgrounds, so a later item does not cover an earlier item's text (224 pixels differ (largest difference 255); first at (100,60): #ffffff, the reference has #ffff00) |
-| grid-items/grid-layout-z-order-b.html | bug (open) | grid items paint like inline blocks (each one atomically, css-grid-1 appendix, CSS2 E.2 step 7); the painter draws the text of all block-level items after their backgrounds, so a later item does not cover an earlier item's text (224 pixels differ (largest difference 255); first at (100,60): #ffffff, the reference has #ffff00) |
-| grid-items/grid-size-with-orthogonal-child-001.html | step 2d | uses text features (2000 pixels differ (largest difference 255); first at (88,48): #ffffff, the reference has #008000) |
-| grid-items/grid-size-with-orthogonal-child-002.html | step 2d | uses text features (10000 pixels differ (largest difference 255); first at (108,48): #008000, the reference has #ffffff) |
+| grid-items/grid-items-sizing-alignment-001.html | step 2e | uses scrolling, sticky or form controls (2e-2) (42298 pixels differ (largest difference 255); first at (607,64): #7f7f7f, the reference has #cacaca) |
+| grid-items/grid-layout-z-order-a.html | bug (open) | grid items now paint atomically like inline blocks (css-grid-1 9, CSS2 E.2 step 7) and the other tests of this family pass; this one still differs (items with a `z-index` or overlapping lines of text), not analysed one by one (224 pixels differ (largest difference 255); first at (100,60): #ffffff, the reference has #ffff00) |
+| grid-items/grid-layout-z-order-b.html | bug (open) | grid items now paint atomically like inline blocks (css-grid-1 9, CSS2 E.2 step 7) and the other tests of this family pass; this one still differs (items with a `z-index` or overlapping lines of text), not analysed one by one (224 pixels differ (largest difference 255); first at (100,60): #ffffff, the reference has #ffff00) |
+| grid-items/grid-size-with-orthogonal-child-001.html | bug | 10000 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #008000 |
+| grid-items/grid-size-with-orthogonal-child-002.html | bug | 10000 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #008000 |
 | grid-items/percentage-block-size-transfer-through-item-001.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (1916 pixels differ (largest difference 118); first at (8,48): #767676, the reference has #008000) |
 | grid-items/percentage-size-indefinite-replaced.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (1916 pixels differ (largest difference 118); first at (8,48): #767676, the reference has #008000) |
-| grid-items/replaced-element-001.html | step 2e | uses svg, scrolling, sticky or form controls (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
-| grid-items/replaced-element-002.html | step 2e | uses svg, scrolling, sticky or form controls (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
-| grid-items/replaced-element-007.html | step 2e | uses svg, scrolling, sticky or form controls (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
-| grid-items/replaced-element-010.html | step 2e | uses svg, scrolling, sticky or form controls (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
+| grid-items/percentage-size-replaced-subitems-001.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (83286 pixels differ (largest difference 255); first at (662,96): #ffffff, the reference has #ff00ff) |
+| grid-items/percentage-size-subitems-001.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (76632 pixels differ (largest difference 255); first at (662,96): #ffffff, the reference has #ff00ff) |
 | grid-items/replaced-element-011.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (9296 pixels differ (largest difference 255); first at (8,48): #767676, the reference has #008000) |
 | grid-items/replaced-element-012.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (9296 pixels differ (largest difference 255); first at (8,48): #767676, the reference has #008000) |
 | grid-items/replaced-element-013.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (8376 pixels differ (largest difference 255); first at (8,48): #767676, the reference has #008000) |
@@ -182,6 +197,8 @@
 | grid-items/replaced-element-017.tentative.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (11834 pixels differ (largest difference 255); first at (8,48): #767676, the reference has #008000) |
 | grid-model/display-grid.html | bug (open) | not the grid (its boxes are right in the layout dump): the helper table with height:100% shares its extra height among the rows in proportion to their heights (table.rs), the browsers give it to the auto-height rows first (css-tables-3, extra height distribution) (16560 pixels differ (largest difference 205); first at (8,99): #008000, the reference has #000000) |
 | grid-model/display-inline-grid.html | bug (open) | not the grid (its boxes are right in the layout dump): the helper table with height:100% shares its extra height among the rows in proportion to their heights (table.rs), the browsers give it to the auto-height rows first (css-tables-3, extra height distribution) (16560 pixels differ (largest difference 205); first at (8,99): #008000, the reference has #000000) |
+| grid-model/grid-container-scrollbar-vertical-lr-001.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (134700 pixels differ (largest difference 255); first at (28,152): #808080, the reference has #ffffff) |
+| grid-model/grid-container-scrollbar-vertical-rl-001.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (136800 pixels differ (largest difference 255); first at (28,152): #808080, the reference has #ffffff) |
 | grid-model/grid-first-letter-003.html | limit (not supported) | ::first-letter and ::first-line are not supported (not planned in layer 2) (256 pixels differ (largest difference 128); first at (8,24): #000000, the reference has #008000) |
 | grid-model/grid-first-line-003.html | limit (not supported) | ::first-letter and ::first-line are not supported (not planned in layer 2) (16640 pixels differ (largest difference 255); first at (8,24): #ff0000, the reference has #008000) |
 | grid-model/grid-floats-no-intrude-002.html | bug (open) | not analysed one by one: a css-grid-1 test whose intrinsic sizing or placement still differs from the reference (fit-content(), spanning flexible tracks, max-content sizing with percentages, floats beside a grid) (34560 pixels differ (largest difference 255); first at (88,88): #0000ff, the reference has #00ff00) |
@@ -190,23 +207,25 @@
 | grid-model/grid-inline-floats-no-intrude-001.html | bug (open) | not analysed one by one: a css-grid-1 test whose intrinsic sizing or placement still differs from the reference (fit-content(), spanning flexible tracks, max-content sizing with percentages, floats beside a grid) (5000 pixels differ (largest difference 255); first at (108,64): #ff0000, the reference has #ffffff) |
 | grid-model/grid-max-content-size-with-max-content-item.html | bug (open) | not analysed one by one: a css-grid-1 test whose intrinsic sizing or placement still differs from the reference (fit-content(), spanning flexible tracks, max-content sizing with percentages, floats beside a grid) (7200 pixels differ (largest difference 255); first at (28,48): #ffffff, the reference has #008000) |
 | grid-with-aspect-ratio-uses-content-box-height-for-track-sizing.html | not planned | uses a feature layer 2 does not do (multi-column, shapes, animation, text-wrap: balance, aspect-ratio ...) (4000 pixels differ (largest difference 255); first at (8,108): #ffffff, the reference has #008000) |
-| grid-with-orthogonal-child-within-flexbox.html | step 2d | uses text features (5000 pixels differ (largest difference 255); first at (58,48): #000000, the reference has #008000) |
+| grid-with-orthogonal-child-within-flexbox.html | bug | 10000 pixels differ (largest difference 255); first at (8,48): #000000, the reference has #008000 |
 | layout-algorithm/flex-sizing-rows-indefinite-height-002.html | bug (open) | percentage row tracks / heights against an indefinite container height: treated as `auto` and not resolved again after the rows are sized (css-grid-1 7.2.1, 11.1) (1600 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
-| layout-algorithm/flex-sizing-rows-indefinite-height.html | step 2c | uses painting effects (20000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
+| layout-algorithm/flex-sizing-rows-indefinite-height.html | bug | 10000 pixels differ (largest difference 255); first at (8,164): #ff0000, the reference has #ffffff |
+| layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-003.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
+| layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-004.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
 | layout-algorithm/grid-fit-content-width-percent-height-aspect-ratio-001.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (8131 pixels differ (largest difference 255); first at (28,48): #ffffff, the reference has #008000) |
 | layout-algorithm/grid-float-intrinsic-width-percent-height-aspect-ratio-001.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (8131 pixels differ (largest difference 255); first at (28,48): #ffffff, the reference has #008000) |
 | layout-algorithm/grid-inline-grid-intrinsic-width-percent-height-aspect-ratio-001.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (8131 pixels differ (largest difference 255); first at (28,48): #ffffff, the reference has #008000) |
-| layout-algorithm/grid-item-margin-auto-columns-rows-vertical-rtl-001.html | step 2d | uses text features (42800 pixels differ (largest difference 255); first at (168,56): #00ff00, the reference has #ffa500) |
+| layout-algorithm/grid-item-margin-auto-columns-rows-vertical-rtl-001.html | bug | 42800 pixels differ (largest difference 255); first at (168,56): #00ff00, the reference has #ffa500 |
 | layout-algorithm/grid-max-content-width-percent-height-aspect-ratio-001.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (8131 pixels differ (largest difference 255); first at (28,48): #ffffff, the reference has #008000) |
 | layout-algorithm/grid-min-content-width-percent-height-aspect-ratio-001.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (8131 pixels differ (largest difference 255); first at (28,48): #ffffff, the reference has #008000) |
 | layout-algorithm/grid-percent-rows-filled-shrinkwrap-001.html | bug (open) | percentage row tracks / heights against an indefinite container height: treated as `auto` and not resolved again after the rows are sized (css-grid-1 7.2.1, 11.1) (1600 pixels differ (largest difference 255); first at (31,91): #ffffff, the reference has #0000ff) |
 | layout-algorithm/grid-percent-rows-spanned-shrinkwrap-001.html | bug (open) | percentage row tracks / heights against an indefinite container height: treated as `auto` and not resolved again after the rows are sized (css-grid-1 7.2.1, 11.1) (800 pixels differ (largest difference 255); first at (31,91): #ffffff, the reference has #0000ff) |
-| layout-algorithm/grid-template-flexible-rerun-track-sizing.html | step 2c | uses painting effects (20000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
+| layout-algorithm/grid-template-flexible-rerun-track-sizing.html | bug | 10000 pixels differ (largest difference 255); first at (8,164): #ff0000, the reference has #ffffff |
 | layout-algorithm/grid-track-ignores-max-size-002.html | limit (placeholder boxes) | canvas, marquee, iframe, video and object are placeholder boxes with their own sizes (their percentage height / aspect ratio behaviour is the browsers') (1916 pixels differ (largest difference 118); first at (8,48): #767676, the reference has #008000) |
-| stretch-grid-item-checkbox-input.html | step 2e | uses svg, scrolling, sticky or form controls (194 pixels differ (largest difference 137); first at (21,8): #ffffff, the reference has #767676) |
-| stretch-grid-item-radio-input.html | step 2e | uses svg, scrolling, sticky or form controls (194 pixels differ (largest difference 137); first at (21,8): #ffffff, the reference has #767676) |
-| stretch-grid-item-text-input-overflow.html | step 2e | uses svg, scrolling, sticky or form controls (2340 pixels differ (largest difference 255); first at (93,13): #ffffff, the reference has #000000) |
-| subgrid/abs-pos-002.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (16650 pixels differ (largest difference 255); first at (36,17): #000000, the reference has #ffff00) |
+| stretch-grid-item-checkbox-input.html | step 2e | uses scrolling, sticky or form controls (2e-2) (194 pixels differ (largest difference 137); first at (21,8): #ffffff, the reference has #767676) |
+| stretch-grid-item-radio-input.html | step 2e | uses scrolling, sticky or form controls (2e-2) (194 pixels differ (largest difference 137); first at (21,8): #ffffff, the reference has #767676) |
+| stretch-grid-item-text-input-overflow.html | step 2e | uses scrolling, sticky or form controls (2e-2) (2340 pixels differ (largest difference 255); first at (93,13): #ffffff, the reference has #000000) |
+| subgrid/abs-pos-002.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (16674 pixels differ (largest difference 255); first at (36,17): #000000, the reference has #ffff00) |
 | subgrid/auto-track-sizing-004.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (10000 pixels differ (largest difference 255); first at (58,64): #ff0000, the reference has #008000) |
 | subgrid/baseline-001.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (540 pixels differ (largest difference 255); first at (1,21): #ffffff, the reference has #000000) |
 | subgrid/contribution-size-flex-tracks-001.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (7500 pixels differ (largest difference 255); first at (58,64): #ffffff, the reference has #008000) |
@@ -216,7 +235,7 @@
 | subgrid/grid-gap-004.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (19857 pixels differ (largest difference 255); first at (154,0): #ffffff, the reference has #000000) |
 | subgrid/grid-gap-005.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (12400 pixels differ (largest difference 255); first at (141,1): #808080, the reference has #ffffff) |
 | subgrid/grid-gap-006.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (13000 pixels differ (largest difference 255); first at (341,201): #808080, the reference has #ffffff) |
-| subgrid/grid-gap-007.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (49228 pixels differ (largest difference 255); first at (178,0): #ffffff, the reference has #000000) |
+| subgrid/grid-gap-007.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (44008 pixels differ (largest difference 255); first at (126,0): #ffffff, the reference has #000000) |
 | subgrid/grid-gap-008.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (18450 pixels differ (largest difference 255); first at (3,3): #000000, the reference has #d3d3d3) |
 | subgrid/grid-gap-009.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (111902 pixels differ (largest difference 255); first at (3,3): #000000, the reference has #d3d3d3) |
 | subgrid/grid-gap-010.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (10000 pixels differ (largest difference 255); first at (58,8): #ffffff, the reference has #0000ff) |
@@ -229,16 +248,16 @@
 | subgrid/independent-formatting-context-fieldset.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (10000 pixels differ (largest difference 255); first at (0,0): #ff0000, the reference has #008000) |
 | subgrid/independent-formatting-context.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (15000 pixels differ (largest difference 255); first at (136,120): #ff0000, the reference has #008000) |
 | subgrid/item-percentage-height-001.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (1500 pixels differ (largest difference 83); first at (21,92): #d3d3d3, the reference has #808080) |
-| subgrid/line-names-006.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (8448 pixels differ (largest difference 255); first at (107,12): #808080, the reference has #000000) |
-| subgrid/line-names-008.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (1423 pixels differ (largest difference 255); first at (52,16): #808080, the reference has #000000) |
+| subgrid/line-names-006.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (8724 pixels differ (largest difference 255); first at (107,12): #808080, the reference has #000000) |
+| subgrid/line-names-008.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (1567 pixels differ (largest difference 255); first at (52,16): #808080, the reference has #000000) |
 | subgrid/line-names-009.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (324 pixels differ (largest difference 192); first at (558,60): #000000, the reference has #808080) |
 | subgrid/line-names-010.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (11784 pixels differ (largest difference 255); first at (466,36): #000000, the reference has #808080) |
 | subgrid/line-names-011.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (432 pixels differ (largest difference 192); first at (151,36): #000000, the reference has #808080) |
 | subgrid/line-names-012.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (17755 pixels differ (largest difference 192); first at (85,12): #808080, the reference has #000000) |
-| subgrid/orthogonal-writing-mode-001.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (1400 pixels differ (largest difference 255); first at (9,157): #ffffff, the reference has #000000) |
-| subgrid/orthogonal-writing-mode-002.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (46064 pixels differ (largest difference 255); first at (19,9): #ffffff, the reference has #808080) |
+| subgrid/orthogonal-writing-mode-001.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (1400 pixels differ (largest difference 255); first at (9,191): #ffffff, the reference has #000000) |
+| subgrid/orthogonal-writing-mode-002.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (40793 pixels differ (largest difference 255); first at (19,9): #ffffff, the reference has #808080) |
 | subgrid/orthogonal-writing-mode-003.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (16882 pixels differ (largest difference 255); first at (9,23): #000000, the reference has #ffc0cb) |
-| subgrid/orthogonal-writing-mode-004.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (33329 pixels differ (largest difference 255); first at (42,10): #ffffff, the reference has #add8e6) |
+| subgrid/orthogonal-writing-mode-004.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (25403 pixels differ (largest difference 255); first at (1,16): #ffc0cb, the reference has #000000) |
 | subgrid/overflow-hidden-does-not-prohibit-subgrid.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (5000 pixels differ (largest difference 255); first at (8,98): #ffffff, the reference has #008000) |
 | subgrid/placement-implicit-001.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (5808 pixels differ (largest difference 255); first at (204,0): #000000, the reference has #ffffff) |
 | subgrid/repeat-auto-fill-002.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (38544 pixels differ (largest difference 255); first at (76,1): #808080, the reference has #ffc0cb) |
@@ -248,12 +267,14 @@
 | subgrid/row-subgrid-intrinsic-size-transfer-001.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (10000 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #008000) |
 | subgrid/row-subgrid-intrinsic-size-transfer-002.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (10000 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #008000) |
 | subgrid/row-subgrid-intrinsic-size-transfer-003.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (10000 pixels differ (largest difference 255); first at (8,48): #ffffff, the reference has #008000) |
+| subgrid/scrollbar-gutter-001.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (7500 pixels differ (largest difference 255); first at (114,101): #008000, the reference has #ffffff) |
+| subgrid/scrollbar-gutter-002.html | bug (flex/grid with vertical writing) | flex and grid containers (and tables) are laid out horizontally inside and around vertical text (decisions.md 2d-2b): their items with a vertical writing mode are orthogonal frames the flex/grid algorithms do not size by the frame's block axis. Before 2d-2b this test passed because writing-mode was ignored. (7500 pixels differ (largest difference 255); first at (114,101): #008000, the reference has #ffffff) |
 | subgrid/standalone-axis-size-005.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (10000 pixels differ (largest difference 255); first at (108,64): #ff0000, the reference has #ffffff) |
 | subgrid/standalone-axis-size-007.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (10000 pixels differ (largest difference 255); first at (108,64): #008000, the reference has #ffffff) |
-| subgrid/standalone-axis-size-010.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (7500 pixels differ (largest difference 255); first at (33,64): #ff0000, the reference has #008000) |
-| subgrid/standalone-axis-size-011.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (7500 pixels differ (largest difference 255); first at (33,64): #ff0000, the reference has #008000) |
-| subgrid/standalone-axis-size-012.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (7500 pixels differ (largest difference 255); first at (33,64): #ff0000, the reference has #008000) |
-| subgrid/standalone-axis-size-013.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (7500 pixels differ (largest difference 255); first at (33,64): #ff0000, the reference has #008000) |
+| subgrid/standalone-axis-size-010.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
+| subgrid/standalone-axis-size-011.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
+| subgrid/standalone-axis-size-012.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
+| subgrid/standalone-axis-size-013.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (10000 pixels differ (largest difference 255); first at (8,64): #ff0000, the reference has #008000) |
 | subgrid/subgrid-baseline-001.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (540 pixels differ (largest difference 255); first at (1,21): #ffffff, the reference has #000000) |
 | subgrid/subgrid-baseline-002.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (8364 pixels differ (largest difference 255); first at (1,21): #ffffff, the reference has #000000) |
 | subgrid/subgrid-baseline-003.html | not planned | uses subgrid and masonry (grid-lanes) are not planned (384 pixels differ (largest difference 255); first at (0,0): #ffffff, the reference has #000000) |
@@ -310,19 +331,12 @@
 - abspos/orthogonal-positioned-grid-items-002.html
 - abspos/orthogonal-positioned-grid-items-003.html
 - abspos/orthogonal-positioned-grid-items-004.html
-- abspos/orthogonal-positioned-grid-items-005.html
 - abspos/orthogonal-positioned-grid-items-006.html
 - abspos/orthogonal-positioned-grid-items-007.html
 - abspos/orthogonal-positioned-grid-items-008.html
 - abspos/orthogonal-positioned-grid-items-009.html
-- abspos/orthogonal-positioned-grid-items-010.html
 - abspos/orthogonal-positioned-grid-items-011.html
-- abspos/orthogonal-positioned-grid-items-012.html
 - abspos/orthogonal-positioned-grid-items-013.html
-- abspos/orthogonal-positioned-grid-items-014.html
-- abspos/orthogonal-positioned-grid-items-015.html
-- abspos/orthogonal-positioned-grid-items-016.html
-- abspos/orthogonal-positioned-grid-items-017.html
 - abspos/positioned-grid-descendant-containing-block-001.html
 - abspos/positioned-grid-descendant-containing-block-002.html
 - abspos/positioned-grid-descendant-containing-block-003.html
@@ -362,12 +376,10 @@
 - abspos/positioned-grid-items-negative-indices-001.html
 - abspos/positioned-grid-items-negative-indices-002.html
 - abspos/positioned-grid-items-negative-indices-003.html
-- abspos/positioned-grid-items-sizing-001.html
 - alignment/grid-align-content-end-001.html
 - alignment/grid-align-content-space-between-001.html
 - alignment/grid-baseline-002.html
 - alignment/grid-baseline-003.html
-- alignment/grid-baseline-align-cycles-001.html
 - alignment/grid-block-axis-alignment-auto-margins-008.html
 - alignment/grid-block-axis-alignment-auto-margins-explicit-row.html
 - alignment/grid-calc-margins-explicit-row.html
@@ -437,10 +449,8 @@
 - alignment/grid-gutters-013.html
 - alignment/grid-gutters-explicit-placement.html
 - alignment/grid-inline-axis-alignment-auto-margins-008.html
-- alignment/grid-inline-baseline.html
 - alignment/grid-item-auto-margins-001.html
 - alignment/grid-item-auto-margins-002.html
-- alignment/grid-item-no-aspect-ratio-stretch-1.html
 - alignment/grid-justify-content-end-001.html
 - alignment/grid-justify-content-space-between-001.html
 - alignment/grid-self-alignment-baseline-gfc-001.html
@@ -452,15 +462,10 @@
 - child-border-box-and-max-content-001.html
 - child-border-box-and-max-content-002.html
 - empty-grid-within-flexbox.html
-- firefox-bug-1881495.html
 - grid-calc-margin.html
 - grid-container-as-flex-item-001.html
 - grid-container-as-flex-item-002.html
 - grid-container-as-flex-item-003.html
-- grid-container-baseline-synthesized-001.html
-- grid-container-baseline-synthesized-002.html
-- grid-container-baseline-synthesized-003.html
-- grid-container-baseline-synthesized-004.html
 - grid-definition/flex-item-grid-container-auto-repeat-001.html
 - grid-definition/flex-item-grid-container-auto-repeat-002.html
 - grid-definition/flex-item-grid-container-percentage-rows-001.html
@@ -530,14 +535,12 @@
 - grid-items/grid-item-containing-block-003.html
 - grid-items/grid-item-containing-block-004.html
 - grid-items/grid-item-margin-box-overflowing-grid-area-paint-001.html
-- grid-items/grid-item-margins-and-writing-modes-001.html
 - grid-items/grid-item-min-height-overrides-fixed-height-001.html
 - grid-items/grid-item-min-size-auto-overflow-001.html
 - grid-items/grid-item-min-size-auto-overflow-002.html
 - grid-items/grid-item-min-width-overrides-fixed-width-001.html
 - grid-items/grid-item-overflow-auto-max-height-percentage.html
 - grid-items/grid-item-overflow-offscreen-painting-001.html
-- grid-items/grid-item-paddings-and-writing-modes-001.html
 - grid-items/grid-item-percentage-size-in-positioned-grid-001.html
 - grid-items/grid-items-001.html
 - grid-items/grid-items-002.html
@@ -598,113 +601,13 @@
 - grid-items/grid-z-axis-ordering-overlapped-items-006.html
 - grid-items/item-with-table-with-infinite-max-intrinsic-width.html
 - grid-items/overflow-hidden-min-content-contribution-in-abs-pos-grid-in-flexbox.html
-- grid-items/percentage-size-replaced-subitems-001.html
-- grid-items/percentage-size-subitems-001.html
 - grid-items/percentage-size-subitems-002.html
+- grid-items/replaced-element-001.html
+- grid-items/replaced-element-002.html
+- grid-items/replaced-element-007.html
+- grid-items/replaced-element-010.html
 - grid-items/table-with-infinite-max-intrinsic-width.html
 - grid-items/whitespace-in-grid-item-001.html
-- grid-lanes/abspos/column-grid-lanes-intrinsic-sizing-oof.html
-- grid-lanes/abspos/column-grid-lanes-out-of-flow-004.html
-- grid-lanes/abspos/row-grid-lanes-intrinsic-sizing-oof.html
-- grid-lanes/alignment/column-align-items-017.html
-- grid-lanes/alignment/column-fill-reverse-align-content-003.html
-- grid-lanes/alignment/column-justify-items-001.html
-- grid-lanes/alignment/column-track-reverse-justify-content-001.html
-- grid-lanes/alignment/column-track-reverse-justify-items-001.html
-- grid-lanes/alignment/column-track-reverse-justify-items-002.html
-- grid-lanes/alignment/grid-lanes-content-distribution-001.html
-- grid-lanes/alignment/grid-lanes-flow-start-flow-end-align-properties.html
-- grid-lanes/alignment/grid-lanes-flow-start-flow-end-justify-properties.html
-- grid-lanes/alignment/row-fill-reverse-justify-content-003.html
-- grid-lanes/alignment/row-justify-items-016.html
-- grid-lanes/alignment/row-track-reverse-align-content-001.html
-- grid-lanes/alignment/row-track-reverse-align-items-001.html
-- grid-lanes/column-empty-grid-lanes-container-001.html
-- grid-lanes/column-empty-grid-lanes-container-002.html
-- grid-lanes/column-empty-grid-lanes-container-content-editable-001.html
-- grid-lanes/intrinsic-sizing/grid-lanes-contain-intrinsic-size-015.html
-- grid-lanes/intrinsic-sizing/grid-lanes-contain-intrinsic-size-row-005.html
-- grid-lanes/item-placement/dense-packing/column-dense-packing-003.html
-- grid-lanes/items/column-flex-spanning-items.html
-- grid-lanes/items/column-item-minmax-img-001.html
-- grid-lanes/items/row-flex-spanning-items.html
-- grid-lanes/items/row-item-minmax-img-001.html
-- grid-lanes/overflow/grid-lanes-overflowing-container-001.html
-- grid-lanes/overflow/grid-lanes-overflowing-container-002.html
-- grid-lanes/overflow/grid-lanes-overflowing-container-003.html
-- grid-lanes/overflow/grid-lanes-overflowing-container-004.html
-- grid-lanes/overflow/grid-lanes-overflowing-container-006.html
-- grid-lanes/overflow/grid-lanes-overflowing-container-007.html
-- grid-lanes/overflow/grid-lanes-overflowing-container-008.html
-- grid-lanes/overflow/grid-lanes-overflowing-container-009.html
-- grid-lanes/overflow/grid-lanes-overflowing-container-010.html
-- grid-lanes/overflow/grid-lanes-overflowing-container-011.html
-- grid-lanes/overflow/grid-lanes-overflowing-container-012.html
-- grid-lanes/overflow/grid-lanes-overflowing-container-013.html
-- grid-lanes/overflow/grid-lanes-overflowing-container-014.html
-- grid-lanes/row-empty-grid-lanes-container-001.html
-- grid-lanes/row-empty-grid-lanes-container-002.html
-- grid-lanes/row-empty-grid-lanes-container-003.html
-- grid-lanes/row-empty-grid-lanes-container-content-editable-001.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/baseline/column-grid-lanes-item-baseline-subgrid-001.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/column-item-percentage-width-001.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/column-subgrid-abs-pos-001.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/column-subgrid-button.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/column-subgrid-scroller-padding-001.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/gap/column-subgrid-grid-gap-008.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/gap/column-subgrid-grid-gap-010.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/gap/column-subgrid-grid-gap-011.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/gap/row-subgrid-grid-gap-010.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/gap/row-subgrid-grid-gap-011.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/column-line-names-002.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/column-line-names-003.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/column-line-names-013.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/column-line-names-014.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/column-line-names-015.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/column-line-names-016.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/column-line-names-017.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/column-line-names-018.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/row-line-names-003.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/row-line-names-006.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/row-line-names-009.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/row-line-names-010.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/row-line-names-011.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/row-line-names-012.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/row-line-names-015.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/line-names/row-line-names-017.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/row-subgrid-button.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/row-subgrid-scroller-padding-001.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/subgrid-item-with-margin-left-auto.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/track-sizing/auto-track-sizing-002.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/track-sizing/column-auto-track-sizing-001.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/track-sizing/column-subgrid-with-row-standalone-axis-size-005.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/track-sizing/row-auto-track-sizing-001.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/track-sizing/row-subgrid-with-column-standalone-axis-size-001.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/track-sizing/row-subgrid-with-column-standalone-axis-size-002.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/track-sizing/row-subgrid-with-column-standalone-axis-size-003.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/track-sizing/row-subgrid-with-column-standalone-axis-size-004.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/track-sizing/row-subgrid-with-column-standalone-axis-size-005.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/track-sizing/row-subgrid-with-column-standalone-axis-size-006.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/track-sizing/row-subgrid-with-column-standalone-axis-size-007.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/track-sizing/row-subgrid-with-column-standalone-axis-size-008.html
-- grid-lanes/subgrid/grid-subgridded-to-grid-lanes/track-sizing/row-subgrid-with-column-standalone-axis-size-009.html
-- grid-lanes/track-sizing/auto-repeat/column-auto-repeat-027.html
-- grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-auto-017.html
-- grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-auto-018.html
-- grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-auto-026.html
-- grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-auto-030.html
-- grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-auto-031.html
-- grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-auto-032.html
-- grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-auto-033.html
-- grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-max-content-005.html
-- grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/row-auto-repeat-auto-007.html
-- grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/row-auto-repeat-auto-017.html
-- grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/row-auto-repeat-auto-018.html
-- grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/row-auto-repeat-auto-026.html
-- grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/row-auto-repeat-auto-028.html
-- grid-lanes/track-sizing/auto-repeat/row-auto-repeat-004.html
-- grid-lanes/track-sizing/auto-repeat/row-auto-repeat-025.html
-- grid-lanes/track-sizing/grid-lanes-percentage-rows-indefinite-height-001.html
 - grid-model/column-property-should-not-apply-on-grid-container-001.html
 - grid-model/grid-areas-overflowing-grid-container-001.html
 - grid-model/grid-areas-overflowing-grid-container-002.html
@@ -717,8 +620,6 @@
 - grid-model/grid-areas-overflowing-grid-container-009.html
 - grid-model/grid-container-ignores-first-letter-002.html
 - grid-model/grid-container-scrollbar-001.html
-- grid-model/grid-container-scrollbar-vertical-lr-001.html
-- grid-model/grid-container-scrollbar-vertical-rl-001.html
 - grid-model/grid-container-scrollbars-sizing-001.html
 - grid-model/grid-container-scrollbars-sizing-002.html
 - grid-model/grid-display-grid-001.html
@@ -759,8 +660,6 @@
 - layout-algorithm/flex-and-intrinsic-sizes-002.html
 - layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-001.html
 - layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-002.html
-- layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-003.html
-- layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-004.html
 - layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-005.html
 - layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-006.html
 - layout-algorithm/grid-as-flex-item-should-not-shrink-to-fit-007.html
@@ -817,8 +716,6 @@
 - subgrid/orthogonal-writing-mode-006.html
 - subgrid/percentage-track-sizing.html
 - subgrid/repeat-auto-fill-007.html
-- subgrid/scrollbar-gutter-001.html
-- subgrid/scrollbar-gutter-002.html
 - subgrid/standalone-axis-size-001.html
 - subgrid/standalone-axis-size-002.html
 - subgrid/standalone-axis-size-003.html

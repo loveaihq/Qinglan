@@ -195,8 +195,11 @@ impl PageIndex {
                 }
                 None => (x, y),
             };
+            let node = layout.tree.get(f.box_id).node;
+            // A link inside an inline `<svg>`: its box in the svg's user space; else the `<a>` around the element.
+            let inner = layout.tree.svgs.get(&node).filter(|_| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h).and_then(|sc| sc.link_at(doc, x - r.x, y - r.y, r.w, r.h));
             if x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h
-                && let Some(link) = enclosing_link(doc, layout.tree.get(f.box_id).node)
+                && let Some(link) = inner.or_else(|| enclosing_link(doc, node))
             {
                 let rank = self.rank_of(layout, f.box_id);
                 if hit.is_none_or(|(best, _)| rank >= best) {

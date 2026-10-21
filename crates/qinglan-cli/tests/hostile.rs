@@ -682,3 +682,105 @@ fn shadow_around_a_page_sized_box() {
     let html = "<!doctype html><style>body{margin:0}.w{width:1260px;margin:10px;height:3300px;background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.3), inset 0 0 30px #00f}</style><div class=w><p>x</p></div>";
     run(page("box-shadow: 1260 x 3300 wrapper", html), "shadow_page_sized");
 }
+
+// ---- SVG (step 2e-1): inline `<svg>` and SVG files are page content like any other ---------------------------------
+
+const SVG_NS: &str = "xmlns='http://www.w3.org/2000/svg'";
+
+/// Ten levels of ten `use` elements each: 10^10 instances if they were all expanded.
+fn use_bomb() -> String {
+    let mut s = String::from("<defs><rect id='g0' width='1' height='1' fill='#f00'/>");
+    for level in 1..=10 {
+        write!(s, "<g id='g{level}'>").unwrap();
+        for _ in 0..10 {
+            write!(s, "<use href='#g{}'/>", level - 1).unwrap();
+        }
+        s.push_str("</g>");
+    }
+    s.push_str("</defs><use href='#g10'/>");
+    s
+}
+
+fn svg_file(body: &str) -> Vec<u8> {
+    format!("<svg {SVG_NS} width='300' height='300' viewBox='0 0 100 100'>{body}</svg>").into_bytes()
+}
+
+fn svg_image_case(item: &'static str, file: Vec<u8>) -> Case {
+    let mut c = page(item, "<!doctype html><body style='margin:0'><img src='/x.svg' width='300' height='300'><img src='/x.svg' width='40' height='40'>");
+    c.extra.push(("/x.svg".to_string(), "image/svg+xml", file));
+    c
+}
+
+#[test]
+fn svg_use_bomb_inline() {
+    run(page("svg use bomb (inline)", format!("<!doctype html><svg width='300' height='300' viewBox='0 0 100 100'>{}</svg>", use_bomb())), "svguseinline");
+}
+
+#[test]
+fn svg_use_bomb_image() {
+    run(svg_image_case("svg use bomb (image)", svg_file(&use_bomb())), "svguseimage");
+}
+
+fn many_commands(count: usize) -> String {
+    let mut d = String::from("M0 0");
+    for i in 0..count {
+        write!(d, "L{} {}", i % 97, (i * 7) % 89).unwrap();
+    }
+    d
+}
+
+#[test]
+fn svg_million_path_commands_inline() {
+    let d = many_commands(n(1_000_000));
+    run(
+        page("svg 1M path commands (inline)", format!("<!doctype html><svg width='300' height='300' viewBox='0 0 100 100'><path d='{d}' fill='#00f' stroke='#000' stroke-width='0.5' stroke-dasharray='1 1'/></svg>")),
+        "svgpathinline",
+    );
+}
+
+#[test]
+fn svg_million_path_commands_image() {
+    let d = many_commands(n(1_000_000));
+    run(svg_image_case("svg 1M path commands (image)", svg_file(&format!("<path d='{d}' fill='#00f' stroke='#000' stroke-width='0.5'/>"))), "svgpathimage");
+}
+
+#[test]
+fn svg_deep_nesting() {
+    let k = n(5000);
+    let body = format!("{}<rect width='50' height='50' fill='#f00'/>{}", "<g opacity='.9' transform='translate(.1 .1)'>".repeat(k), "</g>".repeat(k));
+    // Inline: the HTML parser stops nesting at 512, the scene at its own depth limit. As a file: more than 256 is broken.
+    run(page("svg 5000 nested groups (inline)", format!("<!doctype html><svg width='300' height='300' viewBox='0 0 100 100'>{body}</svg>")), "svgdeepinline");
+    run(svg_image_case("svg 5000 nested groups (image)", svg_file(&body)), "svgdeepimage");
+}
+
+#[test]
+fn svg_huge_viewbox_scales_and_tiny_dashes() {
+    let shapes = "<rect width='1e30' height='1e30' fill='#f00' stroke='#000' stroke-width='1e20' stroke-dasharray='0.0001 0.0001'/>\
+                  <circle r='1e9' fill='#00f' stroke='#0f0' stroke-width='1e-9' stroke-dasharray='1e-9'/><path d='M0 0 L1e38 1e38 L-1e38 5 Z' stroke='#000' stroke-width='1e30' stroke-linejoin='round'/>";
+    for (i, vb) in ["0 0 1e-30 1e-30", "0 0 1e30 1e30", "-1e9 -1e9 2e9 2e9", "0 0 0.0001 100000"].into_iter().enumerate() {
+        let item: &'static str = ["svg viewBox 1e-30", "svg viewBox 1e30", "svg viewBox 2e9", "svg viewBox 1e-4 x 1e5"][i];
+        let inline = format!("<!doctype html><svg width='300' height='300' viewBox='{vb}'>{shapes}</svg>");
+        run(page(item, inline), &format!("svgbigvb{i}"));
+        run(svg_image_case(item, format!("<svg {SVG_NS} width='300' height='300' viewBox='{vb}'>{shapes}</svg>").into_bytes()), &format!("svgbigvbimg{i}"));
+    }
+}
+
+#[test]
+fn svg_malformed_xml() {
+    let bad: Vec<(&'static str, Vec<u8>)> = vec![
+        ("svg unterminated tags", format!("<svg {SVG_NS}>{}", "<g><rect width='1' ".repeat(n(200_000))).into_bytes()),
+        ("svg a million open brackets", "<".repeat(n(1_000_000)).into_bytes()),
+        ("svg unmatched close tags", format!("<svg {SVG_NS}>{}</svg>", "</g>".repeat(n(200_000))).into_bytes()),
+        ("svg entity soup", format!("<svg {SVG_NS}><title>{}</title></svg>", "&#x110000;&bogus;&amp".repeat(n(100_000))).into_bytes()),
+        ("svg binary garbage", (0..n(2_000_000)).map(|i| (i * 31 % 251) as u8).collect()),
+    ];
+    for (i, (item, file)) in bad.into_iter().enumerate() {
+        run(svg_image_case(item, file), &format!("svgbad{i}"));
+    }
+}
+
+#[test]
+fn svg_20000_inline_icons() {
+    let icon = "<svg width='16' height='16' viewBox='0 0 16 16'><path d='M8 0a8 8 0 100 16A8 8 0 008 0zm1 12H7V7h2z' fill='currentColor'/></svg>";
+    run(page("svg 20000 inline icons", format!("<!doctype html><body>{}", icon.repeat(n(20_000)))), "svgicons");
+}

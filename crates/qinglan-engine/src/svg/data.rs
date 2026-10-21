@@ -21,12 +21,14 @@ impl<'a> Cur<'a> {
     pub fn end(&self) -> bool {
         self.i >= self.b.len()
     }
+    #[inline(never)]
     pub fn ws(&mut self) {
         while matches!(self.peek(), b' ' | b'\t' | b'\n' | b'\r' | 0x0c) {
             self.i += 1;
         }
     }
     /// White space and at most one comma.
+    #[inline(never)]
     pub fn sep(&mut self) {
         self.ws();
         if self.peek() == b',' {
@@ -45,6 +47,7 @@ impl<'a> Cur<'a> {
         self.i - s
     }
     /// `[+-]? (digits [. digits*] | . digits) ([eE] [+-]? digits)?`; an `e` that does not start an exponent (`1em`) is left.
+    #[inline(never)]
     pub fn number(&mut self) -> Option<f32> {
         let start = self.i;
         if matches!(self.peek(), b'+' | b'-') {
@@ -97,6 +100,7 @@ pub enum Unit {
 }
 
 /// A length: the number and its unit (absolute units are converted to px, CSS px = 1/96 in).
+#[inline(never)]
 pub fn length(s: &str) -> Option<(f32, Unit)> {
     let mut c = Cur::new(s.trim());
     let v = c.number()?;
@@ -118,6 +122,7 @@ pub fn length(s: &str) -> Option<(f32, Unit)> {
 }
 
 /// A number list separated by white space and commas; `None` when anything else is in it.
+#[inline(never)]
 pub fn numbers(s: &str, max: usize) -> Option<Vec<f32>> {
     let mut c = Cur::new(s);
     let mut out = Vec::new();
@@ -198,7 +203,7 @@ pub fn path(d: &str, max_segs: usize) -> (Path, bool) {
                     kind = 0;
                 }
                 b'c' | b's' => {
-                    let c1 = if cmd.to_ascii_lowercase() == b'c' {
+                    let c1 = if cmd.eq_ignore_ascii_case(&b'c') {
                         let (x, y) = (num(&mut c)?, num(&mut c)?);
                         Pt::new(base.x + x, base.y + y)
                     } else if kind == 1 {
@@ -212,7 +217,7 @@ pub fn path(d: &str, max_segs: usize) -> (Path, bool) {
                     (ctrl, cur, kind) = (c2, to, 1);
                 }
                 b'q' | b't' => {
-                    let c1 = if cmd.to_ascii_lowercase() == b'q' {
+                    let c1 = if cmd.eq_ignore_ascii_case(&b'q') {
                         let (x, y) = (num(&mut c)?, num(&mut c)?);
                         Pt::new(base.x + x, base.y + y)
                     } else if kind == 2 {

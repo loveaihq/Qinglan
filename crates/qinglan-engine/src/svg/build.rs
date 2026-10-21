@@ -64,6 +64,14 @@ pub struct Ids(Option<FxHashMap<Box<str>, NodeId>>);
 
 impl Ids {
     pub fn get(&mut self, doc: &Document, id: &str) -> Option<NodeId> {
+        // `url(#a%20b)` and `href="#%E2%9C%93"` name the element whose id is the decoded text.
+        let decoded;
+        let id = if id.contains('%') {
+            decoded = String::from_utf8_lossy(&crate::url::percent_decode(id.as_bytes())).into_owned();
+            decoded.as_str()
+        } else {
+            id
+        };
         let map = self.0.get_or_insert_with(|| {
             let mut m: FxHashMap<Box<str>, NodeId> = FxHashMap::default();
             if let Some(idat) = doc.atoms.lookup("id") {
@@ -121,7 +129,7 @@ struct B<'a> {
     styles: &'a [Option<Rc<ComputedStyle>>],
     ids: &'a mut Ids,
     sc: Scene,
-    props: [Option<Atom>; 16],
+    props: [Option<Atom>; 23],
     visits: u64,
     segs: usize,
     groups: u32,
@@ -135,16 +143,12 @@ struct B<'a> {
 /// Build the scene of the `svg` element `root`. `ref_size` is what percentages refer to when the root has no viewBox (the
 /// natural size when `None`).
 pub fn scene(doc: &Document, styles: &[Option<Rc<ComputedStyle>>], root: NodeId, ids: &mut Ids, ref_size: Option<(f32, f32)>) -> Scene {
-    const NAMES: [&str; 16] = [
-        "fill", "stroke", "fill-opacity", "stroke-opacity", "fill-rule", "clip-rule", "stroke-width", "stroke-linecap", "stroke-linejoin",
-        "stroke-miterlimit", "stroke-dasharray", "stroke-dashoffset", "text-anchor", "clip-path", "stop-color", "stop-opacity",
-    ];
-    let mut props = [None; 16];
-    for (p, n) in props.iter_mut().zip(NAMES) {
+    let mut props = [None; 23];
+    for (p, n) in props.iter_mut().zip(crate::css::svg_props::NAMES) {
         *p = doc.atoms.lookup(n);
     }
     let intr = intrinsic(doc, root);
-    let sc = Scene { id: id_counter(), intrinsic: intr, ops: Vec::new(), grads: Vec::new(), clips: Vec::new(), links: Vec::new(), work: 0, complete: true };
+    let sc = Scene { id: id_counter(), intrinsic: intr, outer: Transform::IDENTITY, ops: Vec::new(), grads: Vec::new(), clips: Vec::new(), links: Vec::new(), work: 0, complete: true };
     let mut b = B { doc, styles, ids, sc, props, visits: 0, segs: 0, groups: 0, active: Vec::new(), grads: FxHashMap::default(), space: true };
     if let Some(style) = styles.get(root as usize).and_then(Option::as_ref) {
         let vp = intr.vb.map_or_else(|| ref_size.unwrap_or_else(|| intr.object_size()), |v| (v[2], v[3]));
@@ -166,7 +170,11 @@ pub fn scene(doc: &Document, styles: &[Option<Rc<ComputedStyle>>], root: NodeId,
             clip: 0,
         };
         b.apply(&mut st, style, None, vp);
-        if style.boxs.display != Display::None {
+        // The `transform` attribute of the outermost svg (the CSS property is the layout box's business).
+        if style.misc.fx.as_deref().is_none_or(|f| f.xform.is_empty()) {
+            b.sc.outer = b.attr(root, "transform").and_then(data::transform).unwrap_or(Transform::IDENTITY);
+        }
+        if style.boxs.display != Display::None && !intr.zero_vb {
             b.children(root, style, &st, &Transform::IDENTITY, vp, 0);
         }
     }
@@ -182,6 +190,7 @@ fn alpha_of(op: f32) -> u8 {
     (op.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
+#[inline(never)]
 fn parse_paint(t: &str) -> Option<Spec> {
     let t = t.trim();
     if t.eq_ignore_ascii_case("none") {
@@ -222,12 +231,14 @@ impl<'a> B<'a> {
         self.styles.get(n as usize).and_then(Option::as_ref)
     }
 
+    #[inline(never)]
     fn attr(&self, n: NodeId, name: &str) -> Option<&'a str> {
         let doc = self.doc;
         let e = doc.element(n)?;
         e.attrs.iter().find(|a| a.ns == Namespace::None && doc.atoms.get(a.name) == name).map(|a| doc.value(a))
     }
 
+    #[inline(never)]
     fn href(&self, n: NodeId) -> Option<&'a str> {
         let doc = self.doc;
         let e = doc.element(n)?;
@@ -235,6 +246,7 @@ impl<'a> B<'a> {
         find(Namespace::None).or_else(|| find(Namespace::XLink))?.trim().strip_prefix('#')
     }
 
+    #[inline(never)]
     fn name(&self, n: NodeId) -> &'a str {
         self.doc.element(n).map_or("", |e| self.doc.atoms.get(e.name))
     }
@@ -244,6 +256,7 @@ impl<'a> B<'a> {
     }
 
     /// The element's own declaration of SVG property `p` (not what it inherits from `parent`).
+    #[inline(never)]
     fn own(&self, style: &ComputedStyle, parent: Option<&ComputedStyle>, p: usize) -> Option<String> {
         let at = self.props.get(p).copied().flatten()?;
         let v = style.custom.get(&at)?;
@@ -254,11 +267,28 @@ impl<'a> B<'a> {
     }
 
     /// A length attribute in user units: `%` of `refv`, `em` of the element's font size.
+    #[inline(never)]
     fn len(&self, n: NodeId, name: &str, style: &ComputedStyle, refv: f32) -> Option<f32> {
-        let (v, u) = data::length(self.attr(n, name)?)?;
+        // The CSS property of the same name (SVG 2 geometry 10) wins over the attribute.
+        let p = match name {
+            "cx" => 16,
+            "cy" => 17,
+            "r" => 18,
+            "rx" => 19,
+            "ry" => 20,
+            "x" => 21,
+            "y" => 22,
+            _ => 99,
+        };
+        let css = if p < 99 { self.own(style, self.style(self.doc.parent(n)).map(|s| &**s), p) } else { None };
+        let (v, u) = data::length(match &css {
+            Some(t) => t,
+            None => self.attr(n, name)?,
+        })?;
         Some(unit_px(v, u, style.font.size, refv))
     }
 
+    #[inline(never)]
     fn apply(&self, st: &mut St, style: &ComputedStyle, parent: Option<&ComputedStyle>, vp: (f32, f32)) {
         if parent.is_none_or(|p| p.text.color != style.text.color) {
             st.color = style.text.color;
@@ -382,6 +412,7 @@ impl<'a> B<'a> {
 
     /// The transform of an element: the CSS `transform` property (about `transform-origin`, which is `0 0` in SVG unless
     /// set), else the `transform` attribute.
+    #[inline(never)]
     fn xform(&self, n: NodeId, style: &ComputedStyle, vp: (f32, f32)) -> Transform {
         if let Some(fx) = style.misc.fx.as_deref().filter(|f| !f.xform.is_empty()) {
             let mut f = fx.clone();
@@ -436,11 +467,35 @@ impl<'a> B<'a> {
                     self.elem(c, Some(style), &s2, &ctm2, vp, depth + 1);
                 }
             }
-            "svg" => self.nested(n, n, style, &s2, &ctm, &ctm2, vp, depth, None),
+            "svg" => self.nested(n, n, style, &s2, ctm, &ctm2, vp, depth, None),
             "use" => self.use_elem(n, style, &s2, &ctm2, vp, depth),
             "text" => self.text(n, style, &s2, &ctm2, vp),
             _ => {
                 let path = self.shape_path(n, name, style, vp);
+                // `pathLength` scales dash lengths: real units per author unit (SVG 2 paths 9.? "pathLength").
+                let pl = self.attr(n, "pathLength").and_then(|t| data::numbers(t, 1)).and_then(|v| v.first().copied()).filter(|v| *v >= 0.0);
+                // `pathLength="0"` is no dashing at all (the line is solid).
+                if pl == Some(0.0) {
+                    s2.dash = Rc::new(Vec::new());
+                }
+                let scale = pl.filter(|v| *v > 0.0).map_or(1.0, |pl| {
+                    let len: f32 = path
+                        .flatten(0.02)
+                        .iter()
+                        .map(|p| {
+                            let open: f32 = p.pts.windows(2).map(|w| if let [a, b] = w { (b.x - a.x).hypot(b.y - a.y) } else { 0.0 }).sum();
+                            match (p.closed, p.pts.first(), p.pts.last()) {
+                                (true, Some(a), Some(b)) => open + (b.x - a.x).hypot(b.y - a.y),
+                                _ => open,
+                            }
+                        })
+                        .sum();
+                    len / pl
+                });
+                if scale != 1.0 {
+                    s2.dash = Rc::new(s2.dash.iter().map(|d| d * scale).collect());
+                    s2.dash_off *= scale;
+                }
                 self.shape(path, &ctm2, &s2, style, fold);
             }
         }
@@ -454,6 +509,7 @@ impl<'a> B<'a> {
     }
 
     /// The union of the boxes of the operations since `from`, as a link target.
+    #[inline(never)]
     fn link(&mut self, n: NodeId, from: usize) {
         let mut bb: Option<[f32; 4]> = None;
         for op in self.sc.ops.iter().skip(from) {
@@ -485,6 +541,7 @@ impl<'a> B<'a> {
 
     // ---- shapes ----------------------------------------------------------------------------------
 
+    #[inline(never)]
     fn shape_path(&mut self, n: NodeId, name: &str, style: &ComputedStyle, vp: (f32, f32)) -> Path {
         let l = |s: &Self, a: &str, r: f32| s.len(n, a, style, r).unwrap_or(0.0);
         let (x, y) = (l(self, "x", vp.0), l(self, "y", vp.1));
@@ -512,7 +569,7 @@ impl<'a> B<'a> {
             }
             "circle" => {
                 let r = self.len(n, "r", style, ((vp.0 * vp.0 + vp.1 * vp.1) / 2.0).sqrt()).unwrap_or(0.0);
-                if r > 0.0 { Path::ellipse(l(self, "cx", vp.0), l(self, "cy", vp.1), r, r) } else { Path::new() }
+                if r > 0.0 { ellipse_path(l(self, "cx", vp.0), l(self, "cy", vp.1), r, r) } else { Path::new() }
             }
             "ellipse" => {
                 let (rx, ry) = (self.len(n, "rx", style, vp.0), self.len(n, "ry", style, vp.1));
@@ -521,7 +578,7 @@ impl<'a> B<'a> {
                     (Some(a), None) | (None, Some(a)) => (a, a),
                     _ => (0.0, 0.0),
                 };
-                if rx > 0.0 && ry > 0.0 { Path::ellipse(l(self, "cx", vp.0), l(self, "cy", vp.1), rx, ry) } else { Path::new() }
+                if rx > 0.0 && ry > 0.0 { ellipse_path(l(self, "cx", vp.0), l(self, "cy", vp.1), rx, ry) } else { Path::new() }
             }
             "line" => {
                 let mut p = Path::new();
@@ -533,7 +590,7 @@ impl<'a> B<'a> {
                 // polyline / polygon: pairs of numbers; an odd trailing number is dropped (SVG 2 shapes 10.5).
                 let pts = data::numbers(self.attr(n, "points").unwrap_or(""), MAX_PATH_SEGS * 2).unwrap_or_default();
                 let mut p = Path::new();
-                for (i, xy) in pts.chunks_exact(2).enumerate() {
+                for (i, xy) in pts.as_chunks::<2>().0.iter().enumerate() {
                     let (a, b) = (xy.first().copied().unwrap_or(0.0), xy.get(1).copied().unwrap_or(0.0));
                     if i == 0 {
                         p.move_to(a, b);
@@ -550,6 +607,7 @@ impl<'a> B<'a> {
         }
     }
 
+    #[inline(never)]
     fn resolve(&mut self, spec: &Spec, st: &St, op: f32, fold: u8) -> Option<Fill> {
         let alpha = mul255(u32::from(alpha_of(op)), u32::from(fold)) as u8;
         match spec {
@@ -605,7 +663,12 @@ impl<'a> B<'a> {
             return;
         }
         let _ = from;
-        let vb = self.attr(n, "viewBox").and_then(|s| data::numbers(s, 5)).and_then(|v| match v.as_slice() {
+        let nums = self.attr(n, "viewBox").and_then(|s| data::numbers(s, 5));
+        // A viewBox with a zero width or height turns the element's rendering off (SVG 2 coordinate-systems 8.2).
+        if matches!(nums.as_deref(), Some(&[_, _, c, d]) if (c == 0.0 || d == 0.0) && c >= 0.0 && d >= 0.0) {
+            return;
+        }
+        let vb = nums.and_then(|v| match v.as_slice() {
             &[a, b, c, d] if c > 0.0 && d > 0.0 => Some([a, b, c, d]),
             _ => None,
         });
@@ -647,11 +710,7 @@ impl<'a> B<'a> {
                 let mut s2 = st.clone();
                 self.apply(&mut s2, &tstyle, pstyle.as_deref(), vp);
                 let t = ctm2.compose(&Transform::translate(x, y));
-                if tname == "svg" {
-                    self.nested(target, n, &tstyle, &s2, &t, &t, vp, depth + 1, Some((w, h)));
-                } else {
-                    self.nested(target, n, &tstyle, &s2, &t, &t, vp, depth + 1, Some((Some(w.unwrap_or(vp.0)), Some(h.unwrap_or(vp.1)))));
-                }
+                self.nested(target, n, &tstyle, &s2, &t, &t, vp, depth + 1, Some((w, h)));
             }
             _ => {
                 let t = ctm2.compose(&Transform::translate(x, y));
@@ -665,6 +724,7 @@ impl<'a> B<'a> {
 
     /// The clip made by `clip-path: url(#id)` on `n` (1 + index), nested in `outer`.
     #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
     fn clip_of(&mut self, n: NodeId, style: &ComputedStyle, parent: Option<&ComputedStyle>, ctm: &Transform, outer: u32, vp: (f32, f32), depth: u32) -> Option<u32> {
         let t = self.own(style, parent, P_CLIP_PATH)?;
         let id = url_id(&t)?;
@@ -725,6 +785,7 @@ impl<'a> B<'a> {
     }
 
     /// The bounding box (x, y, w, h) of a shape or a group of shapes in the element's own user space.
+    #[inline(never)]
     fn bbox(&mut self, n: NodeId, vp: (f32, f32), depth: u32) -> Option<[f32; 4]> {
         let style = self.style(n)?.clone();
         let name = self.name(n);
@@ -761,7 +822,8 @@ impl<'a> B<'a> {
         let kind = self.name(n);
         let mut cur = n;
         for _ in 0..8 {
-            if let Some(v) = self.attr(cur, name) {
+            // An empty `gradientTransform` is as good as none, so the one of the gradient `href` points at is inherited.
+            if let Some(v) = self.attr(cur, name).filter(|v| name != "gradientTransform" || !v.trim().is_empty()) {
                 return Some(v);
             }
             let next = self.href(cur)?;
@@ -789,6 +851,7 @@ impl<'a> B<'a> {
         r
     }
 
+    #[inline(never)]
     fn build_gradient(&mut self, n: NodeId, _depth: u32) -> Option<GradRef> {
         let radial = match self.name(n) {
             "linearGradient" => false,
@@ -863,6 +926,10 @@ impl<'a> B<'a> {
             _ => 0,
         };
         let xf = self.grad_attr(n, "gradientTransform", false).and_then(data::transform).unwrap_or(Transform::IDENTITY);
+        // A transform that cannot be inverted makes the paint server invalid: the fallback is used.
+        if !xf.inverse().a.is_finite() {
+            return None;
+        }
         self.sc.grads.push(Grad { radial, bbox, xf, spread, p, stops });
         Some(GradRef::Index(self.sc.grads.len() as u32 - 1))
     }
@@ -884,10 +951,10 @@ impl<'a> B<'a> {
         let mut cur = TextOp { x, y, ctm: *ctm, anchor: st.anchor, runs: Vec::new(), clip: st.clip };
         self.space = true;
         self.text_run(n, style, st, vp, &mut cur, &mut chunks, 0);
-        if let Some(r) = cur.runs.last_mut() {
-            if r.text.ends_with(' ') {
-                r.text.pop();
-            }
+        if let Some(r) = cur.runs.last_mut()
+            && r.text.ends_with(' ')
+        {
+            r.text.pop();
         }
         chunks.push(cur);
         for c in chunks {
@@ -898,6 +965,7 @@ impl<'a> B<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
     fn text_run(&mut self, n: NodeId, style: &Rc<ComputedStyle>, st: &St, vp: (f32, f32), cur: &mut TextOp, chunks: &mut Vec<TextOp>, depth: u32) {
         if depth > 16 {
             return;
@@ -957,6 +1025,19 @@ impl<'a> B<'a> {
             }
         }
     }
+}
+
+/// The path of a circle or ellipse: from (cx + rx, cy), clockwise, four arcs (SVG 2 shapes 10.3, 10.4: where the dashes start).
+fn ellipse_path(cx: f32, cy: f32, rx: f32, ry: f32) -> Path {
+    let k = crate::vector::KAPPA;
+    let mut p = Path::new();
+    p.move_to(cx + rx, cy);
+    p.cubic_to(cx + rx, cy + k * ry, cx + k * rx, cy + ry, cx, cy + ry);
+    p.cubic_to(cx - k * rx, cy + ry, cx - rx, cy + k * ry, cx - rx, cy);
+    p.cubic_to(cx - rx, cy - k * ry, cx - k * rx, cy - ry, cx, cy - ry);
+    p.cubic_to(cx + k * rx, cy - ry, cx + rx, cy - k * ry, cx + rx, cy);
+    p.close();
+    p
 }
 
 fn rule_of(t: &str) -> FillRule {

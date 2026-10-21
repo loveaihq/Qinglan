@@ -149,6 +149,12 @@
 | 网页字体：彩色字形各层的像素合计 / 合成用的外框 | 16 Mpx / 1 Mpx（`dwrite.rs`） | 这个字形按单色画 |
 | 注音对（`ruby_pairs`，每对约 4 个盒子） | 和生成的盒子共用同一个额度（`gen_cap`） | 后面的底字和 `rt` 当普通行内，页面标记“不完整” |
 | 盒阴影的遮罩（`paint/fx.rs`，切掉中间不变的行列之后的像素数 `MAX_MASK_PX`；保留 `MAX_KEPT_PX` 每条、`MAX_KEPT_BYTES` 合计） | 4 Mpx；保留 1 Mpx / 6 MB | 这个阴影不画（遮罩的大小只和圆角、模糊半径有关，盒子再大也不会超；超的只有 `blur` 大到上千像素的） |
+| SVG 的 XML 文件：节点数 / 嵌套深度 / 每个元素的属性（`svg/xml.rs`） | 15 万 / 256 / 256 | 解析失败，坏图 |
+| SVG 场景：元素访问（含 `use` 展开）/ 操作数 / 每条路径的段数 / 全场景路径段数（`svg/build.rs`） | 12 万 / 4 万 / 25 万 / 60 万 | 场景截断，已有的照画 |
+| SVG：元素嵌套加 `use` 展开深度 / 同时展开的 `use` 目标 / 渐变色标 / 渐变数 / 剪切路径数 | 96 / 24 / 256 / 4096 / 4096 | 更深的、环、多的不画 |
+| 一页所有内联 `<svg>` 的场景工作量（`MAX_SVG_WORK`） | 300 万 | 之后的 `<svg>` 是空盒子 |
+| SVG 渲染：画布 / 像素访问 / 同时存在的层 / 剪切平面（`svg/render.rs`） | 1600 万像素 / 2.4 亿 / 5 / 6 | 太大不画；工作量用完不再画；层满了直接画 |
+| 内联 SVG 的位图缓存（`svg::CACHE_BYTES`） | 1.5 MB | 最老的丢掉 |
 
 ### 1a 审查后的补充（2026-10-15）
 
@@ -1572,3 +1578,49 @@ gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 
 - **内存**（`qinglan.exe --bench` zhwiki-rec，1920×1080，每次新进程，滚到底，Private Bytes，5 次）：46,845,952 / 46,813,184 / 46,854,144 / 46,972,928 / 46,477,312，最大 46.97 MB（≤ 50 MB）；之后和旧 exe 交替量的 3 对：旧 46.5 / 47.1 / 47.5 MB，新 47.6 / 48.6 / 47.5 MB，最大 48.57 MB。
 - **横排页的滚动帧不变**（zhwiki-rec，673 帧）：旧 exe 中位数 6.7 / 6.1 / 6.2 ms、p95 9.5 / 9.3 / 8.7 ms；新 exe 6.1 / 6.1 / 5.9 ms、8.7 / 8.6 / 8.7 ms。
 - **v1_scroll**（`--test-font` 以外，真字体，1280×1000）：`render --scroll-x 99999` 左边缘是“第299列”（`第0列` 在 `--scroll-x 0` 的右边缘）；窗口 `--bench` 43 帧，中位数 2.4 ms，p95 3.3 ms，内存 6.1 MB；`render --scroll-bench`（`--test-font`）37 帧，中位数 1.1 ms。
+
+
+## 第 2 层 · 2e-1 SVG（2026-10-21）
+
+起点 `0220525`。代码：引擎新模块 `svg/`（`xml.rs` 自己的 XML 解析器、`data.rs` 数字/长度/路径/变换的语法、`build.rs` 场景构建、`render.rs` 渲染、`mod.rs` 类型和对外接口）；`css/svg_props.rs`、`css/presentational.rs`（`svg_hints`）、`css/stylesheet.rs`、`css/facts.rs`、`css/mod.rs`、`css/ua.css`；`layout/boxtree.rs`、`layout/replaced.rs`（`ReplacedKind::Svg`）；`paint/`（`ItemKind::Svg`）；`net/blocking.rs`、`net/page.rs`、`qinglan-win/src/images.rs`（解码器里的 SVG 分支）；`interact.rs`（`<a>` 的点击）。测试：`tests/svg.rs` 12 条（手算像素）、`svg::xml` 4 条、`svg::data` 5 条、`hostile.rs` 8 个 SVG 整页用例、WPT。
+
+### 做法：三种来源，一条流水线
+- **网页里的 `<svg>`**：HTML 解析器已经把它放进 DOM（外来内容）。`layout/boxtree.rs` 把 `svg` 元素当作替换元素（`ReplacedKind::Svg`，内部子元素不生成盒子），按元素生成一个 `Scene`（放在 `BoxTree::svgs`，按 DOM 节点编号）；尺寸按 CSS2 10.3.2/10.6.2 的替换元素规则，固有宽高取 `width`/`height`（只认绝对长度，`%` 当没有）、比例取 `viewBox`（`svg::intrinsic`），都没有时 300×150。画的时候 `ItemKind::Svg`：把场景按设备像素大小画成一张位图（缓存），再用已有的 `draw_image` 画上去，所以圆角裁剪、透明度、变形这些组的行为和图片一样。
+- **独立的 `.svg` 文件**（`<img>`、CSS 背景、`data:`）：`xml::parse` 读成同一种 `Document`（SVG 命名空间的元素），`style_document` 算样式，同一个场景构建。解码器接口不变：`ImageDecoder::probe/decode` 在 `qinglan-win` 里遇到 SVG 字节就调 `svg::probe/rasterize`（放在 WIC 前面），解码结果进原有的 12 MB 解码缓存（按设备大小计），所以背景、`<img>`、懒加载、后台解码线程全部沿用。直接打开 `.svg` 地址（`blocking::open_response`）时把它当文档（根元素是 `svg`，没写宽高时撑满窗口），不再套一个 `<img>`；XML 有错时仍套 `<img>`（显示成坏图）。
+- **样式**：交给我们的 CSS 引擎。`style` 元素和 `style=""` 在 SVG 元素上也收（`css/mod.rs`）；SVG 专有的表现属性（`fill`、`stroke*`、`fill-*`、`clip-*`、`stop-*`、`text-anchor`、`clip-path` 和 SVG 2 的几何属性 `cx cy r rx ry x y`）**不进 `PropId`**（128 位位图已用 119 位），而是作为“自定义属性”存在 `ComputedStyle::custom` 里，名字就是属性名（不以 `--` 开头，`var()` 碰不到）：层叠顺序、`!important`、继承照旧；**只有文档里有 SVG 元素时才解析**（`DocFacts::has_svg`），所以没有 SVG 的页面（中文维基）一点代价都没有。表现属性（`fill="red"`）由 `HintBuilder::svg_hints` 变成最弱的作者级声明（HTML 的 `bgcolor` 那一层）；其中本来就是 CSS 属性的（`opacity`、`display`、`visibility`、`color`、`font-*`、`overflow`、`direction`）按 CSS 解析，`font-size="12"` 无单位当 px。SVG 的 `transform` 属性自己解析（`data::transform`），CSS `transform` 优先，`transform-origin` 的初始值在 SVG 里是 `0 0`（`transform-box` 没做）。UA 样式表加 `svg:not(:root), symbol { overflow: hidden }`。
+- **继承在构建器里自己做**（`build.rs` 的 `St`）：每个元素只读“自己声明的”值（它的自定义属性条目和父元素的不是同一个 `Rc` 才算自己的），再叠在传下来的状态上。这样 `use` 实例继承的是 `use` 元素而不是被引用元素原来的父元素（SVG 2 的影子树语义），`currentColor` 用实例所在位置的 `color`。
+
+### 支持的东西（SVG 2）
+- 元素：`svg`（嵌套的有视口、`viewBox`、`preserveAspectRatio`、`overflow` 裁剪；`viewBox` 宽或高为 0 时不渲染）、`g`、`a`、`switch`（只画第一个子元素，不看条件属性）、`defs`/`symbol`、`use`（只认同文档的 `href`/`xlink:href`，`x`/`y`/`width`/`height`，`symbol` 和 `svg` 目标有视口）、`path`（全部命令含圆弧，隐含命令，按 9.5.4 画到第一个错误为止，圆弧按 B.2.4 转成每段至多四分之一圈的三次贝塞尔）、`rect`（`rx`/`ry` 规则）、`circle`、`ellipse`（路径从 `(cx+rx, cy)` 顺时针，虚线起点和规范一致）、`line`、`polyline`、`polygon`、`linearGradient`/`radialGradient`（`gradientUnits`、`spreadMethod`、`gradientTransform`、`href` 继承属性和色标、焦点 `fx fy fr`；不可逆的变换让这个渐变无效，用 `url()` 后面的备用色）、`clipPath`（形状和 `use` 指向的形状，`clip-rule`，`clipPathUnits`，自己的 `transform` 和 `clip-path`，嵌套）、`text`/`tspan`（简单：`x y dx dy` 取第一个值，`text-anchor`，字体属性，填充色，空白折叠；字形经平台排）、`style`、`title`（不画）。
+- 绘制：`fill`/`stroke`（颜色、`currentColor`、`url(#id) 备用色`、`none`）、`fill-rule`、`stroke-width/linecap/linejoin/miterlimit/dasharray/dashoffset`、`pathLength`（缩放虚线）、`opacity`（有填充又有描边的形状和所有容器用离屏层，只有一种颜料的形状把不透明度乘进颜色）、`fill-opacity`/`stroke-opacity`、`visibility`、`display`、`<a href>` 在网页里的 `<svg>` 里可点（`Scene::link_at`，按元素的包围盒）。
+- 不做（记下）：滤镜、蒙版、图案（`pattern`，用备用色）、标记（`marker`）、动画、`foreignObject`、`<image>`、`<view>`/`svgView` 片段、`transform-box`、CSS `d`/`path-length`/`zoom`、`paint-order`、`vector-effect`、`overflow: visible` 的根 `svg`（画布就是盒子）、`textPath`、每个字符各自的 `x`/`y`/`rotate` 列表、SVG 里的 `<text>` 在 `<img>`/背景里（解码在工作线程，平台排版只能在界面线程：文字不画，shields.io 一类徽章的字因此缺）、文字的旋转和斜切（只取缩放）、`xlink:href` 的 `<a>`、外部文件的 `use`/`fill` 引用。
+- **没有固有尺寸的 SVG 图片**（只有比例，或只有一边）：`probe` 按 css-images-3 5.3 的“默认对象尺寸”给一个尺寸（比例装进 300×150，缺的一边用比例或 150/300），不是“没有固有宽高”。背景的 `background-size: auto` 因此不会按默认大小算法铺满定位区域（WPT `background-size/vector` 里 110 个“只有一边/只有比例”的用例失败，都写了 notes），flex 里 `<img>` 比例图不收缩（2 个以前碰巧通过的 flex 测试退出）。要改得让 `ImageState`/`BgRef::nat` 带“缺哪一边”的信息，留给后面。
+
+### 上限（防坏 SVG）
+| 项 | 上限 | 超了怎么办 |
+|---|---|---|
+| XML 节点（元素和文本）/ 嵌套深度 / 每个元素的属性（`svg/xml.rs`） | 15 万 / 256 / 256 | 解析失败，坏图（页面里的 `<svg>` 不经过它，受 HTML 解析的 50 万节点和 512 深度限制） |
+| 一个场景的元素访问次数（含 `use` 展开，`MAX_VISITS`） | 12 万 | 场景在这里截断（`complete = false`），已有的画出来 |
+| 一个场景的操作数（`MAX_OPS`）/ 路径段数（每条 `MAX_PATH_SEGS`、全场景 `MAX_SCENE_SEGS`） | 4 万 / 25 万、60 万 | 之后的形状不要；路径画到上限为止 |
+| 元素嵌套加 `use` 展开深度（`MAX_DEPTH`）/ 同时展开的 `use` 目标 | 96 / 24 | 更深的不画；`use` 的环（自己引用自己或祖先）不画 |
+| 渐变色标（每个渐变）/ 渐变数 / 剪切路径数 / 剪切路径的部件 / 同时打开的不透明度组（场景）| 256 / 4096 / 4096 / 256 / 8 | 多的色标丢掉；多的渐变、剪切路径当不存在；多的组直接画 |
+| 一页里所有内联 `<svg>` 的场景工作量（`MAX_SVG_WORK`，访问次数加操作数） | 300 万 | 之后的 `<svg>` 是空盒子 |
+| 渲染：画布（`MAX_AREA`）/ 像素访问（`MAX_WORK`，渐变算三倍，层合成算 1/8）/ 同时存在的层 / 剪切平面 | 1600 万像素 / 2.4 亿 / 5 / 6 个 | 画布太大不画；工作量用完，剩下的形状不画；层太多的组直接画 |
+| 虚线和描边多边形、曲线段 | 沿用 `vector/`（13 万 / 3 万 / 每条曲线 128 段、一条路径 100 万点） | 同 `vector/` |
+| 网页内联 SVG 位图缓存（`svg::CACHE_BYTES`） | 1.5 MB | 最老的丢掉（每个 `<svg>` 在设备大小下的位图） |
+
+恶意网页（release，`cargo test --release -p qinglan-cli --test hostile svg`）：`use` 炸弹（10 层 × 10 个 `use`）内联 212 ms / 23 MB，作图片 189 ms / 23 MB；100 万个路径命令内联 582 ms / 62 MB，作图片 66 ms / 35 MB；5000 层嵌套的 `<g>` 内联 49 ms、作文件 45 ms（XML 深度超限，坏图）；四种极端 viewBox（1e-30、1e30、2e9、1e-4×1e5）加 1e30 的图形、1e20 的线宽、1e-9 的虚线，内联和图片各 38–691 ms / 8–13 MB；五种坏 XML（没闭合的 20 万个标签、100 万个 `<`、20 万个多余的结束标签、10 万组坏实体、200 万字节二进制）都在 38–46 ms 内成为坏图；两万个内联图标 1071 ms / 51 MB。全部 ≤ 5 秒、≤ 200 MB。
+
+### WPT（`qinglan-cli wpt <目录>`，测试平台，提交 3bcf9ec；`svg/` 下用和前面同样的筛法加上“没有 `<text>`、`<filter>`、`<mask>`、`<pattern>`、`<marker>`、`<image>`、`<foreignObject>`、动画、`<switch>`、字体”：109 个）
+- `svg/painting` 9 / 11、`svg/shapes` 23 / 25、`svg/path` 5 / 14、`svg/struct` 18 / 32、`svg/coordinate-systems` 9 / 13、`svg/pservers` 14 / 14：**合计 78 / 109（71.6%）**。bug 类 1 个（`svg/shapes/reftests/pathlength-002.svg`，`bug (open)`：圆上虚线的相位差，没查）；其余失败每个一行写在 `notes.txt`，都是 `limit`：bearing 命令（3）、CSS `path-length`/`d` 属性（6）、`use`/`fill` 引用外部文件（12）、SVG 2 影子树选择器（3）、`zoom`（1）、绝对定位的 `svg` 只有比例（2）、零宽固有尺寸（1）、SVG 视图片段（1）。
+- `css/css-images` 59 / 129（45.7%，bug 类 0；新加 3 个，其中 `image()` 的 2 个是 `limit`），`css/css-backgrounds` 318 / 446（71.3%，bug 类还是原来的 6；新加 `background-size/vector` 等 SVG 背景用例 209 个）：**新加的 SVG 背景用例（`background-size/vector` 等 209 个）约一半通过，110 个失败都是上面说的“没有固有尺寸”`limit`，这是本步最大的遗留**。`css/css-flexbox` 666 / 951，`css/css-grid` 440 / 713（数字来自 `--update`，原先的统计口径是整个目录，我没有重算旧数）：3 个以前碰巧通过的测试（`align-items-007`、`aspect-ratio-intrinsic-size-007`、`grid-item-no-aspect-ratio-stretch-1`，里面的 SVG 以前是坏图或被忽略）退出通过名单，各有一行 `limit`。`wpt --check`：3188 / 3188。
+- 工具：`wpt` 现在把 `.svg` 当测试页（`svg/*/reftests` 也进），`<html:link>` 这类带前缀的 `link`、`meta` 认得；`classify` 把 SVG 的滤镜、蒙版等归 `none`、文字归 `2e`。`tests/wpt` 真实字节 12.2 → 12.7 MB（`du` 磁盘占用 32 → 34 MB；任务给的 26 MB 上限按磁盘占用算在本步之前就已经超了，按字节算没有）。
+
+### 数据（release，`BatteryStatus = 2` 插电；**不是干净环境**：CPU 负载约 23%，有一个 Emulator.exe、一个 qpdf 和两个空闲的 cargo 在）
+- **体积**：`qinglan.exe` 2,582,016（`0220525` 用同一台机器、同一份配置另建 worktree 重新编出来，2,582,016 字节）→ **2,710,528**，+128,512，**超出本步 +80 KB 的预算 48 KB**（`inline(never)` 试过只省 1.5 KB）；第 2 层上限 2,726,297 还剩 15,769，所以 2e-2（+40 KB）放不下，要么先压体积、要么放宽。链接映射里 `svg` 模块的代码约 92 KB（`build.rs`、`render.rs`、`data.rs`、`xml.rs` 各有几个 3–7 KB 的大函数），`css`、`layout`、`paint`、`net` 里的改动加起来不到 10 KB。
+- **内存**（`qinglan.exe --bench`，新旧交替各 5 次，滚到底的私有字节）：zhwiki-rec 旧 46.22–48.12（最大 48.12）、新 46.43–48.08（**最大 48.08 MB**，≤ 50）；gh-ripgrep 旧 21.7–22.4、新 27.9–28.2（**+5.8 MB**：几百个图标的场景、样式里的自定义属性表和位图缓存；没有拆开量）；gh-rust 旧 20.4–20.7、新 26.1–26.4。
+- **首屏**（同上，中位数 旧 → 新）：zhwiki-rec 147.1 → 157.9 ms（新的 5 次 145–391，一次离群 391；中位数 ≤ 200）、gh-ripgrep 165.3 → 169.0 ms（≤ 200）、gh-rust 127.2 → 140.5 ms。GitHub 的几百个图标在布局时各建一个场景（几微秒），位图在第一次画的时候才渲染。滚动帧中位数 5.7–7.7 ms，没有变化。
+- 真实网页（`tools/corpus_run.py render/compose`，Edge 的图用已有的，没有重取）：见 `tests/corpus/RESULTS.md` 最后一节。
+
+### 没做 / 留给后面
+- 没有固有宽高的 SVG 图片的“默认大小算法”（上面）；SVG 图片里的文字（要把平台排版搬到工作线程，或者让图片 SVG 在界面线程渲染）；`pattern`、`marker`、`mask`、滤镜；`<image>`；`overflow: visible` 的根 `svg`（图标常用它避免描边被裁，这里会裁）；内联 SVG 里的百分比在没有 `viewBox`、又由 CSS 定大小时按 300×150 算（场景在布局前建好，不知道盒子大小）；`transform-box`；`text` 里每字符的位置列表；块级 `<svg>` 在 `<a>` 里的点击（引擎本来就找不到块级替换元素的链接，图片也一样）。

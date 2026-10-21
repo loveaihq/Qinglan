@@ -79,20 +79,26 @@ struct R<'a> {
     luts: Vec<Option<Rc<Vec<[u8; 4]>>>>,
 }
 
+/// The transform from the user space of the outermost svg to a `w` x `h` canvas: the viewBox mapping; without a viewBox a user
+/// unit is `scale` pixels, or the scene's natural size is stretched to fit.
+pub fn root_transform(sc: &Scene, w: f32, h: f32, scale: Option<f32>) -> Transform {
+    let (nw, nh) = sc.intrinsic.object_size();
+    sc.outer.compose(&match sc.intrinsic.vb {
+        Some(vb) => view_transform(vb, sc.intrinsic.par.unwrap_or(Par::DEFAULT), w, h),
+        None => match scale {
+            Some(s) => Transform::scale(s, s),
+            None => Transform::scale(w / nw.max(1.0e-3), h / nh.max(1.0e-3)),
+        },
+    })
+}
+
 /// Draw `sc` onto a `w` x `h` canvas. A scene with a viewBox is mapped by it and `preserveAspectRatio`; without one a user unit
 /// is `scale` pixels, or the canvas is the scene's natural size stretched to fit. `None` when the canvas is too big.
 pub fn render(sc: &Scene, w: u32, h: u32, platform: Option<&dyn Platform>, scale: Option<f32>) -> Option<Canvas> {
     if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_AREA {
         return Some(Canvas::new(w.min(1), h.min(1)));
     }
-    let (nw, nh) = sc.intrinsic.object_size();
-    let root = match sc.intrinsic.vb {
-        Some(vb) => view_transform(vb, sc.intrinsic.par.unwrap_or(Par::DEFAULT), w as f32, h as f32),
-        None => match scale {
-            Some(s) => Transform::scale(s, s),
-            None => Transform::scale(w as f32 / nw.max(1.0e-3), h as f32 / nh.max(1.0e-3)),
-        },
-    };
+    let root = root_transform(sc, w as f32, h as f32, scale);
     let mut r = R {
         sc,
         platform,
@@ -150,10 +156,9 @@ impl R<'_> {
             return;
         };
         let k = u32::from(top.alpha);
-        for (d, s) in below.canvas.data.chunks_exact_mut(4).zip(top.canvas.data.chunks_exact(4)) {
+        for (d, s) in below.canvas.data.as_chunks_mut::<4>().0.iter_mut().zip(top.canvas.data.as_chunks::<4>().0) {
             if s[3] != 0 {
-                let px = [s[0], s[1], s[2], s[3]];
-                over(d, if k == 255 { px } else { scaled(px, k) });
+                over(d, if k == 255 { *s } else { scaled(*s, k) });
             }
         }
         self.work += u64::from(self.w) * u64::from(self.h) / 8;
@@ -268,7 +273,7 @@ impl R<'_> {
             work += cov.len() as u64 * unit;
             let base = (y as usize * w + x0 as usize) * 4;
             let Some(row) = data.get_mut(base..base + cov.len() * 4) else { return };
-            for (i, (px, &cv)) in row.chunks_exact_mut(4).zip(cov).enumerate() {
+            for (i, (px, &cv)) in row.as_chunks_mut::<4>().0.iter_mut().zip(cov).enumerate() {
                 let mut k = u32::from(cv);
                 if let Some(c) = clip {
                     k = div255(k * u32::from(c.get(y as usize * w + x0 as usize + i).copied().unwrap_or(0)));
@@ -346,8 +351,8 @@ impl R<'_> {
                     }
                     let src = if colored {
                         let b = mi * 4;
-                        let Some(p) = mask.bgra.get(b..b + 4) else { continue };
-                        scaled([p[0], p[1], p[2], p[3]], div255(cov * u32::from(run.fill.alpha)))
+                        let Some(&[p0, p1, p2, p3]) = mask.bgra.get(b..b + 4) else { continue };
+                        scaled([p0, p1, p2, p3], div255(cov * u32::from(run.fill.alpha)))
                     } else {
                         scaled(color, cov)
                     };
@@ -418,7 +423,8 @@ impl GradEval {
             let c = pdx * pdx + pdy * pdy - fr * fr;
             if a.abs() < 1.0e-9 {
                 if b.abs() < 1.0e-12 {
-                    return [0; 4];
+                    // The circles coincide: the last stop fills everything (SVG 2 pservers 13.3.? "fr = r").
+                    return self.lut.last().copied().unwrap_or([0; 4]);
                 }
                 c / (2.0 * b)
             } else {

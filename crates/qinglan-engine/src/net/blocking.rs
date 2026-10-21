@@ -103,7 +103,15 @@ pub fn open_response(resp: &Response, platform: &dyn Platform) -> OpenResult {
             let d = decode_document(&resp.body, resp.charset().as_deref(), platform);
             (format!("<!DOCTYPE html><pre>\n{}</pre>", escape_html(&d.text)), d.encoding, d.warning)
         }
-        ContentKind::Image => (format!("<!DOCTYPE html><img src=\"{}\">", escape_html(&resp.url.href())), Encoding::UTF_8, None),
+        ContentKind::Image => {
+            // An SVG file is a document of its own (it fills the window); a broken one is the picture of a broken image.
+            if content::is_svg(resp)
+                && let Ok(doc) = crate::svg::xml::parse(&resp.body)
+            {
+                return OpenResult::Page(Box::new(Opened { url: resp.url.clone(), status: resp.status, doc, encoding: Encoding::UTF_8, kind, warning: None }));
+            }
+            (format!("<!DOCTYPE html><img src=\"{}\">", escape_html(&resp.url.href())), Encoding::UTF_8, None)
+        }
         ContentKind::Unsupported { mime } => return OpenResult::Download { url: resp.url.clone(), mime: mime.clone() },
     };
     let doc = parse_document(text);

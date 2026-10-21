@@ -27,6 +27,17 @@ use crate::vector::{FillRule, Path, Stroke, Transform};
 pub use build::{Ids, scene};
 pub use render::{Canvas, render};
 
+impl Scene {
+    /// The `a` element with an `href` under the point (`x`, `y`) of the svg's box (CSS px from its top left corner, the box
+    /// `w` x `h`), the last one painted first.
+    pub fn link_at(&self, doc: &Document, x: f32, y: f32, w: f32, h: f32) -> Option<NodeId> {
+        let t = render::root_transform(self, w, h, Some(1.0)).inverse();
+        let p = t.apply(crate::vector::Pt::new(x, y));
+        let has_href = |n: NodeId| doc.element(n).is_some_and(|e| e.attrs.iter().any(|a| a.ns == crate::html::dom::Namespace::None && doc.atoms.get(a.name) == "href"));
+        self.links.iter().rev().find(|l| p.x >= l.bbox[0] && p.x <= l.bbox[0] + l.bbox[2] && p.y >= l.bbox[1] && p.y <= l.bbox[1] + l.bbox[3] && has_href(l.node)).map(|l| l.node)
+    }
+}
+
 /// `preserveAspectRatio` (SVG 2 coordinate-systems 8.8): alignment per axis (0 min, 1 mid, 2 max), `none`, `slice`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Par {
@@ -85,6 +96,8 @@ pub struct Intrinsic {
     pub ratio: Option<f32>,
     pub vb: Option<[f32; 4]>,
     pub par: Option<Par>,
+    /// The viewBox has a zero width or height: nothing is rendered (SVG 2 coordinate-systems 8.2).
+    pub zero_vb: bool,
 }
 
 /// Read the `width`, `height`, `viewBox` and `preserveAspectRatio` of the `svg` element `root`. Lengths in `%` and
@@ -102,7 +115,9 @@ pub fn intrinsic(doc: &Document, root: NodeId) -> Intrinsic {
         (v >= 0.0).then_some(v)
     };
     let (w, h) = (abs("width"), abs("height"));
-    let vb = attr("viewBox").and_then(|s| data::numbers(s, 5)).and_then(|v| match v.as_slice() {
+    let nums = attr("viewBox").and_then(|s| data::numbers(s, 5));
+    let zero_vb = matches!(nums.as_deref(), Some(&[_, _, c, d]) if (c == 0.0 || d == 0.0) && c >= 0.0 && d >= 0.0);
+    let vb = nums.and_then(|v| match v.as_slice() {
         &[x, y, w, h] if w > 0.0 && h > 0.0 => Some([x, y, w, h]),
         _ => None,
     });
@@ -111,7 +126,7 @@ pub fn intrinsic(doc: &Document, root: NodeId) -> Intrinsic {
         (_, _, Some(v)) => Some(v[2] / v[3]),
         _ => None,
     };
-    Intrinsic { w, h, ratio, vb, par: attr("preserveAspectRatio").map(Par::parse) }
+    Intrinsic { w, h, ratio, vb, par: attr("preserveAspectRatio").map(Par::parse), zero_vb }
 }
 
 impl Intrinsic {
@@ -228,6 +243,8 @@ pub struct Scene {
     /// Unique, so that renderings of it can be cached by id.
     pub id: u64,
     pub intrinsic: Intrinsic,
+    /// The `transform` attribute of the outermost svg, applied outside the viewBox mapping.
+    pub outer: Transform,
     pub ops: Vec<Op>,
     pub grads: Vec<Grad>,
     pub clips: Vec<Clip>,
@@ -271,8 +288,10 @@ pub fn rasterize(bytes: &[u8], width: u32, height: u32) -> Result<DecodedImage, 
 /// The bitmaps of inline SVGs drawn lately, kept so that a scroll repaints a page of icons without rendering each again.
 const CACHE_BYTES: usize = 3 << 19;
 
+type CacheEntry = (u64, u32, u32, std::sync::Arc<DecodedImage>);
+
 thread_local! {
-    static CACHE: std::cell::RefCell<Vec<(u64, u32, u32, std::sync::Arc<DecodedImage>)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static CACHE: std::cell::RefCell<Vec<CacheEntry>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// The rendering of `sc` at `w` x `h` device pixels (`dpr` device pixels per px of its user space when it has no viewBox),
@@ -285,7 +304,7 @@ pub fn cached_bitmap(sc: &Scene, w: u32, h: u32, platform: &dyn crate::platform:
     let img = std::sync::Arc::new(DecodedImage { width: canvas.w, height: canvas.h, natural_width: w, natural_height: h, bgra: canvas.data });
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
-        let cost = |e: &(u64, u32, u32, std::sync::Arc<DecodedImage>)| e.3.bgra.len();
+        let cost = |e: &CacheEntry| e.3.bgra.len();
         while !c.is_empty() && c.iter().map(cost).sum::<usize>() + img.bgra.len() > CACHE_BYTES {
             c.remove(0);
         }
