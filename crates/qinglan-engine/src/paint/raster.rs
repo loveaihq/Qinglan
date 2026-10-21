@@ -125,6 +125,9 @@ pub(super) struct Ctx<'a> {
     /// Coverage of the corner boxes of rounded clips, found when first needed in this frame: (clip, corner, mask, where the
     /// mask's origin is on the frame).
     pub(super) corner_cache: Vec<(u32, usize, Rc<Mask>, i32, i32)>,
+    /// The scrollport sticky boxes stick to, in the page coordinates of this context: x, y, width, height (CSS px). None inside a
+    /// layer of a group, where nothing sticks.
+    pub(super) port: Option<(f32, f32, f32, f32)>,
 }
 
 /// A corner box up to this many pixels on a side has its coverage kept from frame to frame.
@@ -166,11 +169,12 @@ pub fn render_band(list: &DisplayList, platform: &dyn Platform, images: &mut dyn
     for p in frame.data.as_chunks_mut::<4>().0 {
         *p = px;
     }
-    let mut cx = Ctx { list, platform, images, dpr, sx: 0, sy: band, bounds, stats: RasterStats::default(), corner_cache: Vec::new(), depth: 0, base_dpr: dpr };
+    let mut cx = Ctx { list, platform, images, dpr, sx: 0, sy: band, bounds, stats: RasterStats::default(), corner_cache: Vec::new(), depth: 0, base_dpr: dpr, port: None };
     for it in list.fixed.iter().take(list.fixed_below) {
         cx.item(frame, it);
     }
     (cx.sx, cx.sy) = (sx, sy);
+    cx.port = Some((view.scroll_x, view.scroll_y, list.vp.0, list.vp.1));
     let top_css = view.scroll_y.max(0.0) + (f64::from(band) / dpr) as f32;
     let top = LU::from_f32(top_css);
     let bottom = LU::from_f32(top_css + (h as f32 / dpr as f32) + 1.0);
@@ -182,9 +186,11 @@ pub fn render_band(list: &DisplayList, platform: &dyn Platform, images: &mut dyn
         }
     }
     (cx.sx, cx.sy) = (0, band);
+    cx.port = None;
     for it in list.fixed.iter().skip(list.fixed_below) {
         cx.item(frame, it);
     }
+    cx.page_bar(frame, if list.axis == super::ScrollAxis::Down { view.scroll_x } else { view.scroll_x.abs() });
     cx.stats
 }
 
@@ -307,6 +313,13 @@ impl Ctx<'_> {
             ItemKind::Shadow(i) => {
                 if let Some(s) = self.list.shadows.get(i as usize) {
                     self.shadow(frame, i, s, clip);
+                }
+            }
+            ItemKind::Pane(i) => {
+                let list = self.list;
+                if let Some(p) = list.panes.get(i as usize) {
+                    self.stats.items += 1;
+                    self.pane(frame, p, r, clip);
                 }
             }
             ItemKind::Group(i) => {
@@ -472,7 +485,10 @@ fn rows_mut<'a>(frame: &'a mut Frame, d: &IRect) -> impl Iterator<Item = (i32, &
         .filter_map(move |(y, row)| row.get_mut(x0..x1).map(|r| (y as i32, r)))
 }
 
-fn fill(frame: &mut Frame, d: &IRect, px: [u8; 4]) {
+pub(super) fn fill(frame: &mut Frame, d: &IRect, px: [u8; 4]) {
+    if d.is_empty() {
+        return;
+    }
     for (_, row) in rows_mut(frame, d) {
         if px[3] == 255 {
             for p in row.as_chunks_mut::<4>().0 {

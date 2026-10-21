@@ -1,6 +1,6 @@
 viewport 400x300
-block html (0,0 400x853)
-  block body (0,0 400x853)
+block html (0,0 400x855)
+  block body (0,0 400x855)
     block div#a (0,0 400x16)
       line (0,0 400x16) baseline=11
         inline-block input#t1 (0,0 208x16) [clip]
@@ -30,37 +30,37 @@ block html (0,0 400x853)
         inline-block textarea#ta (0,85 106x26) [clip]
           line (3,88 100x10) baseline=96
             text "ab" (3,88 20x10)
-    block div#g (0,113 400x12)
-      line (0,113 400x12) baseline=122
-        inline-block select#sel (0,113 32x12) [clip]
-          line (1,114 30x10) baseline=122
-            text "two" (1,114 30x10)
-    block div#h1 (0,125 400x156)
-      line (0,125 400x156) baseline=279
-        replaced iframe#fr (0,125 304x154) [placeholder:iframe]
-    block div#h2 (0,281 400x152)
-      line (0,281 400x152) baseline=431
-        replaced video#vd (0,281 300x150) [placeholder:video]
-    block div#h3 (0,433 400x22)
-      line (0,433 400x22) baseline=453
-        replaced canvas#cv (0,433 50x20) [placeholder:canvas]
-    block div#h4 (0,455 400x56)
-      line (0,455 400x56) baseline=509
-        replaced audio#au (0,455 300x54) [placeholder:audio]
-    block div#h5 (0,511 400x304)
-      line (0,511 400x152) baseline=661
-        replaced object#ob (0,511 300x150) [placeholder:object]
-      line (0,663 400x152) baseline=813
-        replaced embed#em (0,663 300x150) [placeholder:embed]
-    block div#h6 (0,815 400x18)
-      line (0,815 400x18) baseline=831
-        replaced meter#mt (0,815 80x16) [control:meter]
-        replaced progress#pg (80,815 160x16) [control:progress]
-    block details#dt (0,833 400x20)
-      block summary#sm (0,833 400x10)
-        line (0,833 400x10) baseline=841
-          marker "▾ " (0,833 20x10)
-          text "sum" (20,833 30x10)
-      block (anonymous) (0,843 400x10)
-        line (0,843 400x10) baseline=851
-          text "body text" (0,843 90x10)
+    block div#g (0,113 400x14)
+      line (0,113 400x14) baseline=123
+        inline-block select#sel (0,113 54x14) [clip]
+          line (5,115 30x10) baseline=123
+            text "two" (5,115 30x10)
+    block div#h1 (0,127 400x156)
+      line (0,127 400x156) baseline=281
+        replaced iframe#fr (0,127 304x154) [placeholder:iframe]
+    block div#h2 (0,283 400x152)
+      line (0,283 400x152) baseline=433
+        replaced video#vd (0,283 300x150) [placeholder:video]
+    block div#h3 (0,435 400x22)
+      line (0,435 400x22) baseline=455
+        replaced canvas#cv (0,435 50x20) [placeholder:canvas]
+    block div#h4 (0,457 400x56)
+      line (0,457 400x56) baseline=511
+        replaced audio#au (0,457 300x54) [placeholder:audio]
+    block div#h5 (0,513 400x304)
+      line (0,513 400x152) baseline=663
+        replaced object#ob (0,513 300x150) [placeholder:object]
+      line (0,665 400x152) baseline=815
+        replaced embed#em (0,665 300x150) [placeholder:embed]
+    block div#h6 (0,817 400x18)
+      line (0,817 400x18) baseline=833
+        replaced meter#mt (0,817 80x16) [control:meter]
+        replaced progress#pg (80,817 160x16) [control:progress]
+    block details#dt (0,835 400x20)
+      block summary#sm (0,835 400x10)
+        line (0,835 400x10) baseline=843
+          marker "▾ " (0,835 20x10)
+          text "sum" (20,835 30x10)
+      block (anonymous) (0,845 400x10)
+        line (0,845 400x10) baseline=853
+          text "body text" (0,845 90x10)

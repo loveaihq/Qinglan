@@ -784,3 +784,24 @@ fn svg_20000_inline_icons() {
     let icon = "<svg width='16' height='16' viewBox='0 0 16 16'><path d='M8 0a8 8 0 100 16A8 8 0 008 0zm1 12H7V7h2z' fill='currentColor'/></svg>";
     run(page("svg 20000 inline icons", format!("<!doctype html><body>{}", icon.repeat(n(20_000)))), "svgicons");
 }
+
+// ---- scroll containers and sticky boxes (step 2e-2) -------------------------------------------------------------
+
+#[test]
+fn scroll_containers_20000_siblings() {
+    let one = "<div style='overflow:auto;width:40px;height:20px'><div style='width:80px;height:60px;background:#08f'><a href=x>t</a></div></div>";
+    run(page("20000 overflow:auto boxes", format!("<!doctype html><body>{}", one.repeat(n(20_000)))), "scrollers20000");
+}
+
+#[test]
+fn scroll_containers_nested_300_deep_with_positioned_and_floated_descendants() {
+    let depth = n(300);
+    let level = "<div style='overflow:auto;height:300px;position:relative'><div style='position:absolute;left:3px;top:3px;width:9px;height:9px;background:#f00'></div><div style='float:left;width:5px;height:5px;background:#0a0'></div><div style='position:sticky;top:1px;height:4px;background:#00f'></div>";
+    run(page("300 nested scroll containers with abs, float and sticky children", format!("<!doctype html><body style='margin:0'>{}x{}", level.repeat(depth), "</div>".repeat(depth))), "scrollers_nested");
+}
+
+#[test]
+fn sticky_boxes_10000() {
+    let one = "<div style='height:30px'><div style='position:sticky;top:0;bottom:0;left:0;height:10px;background:#0f0'>s</div></div>";
+    run(page("10000 sticky boxes", format!("<!doctype html><body>{}", one.repeat(n(10_000)))), "sticky10000");
+}

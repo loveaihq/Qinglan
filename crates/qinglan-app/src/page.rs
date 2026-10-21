@@ -112,6 +112,7 @@ impl Page {
     pub fn layout(&mut self, platform: &dyn Platform, vp: Viewport, stop_y: Option<f32>) {
         // The old results go first: a big page's layout and display list are the largest things in memory.
         self.index = None;
+        let offsets = self.list.as_ref().map(DisplayList::offsets).unwrap_or_default();
         self.list = None;
         self.layout = None;
         let Some(styled) = &self.styled else { return };
@@ -121,6 +122,7 @@ impl Page {
         self.index = (!res.partial).then(|| PageIndex::new(&res));
         // Only the display list needs the glyphs and texts; the page keeps the boxes, lines and fragments.
         res.release_text_data();
+        list.restore(&offsets);
         self.list = Some(list);
         self.layout = Some(res);
     }
@@ -166,6 +168,20 @@ impl Page {
             return 0.0;
         }
         list.max_progress(vp.w, vp.h)
+    }
+
+    /// How far the page can be scrolled sideways (a horizontal page; a vertical one scrolls along its lines).
+    pub fn max_cross(&self, vp: Viewport) -> f32 {
+        match &self.list {
+            Some(l) if l.axis == ScrollAxis::Down && !l.hide_x => (l.x_max.to_f32() - vp.w).max(0.0),
+            _ => 0.0,
+        }
+    }
+
+    /// A point of the viewport in page coordinates, the page scrolled `scroll` along its axis and `cross` sideways.
+    pub fn to_page(&self, x: f32, y: f32, scroll: f32, cross: f32) -> (f32, f32) {
+        let (ox, oy) = self.axis().offset(scroll);
+        (x + if self.axis() == ScrollAxis::Down { cross } else { ox }, y + oy)
     }
 
     /// Ask for the images near the viewport (all of them when `all`). True when a broken image changed a size, so the
@@ -267,19 +283,21 @@ impl Page {
     }
 
     /// Paint rows `y0 ..` (device pixels) of the viewport at `scroll` into `frame` (a band of the viewport).
-    pub fn raster(&mut self, platform: &dyn Platform, vp: Viewport, scroll: f32, y0: u32, frame: &mut Frame) {
+    pub fn raster(&mut self, platform: &dyn Platform, vp: Viewport, (scroll, cross): (f32, f32), y0: u32, frame: &mut Frame) {
         if let Some(list) = &self.list {
-            let (scroll_x, scroll_y) = list.axis.offset(scroll);
+            let (mut scroll_x, scroll_y) = list.axis.offset(scroll);
+            if list.axis == ScrollAxis::Down {
+                scroll_x = cross;
+            }
             render_band(list, platform, &mut self.store, View { scroll_x, scroll_y, dpr: vp.dpr }, y0, frame);
         }
     }
 
     /// The link under the point (CSS px in the viewport): its address resolved against the page's base, and whether it
     /// asks for a new window.
-    pub fn link_at(&self, x: f32, y: f32, scroll: f32) -> Option<(Url, bool)> {
+    pub fn link_at(&self, x: f32, y: f32, scroll: f32, cross: f32) -> Option<(Url, bool)> {
         let (index, layout) = (self.index.as_ref()?, self.layout.as_ref()?);
-        let (ox, oy) = self.axis().offset(scroll);
-        let node = index.link_at_in(&self.doc, layout, (x + ox, y + oy), (x, y))?;
+        let node = index.link_at_scoped(&self.doc, layout, self.list.as_ref(), self.to_page(x, y, scroll, cross), (x, y))?;
         let (href, blank) = link_target(&self.doc, node)?;
         Some((self.res.base().join(&href).ok()?, blank))
     }

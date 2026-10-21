@@ -288,10 +288,10 @@ fn list_markers_and_form_controls_are_painted() {
     let f = paint(html, 80, 60);
     // The marker "• " is drawn left of the item (a square in the test font, then a space): the bullet is x 10..20.
     expect(&f, &[(15, 5, BLUE), (25, 5, WHITE), (35, 5, BLUE)]);
-    // The check box: 13x13, dark inside a white square with a grey frame.
+    // The check box: 13x13 at y 15..28, blue (#0075ff, BGRA here) when checked, with the frame the same blue; no white tick on row 3.
     let c = at(&f, 6, 18);
-    assert_eq!(c, [0x33, 0x33, 0x33, 255], "{c:?}");
-    expect(&f, &[(0, 15, [0x76, 0x76, 0x76, 255])]);
+    assert_eq!(c, [0xff, 0x75, 0x00, 255], "{c:?}");
+    expect(&f, &[(0, 22, [0xff, 0x75, 0x00, 255])]);
 }
 
 #[test]

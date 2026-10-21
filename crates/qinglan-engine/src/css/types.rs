@@ -73,6 +73,7 @@ keyword_enum!(WritingMode {
 keyword_enum!(TextOrientation { Mixed = "mixed", Upright = "upright", Sideways = "sideways" } default Mixed);
 keyword_enum!(TextCombine { None = "none", All = "all", Digits = "digits" } default None);
 keyword_enum!(RubyPosition { Over = "over", Under = "under" } default Over);
+keyword_enum!(Appearance { Auto = "auto", None = "none" } default Auto);
 
 impl WritingMode {
     /// A vertical writing mode (the block axis is horizontal).
@@ -656,6 +657,7 @@ pub enum Value {
     TextOrientation(TextOrientation),
     TextCombine(TextCombine),
     RubyPosition(RubyPosition),
+    Appearance(Appearance),
     VerticalAlign(VerticalAlign),
     TextDecorationLine(TextDecorationLine),
     TextDecorationStyle(TextDecorationStyle),
@@ -860,9 +862,10 @@ pub enum PropId {
     TextOrientation,
     TextCombineUpright,
     RubyPosition,
+    Appearance,
 }
 
-pub const PROP_COUNT: usize = PropId::RubyPosition as usize + 1;
+pub const PROP_COUNT: usize = PropId::Appearance as usize + 1;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Group {
@@ -935,7 +938,7 @@ impl PropId {
             VerticalAlign | TextDecorationLine | TextDecorationStyle | TextDecorationColor | TextDecorationThickness
             | BackgroundColor | BorderTopLeftRadius | BorderTopRightRadius | BorderBottomRightRadius | BorderBottomLeftRadius
             | BackgroundImage | BackgroundPositionX | BackgroundPositionY | BackgroundSize | BackgroundRepeat | BackgroundOrigin
-            | BackgroundClip | OutlineWidth | OutlineStyle | OutlineColor | OutlineOffset | Opacity | BoxShadow | Transform | TransformOrigin | UnicodeBidi => Group::Misc,
+            | BackgroundClip | OutlineWidth | OutlineStyle | OutlineColor | OutlineOffset | Opacity | BoxShadow | Transform | TransformOrigin | UnicodeBidi | Appearance => Group::Misc,
         }
     }
 
@@ -1071,6 +1074,7 @@ impl PropId {
             TextOrientation => "text-orientation",
             TextCombineUpright => "text-combine-upright",
             RubyPosition => "ruby-position",
+            Appearance => "appearance",
         }
     }
 
@@ -1097,7 +1101,7 @@ pub const ALL_PROPS: [PropId; PROP_COUNT] = {
         AlignItems, AlignSelf, AlignContent, RowGap, ColumnGap, JustifyItems, JustifySelf, GridTemplateColumns, GridTemplateRows,
         GridTemplateAreas, GridAutoColumns, GridAutoRows, GridAutoFlow, GridRowStart, GridColumnStart, GridRowEnd, GridColumnEnd,
         Opacity, BoxShadow, TextShadow, Transform, TransformOrigin, UnicodeBidi,
-        WritingMode, TextOrientation, TextCombineUpright, RubyPosition,
+        WritingMode, TextOrientation, TextCombineUpright, RubyPosition, Appearance,
     ]
 };
 

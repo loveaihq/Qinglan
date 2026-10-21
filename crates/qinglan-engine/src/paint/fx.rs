@@ -774,11 +774,11 @@ impl Ctx<'_> {
     }
 
     /// A context for the items of a group: `dpr` device pixels per CSS px, the page at `(-sx, -sy)`, drawing inside `bounds`.
-    fn child(&mut self, dpr: f64, sx: i32, sy: i32, bounds: IRect) -> Ctx<'_> {
-        Ctx { list: self.list, platform: self.platform, images: &mut *self.images, dpr, sx, sy, bounds, stats: super::raster::RasterStats::default(), corner_cache: Vec::new(), depth: self.depth + 1, base_dpr: self.base_dpr }
+    pub(super) fn child(&mut self, dpr: f64, sx: i32, sy: i32, bounds: IRect) -> Ctx<'_> {
+        Ctx { list: self.list, platform: self.platform, images: &mut *self.images, dpr, sx, sy, bounds, stats: super::raster::RasterStats::default(), corner_cache: Vec::new(), depth: self.depth + 1, base_dpr: self.base_dpr, port: None }
     }
 
-    fn merge(&mut self, st: super::raster::RasterStats) {
+    pub(super) fn merge(&mut self, st: super::raster::RasterStats) {
         self.stats.items += st.items;
         self.stats.glyphs += st.glyphs;
         self.stats.images += st.images;

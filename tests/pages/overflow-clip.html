@@ -1,23 +1,23 @@
 <!--
 viewport: 400x300
 overflow (CSS2 11.1, css-overflow-3). hidden and clip clip the content to the padding box ([clip] in the dump);
-auto and scroll do not clip in layer 1 (the content is never lost). hidden, auto and scroll are scroll
+auto and scroll clip like hidden since 2e-2 (they are scroll containers with bars). hidden, auto and scroll are scroll
 containers and start a block formatting context, so a child's bottom margin stays inside; visible and clip do not.
 Every .k child is 10 high with margin-bottom 30; body margin 0.
 
 v    visible, margin-bottom 10: the child's 30 collapses with 10 and sticks out. v (0,0 400x10), margin 30.
 hid  y=10+30=40. Margin contained: h = 10+30 = 40, clipped.        (0,40 400x40) [clip]
 clp  y=80. clip does not contain margins: h=10, margin 30 sticks out. (0,80 400x10) [clip]
-aut  y=90+30=120, contained, h=40, no clip.                        (0,120 400x40)
-scr  y=160, same.                                                  (0,160 400x40)
+aut  y=90+30=120, contained, h=40, clipped (scroll container).    (0,120 400x40) [clip]
+scr  y=160, same.                                                  (0,160 400x40) [clip]
 big  height 20 with a child 50 high: the box stays 20 and the child is kept.  big (0,200 400x20) [clip], child (0,200 400x50)
 ox   overflow-x:hidden alone also clips (y becomes auto).         (0,220 400x10) [clip]
 after y=230.
 check: block div#v :: (0,0 400x10)
 check: block div#hid :: (0,40 400x40) [clip]
 check: block div#clp :: (0,80 400x10) [clip]
-check: block div#aut :: (0,120 400x40)
-check: block div#scr :: (0,160 400x40)
+check: block div#aut :: (0,120 400x40) [clip]
+check: block div#scr :: (0,160 400x40) [clip]
 check: block div#big :: (0,200 400x20) [clip]
 check: block div#bigk :: (0,200 400x50)
 check: block div#ox :: (0,220 400x10) [clip]

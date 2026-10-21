@@ -17,7 +17,7 @@ use qinglan_engine::net::loader::{LoadEvent, LoadRequest, Loader, Ticket};
 use qinglan_engine::net::policy::{self, Refusal};
 use qinglan_engine::net::{NetError, ResourceKind};
 use qinglan_engine::paint::decode::{DECODE_WORKERS, DecodePool};
-use qinglan_engine::paint::ScrollAxis;
+use qinglan_engine::paint::{LANE, Press, ScrollAxis};
 use qinglan_engine::paint::raster::Frame;
 use qinglan_engine::url::{Url, UrlPath};
 use qinglan_win::{WicDecoder, WinPlatform};
@@ -113,6 +113,13 @@ fn plan_navigation(url: &Url, origin: Origin, page: Option<&Url>) -> Result<poli
     }
 }
 
+/// A scroll bar held with the left button.
+#[derive(Clone, Copy)]
+enum Drag {
+    Scope { scope: u32, axis: u8, grab: f32 },
+    Page { grab: f32 },
+}
+
 struct Nav {
     ticket: Ticket,
     url: Url,
@@ -165,6 +172,13 @@ pub struct Browser {
     dpr: f32,
     /// Scroll position in CSS px (a whole number of device pixels).
     scroll: f32,
+    /// How far a horizontal page is scrolled sideways (CSS px).
+    cross: f32,
+    /// The pointer in the page area (device px), a scroll bar being dragged, a press on a bar that is not a click.
+    mouse: (i32, i32),
+    drag: Option<Drag>,
+    swallow: bool,
+    vbar: std::cell::Cell<bool>,
     frame: Frame,
     relayout: Throttle,
     /// The viewport changed: styles (media queries) and layout are made again.
@@ -201,6 +215,11 @@ impl Browser {
             dev: (0, 0),
             dpr,
             scroll: 0.0,
+            cross: 0.0,
+            mouse: (-1, -1),
+            drag: None,
+            swallow: false,
+            vbar: std::cell::Cell::new(true),
             frame: Frame::new(0, 0),
             relayout: Throttle::new(RELAYOUT_GAP, RELAYOUT_QUIET),
             restyle: false,
@@ -230,8 +249,10 @@ impl Browser {
             Event::Paint => self.paint(),
             Event::MouseMove { x, y } => self.on_mouse_move(x, y),
             Event::MouseLeave => self.set_hover(None),
+            Event::MouseDown { x, y } => self.on_mouse_down(x, y),
+            Event::MouseUp => self.drag = None,
             Event::Click { x, y, button, ctrl, shift } => self.on_click(x, y, button, ctrl, shift),
-            Event::Wheel { notches, lines, ctrl } => self.on_wheel(notches, lines, ctrl),
+            Event::Wheel { notches, lines, ctrl, shift } => self.on_wheel(notches, lines, ctrl, shift),
             Event::Key { vk, ctrl, shift, alt, in_edit } => return self.on_key(vk, ctrl, shift, alt, in_edit),
             Event::Scroll(code) => self.on_scroll_code(code),
             Event::Command(c) => self.on_command(c),
@@ -519,6 +540,7 @@ impl Browser {
         self.image_relayouts = 0;
         self.ui.kill_timer(TIMER_RELAYOUT);
         self.scroll = 0.0;
+        self.cross = 0.0;
         match kind {
             NavKind::New => self.history.push(display.clone()),
             NavKind::Reload | NavKind::History => self.history.set_current_url(display.clone()),
@@ -766,7 +788,7 @@ impl Browser {
     /// Draw rows `r0..r1` (device pixels) of the page at `scroll` into the window, a band at a time.
     fn draw_rows(&mut self, scroll: f32, r0: u32, r1: u32) {
         let (w, h) = self.dev;
-        let vp = self.vp();
+        let (vp, cross) = (self.vp(), self.cross);
         let rows = band_rows(w, h);
         let platform = self.platform.clone();
         let (mut y0, end) = (r0, r1.min(h));
@@ -774,7 +796,7 @@ impl Browser {
             let bh = rows.min(end - y0);
             self.frame.set_size(w, bh);
             match (&platform, self.page.as_mut()) {
-                (Some(p), Some(page)) if page.list.is_some() => page.raster(&**p, vp, scroll, y0, &mut self.frame),
+                (Some(p), Some(page)) if page.list.is_some() => page.raster(&**p, vp, (scroll, cross), y0, &mut self.frame),
                 _ => self.frame.data.fill(255),
             }
             let t = Instant::now();
@@ -860,8 +882,9 @@ impl Browser {
         if let Some(b) = self.bench.as_mut() {
             b.relayout_done(ms(started.elapsed()));
         }
-        let max = page.max_scroll(vp);
+        let (max, max_cross) = (page.max_scroll(vp), page.max_cross(vp));
         self.scroll = self.snap(anchored.clamp(0.0, max));
+        self.cross = self.cross.min(max_cross);
         self.relayout.done(Instant::now());
         self.update_scrollbar();
         self.update_notice();
@@ -897,7 +920,12 @@ impl Browser {
 
     fn update_scrollbar(&self) {
         let page_h = self.dev.1;
-        // The window has a vertical scroll bar only: a page that scrolls sideways shows it disabled (total = page).
+        // A page that scrolls along its lines has no vertical bar (its horizontal one is drawn over its bottom edge).
+        let vertical = self.axis() != ScrollAxis::Down;
+        if self.vbar.get() == vertical {
+            self.vbar.set(!vertical);
+            self.ui.show_vscroll(!vertical);
+        }
         let total = self.page.as_ref().filter(|p| p.axis() == ScrollAxis::Down).map_or(page_h, |p| ((p.height() * self.dpr).ceil() as u32).max(page_h));
         self.ui.set_scroll(total, page_h, (self.scroll * self.dpr).round() as u32);
     }
@@ -921,12 +949,109 @@ impl Browser {
         self.scroll_to(self.scroll + dy);
     }
 
-    fn on_wheel(&mut self, notches: f32, lines: u32, ctrl: bool) {
+    /// The wheel: the innermost scroll container under the pointer that can still move that way, then the ones around it, then the
+    /// page. Shift turns it sideways.
+    fn on_wheel(&mut self, notches: f32, lines: u32, ctrl: bool, shift: bool) {
         if ctrl {
             return;
         }
-        let dy = if lines == u32::MAX { notches * self.axis_extent() * PAGE_FRACTION } else { notches * lines as f32 * LINE_PX };
-        self.scroll_by(-dy);
+        let d = -if lines == u32::MAX { notches * self.axis_extent() * PAGE_FRACTION } else { notches * lines as f32 * LINE_PX };
+        let (dx, dy) = if shift { (d, 0.0) } else { (0.0, d) };
+        let mut rest = (dx, dy);
+        if let Some(page) = &self.page
+            && let Some(list) = &page.list
+            && !list.scopes.is_empty()
+        {
+            let pt = page.to_page(self.mouse.0 as f32 / self.dpr, self.mouse.1 as f32 / self.dpr, self.scroll, self.cross);
+            rest = list.wheel(pt, dx, dy);
+            if rest != (dx, dy) {
+                self.relayout.scrolled(Instant::now());
+                self.ui.invalidate();
+            }
+        }
+        if shift && self.axis() == ScrollAxis::Down {
+            self.cross_to(self.cross + rest.0);
+        } else if !shift {
+            self.scroll_by(rest.1);
+        }
+    }
+
+    fn cross_to(&mut self, x: f32) {
+        let max = self.page.as_ref().map_or(0.0, |p| p.max_cross(self.vp()));
+        let x = self.snap(if x.is_finite() { x.clamp(0.0, max) } else { 0.0 });
+        if x != self.cross {
+            self.cross = x;
+            self.ui.invalidate();
+        }
+    }
+
+    /// The left button went down: on a scroll bar (the page's along the bottom edge, or a container's) it takes hold of the thumb or
+    /// pages towards the pointer.
+    fn on_mouse_down(&mut self, x: i32, y: i32) {
+        // A press whose release never came (the capture went to another window) must not eat this click.
+        self.swallow = false;
+        let (cx, cy, vp) = (x as f32 / self.dpr, y as f32 / self.dpr, self.vp());
+        let Some(page) = &self.page else { return };
+        let Some(list) = &page.list else { return };
+        let axis = list.axis;
+        let p = if axis == ScrollAxis::Down { self.cross } else { self.scroll };
+        if cy >= vp.h - LANE
+            && let Some((_, ts, tl, max)) = list.page_bar(p)
+        {
+            self.swallow = true;
+            if cx >= ts && cx < ts + tl {
+                self.drag = Some(Drag::Page { grab: cx - ts });
+            } else {
+                // Towards the pointer: on the screen to the left or right; a page that starts at its right edge moves the other way.
+                let step = (if cx < ts { -0.875 } else { 0.875 }) * vp.w * if axis == ScrollAxis::Left { -1.0 } else { 1.0 };
+                let target = (p + step).clamp(0.0, max);
+                if axis == ScrollAxis::Down {
+                    self.cross_to(target);
+                } else {
+                    self.scroll_to(target);
+                }
+            }
+            return;
+        }
+        let pt = page.to_page(cx, cy, self.scroll, self.cross);
+        match list.bar_press(pt) {
+            Some(Press::Thumb { scope, axis, grab }) => {
+                self.swallow = true;
+                self.drag = Some(Drag::Scope { scope, axis, grab });
+            }
+            Some(Press::Track) => {
+                self.swallow = true;
+                self.ui.invalidate();
+            }
+            None => {}
+        }
+    }
+
+    /// The pointer moved with a scroll bar held.
+    fn on_drag(&mut self, d: Drag, x: i32, y: i32) {
+        let (cx, cy) = (x as f32 / self.dpr, y as f32 / self.dpr);
+        let Some(page) = &self.page else { return };
+        let Some(list) = &page.list else { return };
+        match d {
+            Drag::Scope { scope, axis, grab } => {
+                list.bar_drag(scope, axis, grab, page.to_page(cx, cy, self.scroll, self.cross));
+                self.relayout.scrolled(Instant::now());
+                self.ui.invalidate();
+            }
+            Drag::Page { grab } => {
+                let kind = list.axis;
+                let p = if kind == ScrollAxis::Down { self.cross } else { self.scroll };
+                if let Some((lane, _, tl, max)) = list.page_bar(p) {
+                    let frac = ((cx - grab) / (lane - tl).max(1.0)).clamp(0.0, 1.0);
+                    let v = max * if kind == ScrollAxis::Left { 1.0 - frac } else { frac };
+                    if kind == ScrollAxis::Down {
+                        self.cross_to(v);
+                    } else {
+                        self.scroll_to(v);
+                    }
+                }
+            }
+        }
     }
 
     fn on_scroll_code(&mut self, code: ScrollCode) {
@@ -943,10 +1068,15 @@ impl Browser {
     }
 
     fn link_under(&self, x: i32, y: i32) -> Option<(Url, bool)> {
-        self.page.as_ref()?.link_at(x as f32 / self.dpr, y as f32 / self.dpr, self.scroll)
+        self.page.as_ref()?.link_at(x as f32 / self.dpr, y as f32 / self.dpr, self.scroll, self.cross)
     }
 
     fn on_mouse_move(&mut self, x: i32, y: i32) {
+        self.mouse = (x, y);
+        if let Some(d) = self.drag {
+            self.on_drag(d, x, y);
+            return;
+        }
         let link = self.link_under(x, y).map(|(u, _)| u);
         self.set_hover(link);
     }
@@ -960,6 +1090,9 @@ impl Browser {
     }
 
     fn on_click(&mut self, x: i32, y: i32, button: MouseButton, ctrl: bool, shift: bool) {
+        if std::mem::take(&mut self.swallow) {
+            return;
+        }
         let Some((url, blank)) = self.link_under(x, y) else { return };
         match button {
             MouseButton::Middle => self.open_in_new_window(&url),

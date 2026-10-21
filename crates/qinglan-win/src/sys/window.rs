@@ -253,6 +253,9 @@ unsafe extern "system" {
     fn BeginPaint(hwnd: Hwnd, ps: *mut PaintStruct) -> isize;
     fn EndPaint(hwnd: Hwnd, ps: *const PaintStruct) -> BOOL;
     fn TrackMouseEvent(data: *mut TrackMouseEventData) -> BOOL;
+    fn SetCapture(hwnd: Hwnd) -> Hwnd;
+    fn ReleaseCapture() -> BOOL;
+    fn ShowScrollBar(hwnd: Hwnd, bar: i32, show: BOOL) -> BOOL;
 }
 
 #[link(name = "gdi32")]
@@ -783,6 +786,29 @@ pub fn scroll_track_pos(hwnd: Hwnd) -> i32 {
         GetScrollInfo(hwnd, SB_VERT, &mut info);
     }
     info.track_pos
+}
+
+/// Send the mouse to `hwnd` until [`release_capture`] (a drag goes on outside the window).
+pub fn set_capture(hwnd: Hwnd) {
+    // SAFETY: handle value only.
+    unsafe {
+        SetCapture(hwnd);
+    }
+}
+
+pub fn release_capture() {
+    // SAFETY: no arguments.
+    unsafe {
+        ReleaseCapture();
+    }
+}
+
+/// Show or hide the vertical scroll bar of `hwnd`.
+pub fn show_vscroll(hwnd: Hwnd, show: bool) {
+    // SAFETY: handle value and flags.
+    unsafe {
+        ShowScrollBar(hwnd, SB_VERT, BOOL::from(show));
+    }
 }
 
 /// Ask for a `WM_MOUSELEAVE` when the pointer leaves `hwnd`.

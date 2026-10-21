@@ -282,7 +282,9 @@ impl Runner {
         let mut round = 0;
         let list = loop {
             let layout = layout_document_with(&opened.doc, &styled.tree, platform, &lopts, &sizes);
-            let list = build_display_list(&opened.doc, &layout, platform);
+            let mut list = build_display_list(&opened.doc, &layout, platform);
+            // The test pages are drawn without the page's own scroll bar (it is not part of what they compare).
+            list.hide_x = true;
             if round >= MAX_ROUNDS {
                 break list;
             }

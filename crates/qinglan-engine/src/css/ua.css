@@ -128,14 +128,14 @@ input, button, textarea, select {
   font: 13.3333px Arial, sans-serif; color: black; cursor: text;
 }
 input, button { display: inline-block; }
-input, textarea { background-color: white; border: 2px inset #767676; padding: 1px 2px; }
+input, textarea { background-color: white; border: 1px solid #767676; border-radius: 2px; padding: 2px 3px; }
 input:is([type=reset i], [type=button i], [type=submit i], [type=image i]), button {
-  text-align: center; cursor: default; background-color: #efefef; border: 2px outset #767676; padding: 1px 6px;
+  text-align: center; cursor: default; background-color: #efefef; border: 1px solid #767676; border-radius: 4px; padding: 2px 7px;
 }
 input:is([type=checkbox i], [type=radio i]) { background-color: transparent; border-style: none; margin: 3px 3px 3px 4px; padding: initial; }
 input:is([type=reset i], [type=button i], [type=submit i], [type=checkbox i], [type=radio i]), select, button { box-sizing: border-box; }
-textarea { display: inline-block; white-space: pre-wrap; border: 1px solid #767676; padding: 2px; }
-select { display: inline-block; background-color: white; border: 1px solid #767676; }
+textarea { display: inline-block; white-space: pre-wrap; padding: 2px; }
+select { display: inline-block; background-color: white; border: 1px solid #767676; border-radius: 4px; padding: 1px 18px 1px 4px; }
 input:not([type=image i]), textarea { box-sizing: border-box; }
 option { display: block; }
 optgroup { display: block; font-weight: bolder; }

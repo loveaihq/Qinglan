@@ -22,6 +22,7 @@ pub mod decode;
 pub mod gradient;
 pub mod images;
 pub mod raster;
+mod scope;
 
 use crate::css::color::Color;
 use crate::css::types::BorderLineStyle;
@@ -32,6 +33,7 @@ use crate::vector::Transform;
 pub use build::build_display_list;
 pub use images::{Band, ImageSource, ImageStore, NoBitmaps, far_images, wanted_images};
 pub use raster::{Frame, RasterStats, device_size, render_frame};
+pub use scope::{LANE, NO_SCOPE, Pane, Press, Scope, ScopeKind, StickyRule};
 
 /// A rectangle in layout units. Page coordinates for the normal list, viewport coordinates for the fixed list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -153,6 +155,8 @@ pub enum ItemKind {
     Group(u32),
     /// An inline `<svg>`: `DisplayList::svgs[i]`, drawn in `Item::bounds`.
     Svg(u32),
+    /// A scope's items (a scroll container's content, a sticky box): `DisplayList::panes[i]`, drawn in `Item::bounds`.
+    Pane(u32),
 }
 
 /// A `box-shadow` (css-backgrounds-3 6.1). Outer: `rect` is the border box and the shadow is cast outside it; inset: `rect` is
@@ -195,8 +199,12 @@ pub struct ImagePlace {
     pub rect: Rect,
     /// The page rows the image is drawn in (for the distance to the viewport); for `<img>` the rows of `rect`.
     pub span: (LU, LU),
+    /// Where it is drawn (`rect` of a background is only the size of a tile), in the content coordinates of `scope`.
+    pub area: Rect,
     /// In the fixed list (always near).
     pub fixed: bool,
+    /// The scope the image is in (`NO_SCOPE`: the page); `rect` is in its content coordinates.
+    pub scope: u32,
 }
 
 /// The way a page scrolls: down for horizontal writing, along the lines for a vertical-rl (to the left, the start is the
@@ -285,6 +293,14 @@ pub struct DisplayList {
     pub x_max: LU,
     pub images: Vec<ImagePlace>,
     pub spots: Vec<ImageSpot>,
+    /// Scroll containers and sticky boxes, parents before children, and what is in them.
+    pub scopes: Vec<Scope>,
+    pub panes: Vec<Pane>,
+    /// The scope the content of each box is in (empty when the page has no scopes).
+    pub scope_of: Vec<u32>,
+    /// The layout viewport (CSS px) and whether the root's `overflow-x` is `hidden` (no bar, no sideways scrolling).
+    pub vp: (f32, f32),
+    pub hide_x: bool,
     /// The layout this was built from was stopped early (first-screen-first).
     pub partial: bool,
     index: Index,
@@ -312,6 +328,11 @@ impl DisplayList {
             x_max: LU::ZERO,
             images: Vec::new(),
             spots: Vec::new(),
+            scopes: Vec::new(),
+            panes: Vec::new(),
+            scope_of: Vec::new(),
+            vp: (0.0, 0.0),
+            hide_x: false,
             partial: false,
             index: Index::default(),
         }

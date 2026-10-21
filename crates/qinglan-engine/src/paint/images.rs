@@ -82,7 +82,7 @@ pub fn wanted_images(res: &LayoutResult, list: &DisplayList, band: Band, load_al
 
 /// Images shown more than [`DROP_SCREENS`] away from the band.
 pub fn far_images(list: &DisplayList, band: Band) -> Vec<NodeId> {
-    list.images.iter().filter(|p| !p.fixed && band.distance(p.span.0, p.span.1) > DROP_SCREENS * band.height).map(|p| p.node).collect()
+    list.images.iter().filter(|p| !p.fixed && (band.distance(p.span.0, p.span.1) + list.scope_gap(p.scope, &p.area)) > DROP_SCREENS * band.height).map(|p| p.node).collect()
 }
 
 /// Where the rasterizer gets decoded pixels from.
@@ -196,7 +196,7 @@ impl ImageStore {
     pub fn prepare(&mut self, list: &DisplayList, band: Band, dpr: f32, dec: &dyn ImageDecoder, bytes: &mut dyn FnMut(&str) -> Option<Arc<Response>>) -> Prepared {
         let mut report = Prepared::default();
         for p in &list.images {
-            if !p.fixed && band.distance(p.span.0, p.span.1) > PREPARE_SCREENS * band.height {
+            if !p.fixed && (band.distance(p.span.0, p.span.1) + list.scope_gap(p.scope, &p.area)) > PREPARE_SCREENS * band.height {
                 continue;
             }
             let (w, h) = device_size(&p.rect, dpr);
@@ -261,7 +261,7 @@ impl ImageStore {
         let mut dist: Vec<(DecodeKey, f32)> = Vec::new();
         let mut todo: Vec<(f32, NodeId, DecodeKey)> = Vec::new();
         for p in &list.images {
-            let d = if p.fixed { 0.0 } else { band.distance(p.span.0, p.span.1) };
+            let d = if p.fixed { 0.0 } else { band.distance(p.span.0, p.span.1) + list.scope_gap(p.scope, &p.area) };
             if d > PREPARE_SCREENS * band.height {
                 continue;
             }

@@ -889,7 +889,7 @@ impl Layouter<'_> {
         if let Some(o) = self.out.get_mut(id as usize) {
             o.w = tw;
             o.h = total_h;
-            o.clip = matches!(bs.overflow_x, Overflow::Hidden | Overflow::Clip) || matches!(bs.overflow_y, Overflow::Hidden | Overflow::Clip);
+            o.clip = bs.overflow_x != Overflow::Visible || bs.overflow_y != Overflow::Visible;
             o.lines = (0, 0);
             o.marker = 0;
         }

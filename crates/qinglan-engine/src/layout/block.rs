@@ -528,8 +528,8 @@ impl Layouter<'_> {
         let h = content_h + g.v_extra;
         let clip = bx.force_clip
             || matches!(bx.control(), Control::TextArea(..))
-            || matches!(bs.overflow_x, Overflow::Hidden | Overflow::Clip)
-            || matches!(bs.overflow_y, Overflow::Hidden | Overflow::Clip);
+            || bs.overflow_x != Overflow::Visible
+            || bs.overflow_y != Overflow::Visible;
         if let Some(o) = self.out.get_mut(id as usize) {
             let (lines, marker) = (o.lines, o.marker);
             *o = BoxOut { x: o.x, y: o.y, w, h, clip, hide: o.hide, lines, marker };

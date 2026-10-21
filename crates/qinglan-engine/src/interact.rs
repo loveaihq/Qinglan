@@ -6,7 +6,7 @@ use crate::css::types::Position;
 use crate::html::atoms::{FxHashMap, a};
 use crate::html::dom::{DOCUMENT, Document, NONE, NodeId};
 use crate::layout::{BoxId, BoxKind, FragKind, Fragment, LayoutResult, NO_BOX, Positioned, has_transform};
-use crate::paint::ScrollAxis;
+use crate::paint::{DisplayList, NO_SCOPE, ScrollAxis};
 use crate::vector::{Pt, Transform};
 use crate::url::percent_decode;
 
@@ -178,7 +178,14 @@ impl PageIndex {
 
     /// [`PageIndex::link_at`] for a page that is scrolled sideways too: the point in page coordinates and in viewport
     /// coordinates (the latter for `position: fixed` content).
-    pub fn link_at_in(&self, doc: &Document, layout: &LayoutResult, (page_x, page_y): (f32, f32), (view_x, view_y): (f32, f32)) -> Option<NodeId> {
+    pub fn link_at_in(&self, doc: &Document, layout: &LayoutResult, page: (f32, f32), view: (f32, f32)) -> Option<NodeId> {
+        self.link_at_scoped(doc, layout, None, page, view)
+    }
+
+    /// [`PageIndex::link_at_in`] on a page with scroll containers and sticky boxes: the point goes back through their offsets
+    /// first, and does not hit what a scroll container does not show.
+    pub fn link_at_scoped(&self, doc: &Document, layout: &LayoutResult, list: Option<&DisplayList>, (page_x, page_y): (f32, f32), (view_x, view_y): (f32, f32)) -> Option<NodeId> {
+        let scoped = list.filter(|l| !l.scope_of.is_empty());
         // Later boxes are painted later, so they are on top: the hit with the highest paint rank wins, the last one
         // among equals (tree order is paint order inside a stacking context).
         let mut hit: Option<(u32, NodeId)> = None;
@@ -187,6 +194,16 @@ impl PageIndex {
                 return;
             }
             let (x, y) = if r.fixed { (view_x, view_y) } else { (page_x, page_y) };
+            let (x, y) = match scoped.and_then(|l| l.scope_of.get(r.block as usize).map(|&s| (l, s))) {
+                Some((l, s)) if s != NO_SCOPE => {
+                    let port = if r.fixed { (0.0, 0.0, l.vp.0, l.vp.1) } else { (page_x - view_x, page_y - view_y, l.vp.0, l.vp.1) };
+                    match l.to_content(s, (x, y), port) {
+                        Some(p) => p,
+                        None => return,
+                    }
+                }
+                _ => (x, y),
+            };
             // The pointer in the coordinates the box is laid out in: back through its transform.
             let (x, y) = match self.xf_of.get(r.block as usize).and_then(|&i| self.inverse.get(i as usize)) {
                 Some(t) => {

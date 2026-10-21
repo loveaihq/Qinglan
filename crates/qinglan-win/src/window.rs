@@ -66,10 +66,13 @@ pub enum Event {
     Paint,
     MouseMove { x: i32, y: i32 },
     MouseLeave,
+    /// The left button went down at this place (the mouse is captured until it goes up).
+    MouseDown { x: i32, y: i32 },
+    MouseUp,
     Click { x: i32, y: i32, button: MouseButton, ctrl: bool, shift: bool },
     /// `notches` wheel clicks (positive = up, may be fractional for fine wheels); `lines` is the system's lines per
     /// notch, `u32::MAX` for one page.
-    Wheel { notches: f32, lines: u32, ctrl: bool },
+    Wheel { notches: f32, lines: u32, ctrl: bool, shift: bool },
     /// A key went down in the page area or the address bar. Return true when handled.
     Key { vk: u32, ctrl: bool, shift: bool, alt: bool, in_edit: bool },
     Scroll(ScrollCode),
@@ -330,6 +333,10 @@ fn dispatch_page(raw: Raw) -> Option<isize> {
                 w::track_mouse_leave(raw.hwnd);
             }
             let (x, y) = point(raw.lparam);
+            // The button is up (the capture was lost, say to another window): a drag is over.
+            if raw.wparam & 0x1 == 0 {
+                deliver(Event::MouseUp);
+            }
             deliver(Event::MouseMove { x, y });
             Some(0)
         }
@@ -340,9 +347,16 @@ fn dispatch_page(raw: Raw) -> Option<isize> {
         }
         w::WM_LBUTTONDOWN => {
             w::set_focus(raw.hwnd);
+            w::set_capture(raw.hwnd);
+            let (x, y) = point(raw.lparam);
+            deliver(Event::MouseDown { x, y });
             Some(0)
         }
         w::WM_LBUTTONUP | w::WM_MBUTTONUP => {
+            if raw.msg == w::WM_LBUTTONUP {
+                w::release_capture();
+                deliver(Event::MouseUp);
+            }
             let (x, y) = point(raw.lparam);
             let button = if raw.msg == w::WM_LBUTTONUP { MouseButton::Left } else { MouseButton::Middle };
             deliver(Event::Click { x, y, button, ctrl: raw.wparam & 0x8 != 0, shift: raw.wparam & 0x4 != 0 });
@@ -350,7 +364,7 @@ fn dispatch_page(raw: Raw) -> Option<isize> {
         }
         w::WM_MOUSEWHEEL => {
             let delta = i32::from(hi(raw.wparam) as u16 as i16);
-            deliver(Event::Wheel { notches: delta as f32 / 120.0, lines: w::wheel_scroll_lines(), ctrl: raw.wparam & 0x8 != 0 });
+            deliver(Event::Wheel { notches: delta as f32 / 120.0, lines: w::wheel_scroll_lines(), ctrl: raw.wparam & 0x8 != 0, shift: raw.wparam & 0x4 != 0 });
             Some(0)
         }
         w::WM_VSCROLL => {
@@ -569,6 +583,11 @@ impl Ui {
     /// The scroll bar: the page is `total` device pixels high, `page` are visible, the top is at `pos`.
     pub fn set_scroll(&self, total: u32, page: u32, pos: u32) {
         w::set_scroll(state().page, i32::try_from(total.saturating_sub(1)).unwrap_or(i32::MAX), page, i32::try_from(pos).unwrap_or(i32::MAX));
+    }
+
+    /// Show or hide the vertical scroll bar (a page that scrolls along its lines has none).
+    pub fn show_vscroll(&self, show: bool) {
+        w::show_vscroll(state().page, show);
     }
 
     pub fn set_timer(&self, id: usize, ms: u32) {

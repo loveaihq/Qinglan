@@ -591,7 +591,7 @@ fn stacking_context(tree: &BoxTree, id: BoxId) -> BoxId {
 /// `transform`, starts a stacking context (CSS2 appendix E, css-color-4 12.1, css-transforms-1 2).
 pub fn makes_context(style: &crate::css::computed::ComputedStyle) -> bool {
     let b = &style.boxs;
-    (!matches!(b.position, Position::Static | Position::Sticky) && (b.z_index.is_some() || b.position == Position::Fixed)) || has_effect(style)
+    (b.position != Position::Static && (b.z_index.is_some() || b.position == Position::Fixed)) || has_effect(style)
 }
 
 /// `opacity` below 1 or a `transform`: the box is painted as a group and, if it is not positioned, in the layer of the
@@ -619,7 +619,7 @@ fn paint_order(tree: &BoxTree) -> (Vec<Positioned>, Vec<Positioned>, Vec<Positio
             continue;
         }
         let mut pos = b.style.boxs.position;
-        let plain = matches!(pos, Position::Static | Position::Sticky);
+        let plain = pos == Position::Static;
         if plain {
             if !has_effect(&b.style) {
                 continue;

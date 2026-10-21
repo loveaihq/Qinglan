@@ -107,6 +107,7 @@ pub struct TextStyle {
 pub struct MiscStyle {
     pub vertical_align: VerticalAlign,
     pub unicode_bidi: UnicodeBidi,
+    pub appearance: Appearance,
     pub text_decoration_line: TextDecorationLine,
     pub text_decoration_style: TextDecorationStyle,
     pub text_decoration_color: ColorValue,
@@ -327,6 +328,7 @@ impl MiscStyle {
             fx: None,
             vertical_align: VerticalAlign::Baseline,
             unicode_bidi: UnicodeBidi::Normal,
+            appearance: Appearance::Auto,
             text_decoration_line: TextDecorationLine::NONE,
             text_decoration_style: TextDecorationStyle::Solid,
             text_decoration_color: ColorValue::CurrentColor,
@@ -795,10 +797,6 @@ pub fn compute_box(parent: &Rc<BoxStyle>, init_rc: &Rc<BoxStyle>, d: &Declared<'
             Pick::Value(_) => {}
         }
     }
-    // sticky is treated as relative (L1 task sheet).
-    if b.position == Position::Sticky {
-        b.position = Position::Relative;
-    }
     // CSS2 9.7: absolute positioning and floats blockify the display and cancel the float.
     if matches!(b.position, Position::Absolute | Position::Fixed) {
         b.float = Float::None;
@@ -884,6 +882,9 @@ pub fn compute_misc(parent: &Rc<MiscStyle>, init_rc: &Rc<MiscStyle>, d: &Declare
         return init_rc.clone();
     }
     let mut m = MiscStyle::with_bg(init_rc.bg.clone());
+    if let Pick::Value(Value::Appearance(v)) = pick(d, PropId::Appearance) {
+        m.appearance = *v;
+    }
     match pick(d, PropId::UnicodeBidi) {
         Pick::Inherit => m.unicode_bidi = parent.unicode_bidi,
         Pick::Initial => {}
@@ -1304,6 +1305,7 @@ impl ComputedStyle {
         add(PropId::TabSize, t.tab_size.to_css());
         add(PropId::VerticalAlign, m.vertical_align.to_css());
         add(PropId::UnicodeBidi, m.unicode_bidi.keyword().into());
+        add(PropId::Appearance, m.appearance.keyword().into());
         add(PropId::TextDecorationLine, m.text_decoration_line.to_css());
         add(PropId::TextDecorationStyle, m.text_decoration_style.keyword().into());
         add(PropId::TextDecorationColor, colors(m.text_decoration_color));

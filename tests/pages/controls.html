@@ -15,7 +15,7 @@ cb/rd check box and radio: 13x13 with margin 3 3 3 4, replaced, so the baseline 
     the line is 19 + 2 = 21 high; cb at (4,3), rd at x = 20 + 4 = 24.
 ta  textarea cols 10 rows 2: 100 + padding 2+2 + border 1+1 = 106 wide; 2 * 10 + 4 + 2 = 26 high; bottom-edge baseline: the line is
     26 + 2 = 28 high. Text "ab" at (1+2, 1+2).
-sel select showing the selected option "two": 30 + border 1+1 = 32 wide, 12 high; text at (1,1).
+sel select showing the selected option "two": 30 + border 1+1 + padding 4 left, 18 right (the arrow) = 54 wide, 10 + 1+1 + padding 1+1 = 14 high; text at (5,2) (since 2e-2; everything below is 2 px lower).
 fr  iframe: 300x150 + border 2 = 304x154 grey placeholder; the line is 154 + 2 = 156 high. vd video 300x150 (line 152). cv canvas
     with width=50 height=20 (line 22). au audio with controls 300x54 (line 56). ob object and em embed 300x150 each: 600 does not fit
     in 400, so two lines (152 each). mt meter 80x16 and pg progress 160x16 side by side (line 18).
@@ -38,21 +38,21 @@ check: replaced input#rd :: (24,67 13x13) [check]
 check: block div#f :: (0,85 400x28)
 check: inline-block textarea#ta :: (0,85 106x26) [clip]
 check: text "ab" :: (3,88 20x10)
-check: inline-block select#sel :: (0,113 32x12) [clip]
-check: text "two" :: (1,114 30x10)
-check: replaced iframe#fr :: (0,125 304x154) [placeholder:iframe]
-check: replaced video#vd :: (0,281 300x150) [placeholder:video]
-check: replaced canvas#cv :: (0,433 50x20) [placeholder:canvas]
-check: replaced audio#au :: (0,455 300x54) [placeholder:audio]
-check: replaced object#ob :: (0,511 300x150) [placeholder:object]
-check: replaced embed#em :: (0,663 300x150) [placeholder:embed]
-check: replaced meter#mt :: (0,815 80x16) [control:meter]
-check: replaced progress#pg :: (80,815 160x16) [control:progress]
-check: block details#dt :: (0,833 400x20)
-check: marker "▾ " :: (0,833 20x10)
-check: text "sum" :: (20,833 30x10)
-check: text "body text" :: (0,843 90x10)
-check: block body :: (0,0 400x853)
+check: inline-block select#sel :: (0,113 54x14) [clip]
+check: text "two" :: (5,115 30x10)
+check: replaced iframe#fr :: (0,127 304x154) [placeholder:iframe]
+check: replaced video#vd :: (0,283 300x150) [placeholder:video]
+check: replaced canvas#cv :: (0,435 50x20) [placeholder:canvas]
+check: replaced audio#au :: (0,457 300x54) [placeholder:audio]
+check: replaced object#ob :: (0,513 300x150) [placeholder:object]
+check: replaced embed#em :: (0,665 300x150) [placeholder:embed]
+check: replaced meter#mt :: (0,817 80x16) [control:meter]
+check: replaced progress#pg :: (80,817 160x16) [control:progress]
+check: block details#dt :: (0,835 400x20)
+check: marker "▾ " :: (0,835 20x10)
+check: text "sum" :: (20,835 30x10)
+check: text "body text" :: (0,845 90x10)
+check: block body :: (0,0 400x855)
 -->
 <!doctype html>
 <style>

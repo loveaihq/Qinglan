@@ -6,18 +6,21 @@
 
 use std::rc::Rc;
 
-use super::{BgDraw, BorderDraw, DisplayList, Group, ImagePlace, ImageSpot, Item, ItemKind, NO_CLIP, PaintGlyph, RRect, Rect, Round, ScrollAxis, ShadowDraw, TextRun, gradient};
+use super::{BgDraw, BorderDraw, DisplayList, Group, ImagePlace, ImageSpot, Item, ItemKind, NO_CLIP, NO_SCOPE, Pane, PaintGlyph, RRect, Rect, Round, Scope, ScopeKind, ScrollAxis, ShadowDraw, StickyRule, TextRun, gradient};
+use std::cell::Cell;
+
+mod controls;
 use crate::css::fx::Shadow;
 use crate::vector::Transform;
 use crate::css::bg::{Backgrounds, BgBox, BgImage, BgRepeat, BgSize, Pos1, Rep};
 use crate::css::color::Color;
 use crate::css::computed::{ComputedStyle, slant_of};
-use crate::css::types::{BorderCollapse, BorderLineStyle, Position, Visibility};
+use crate::css::types::{BorderCollapse, BorderLineStyle, Dim, Overflow, Position, Visibility};
 use crate::css::values::Lp;
 use crate::html::atoms::FxHashMap;
 use crate::html::dom::{Document, NONE, NodeId};
 use crate::layout::block::{border_px, pad_px};
-use crate::layout::boxtree::{BgRef, BoxId, BoxKind, NO_BOX, ReplacedKind, Role, role_of};
+use crate::layout::boxtree::{BgRef, BoxId, BoxKind, Control, NO_BOX, ReplacedKind, Role, role_of};
 use crate::layout::units::LayoutUnit as LU;
 use crate::layout::{BoxOut, FragKind, Fragment, LayoutResult, Positioned, has_effect, has_transform, makes_context};
 use crate::platform::{FontQuery, Platform};
@@ -33,13 +36,22 @@ const GREY_TEXT: Color = Color::rgb(0x50, 0x50, 0x50);
 
 /// Is the box painted at its own turn, among the positioned boxes of its stacking context (not in the flow)? Positioned boxes
 /// are, and so are those with an `opacity` below 1 or a `transform` (css-color-4 12.1, css-transforms-1 2).
+/// A scroll container: `overflow` is `scroll` or `auto` on some axis (css-overflow-3 3).
+fn scroller(style: &ComputedStyle) -> bool {
+    matches!(style.boxs.overflow_x, Overflow::Scroll | Overflow::Auto) || matches!(style.boxs.overflow_y, Overflow::Scroll | Overflow::Auto)
+}
+
+fn has_inset(style: &ComputedStyle) -> bool {
+    style.boxs.inset.iter().any(|d| matches!(d, Dim::Lp(_)))
+}
+
 fn positioned(style: &ComputedStyle) -> bool {
-    !matches!(style.boxs.position, Position::Static | Position::Sticky) || has_effect(style)
+    style.boxs.position != Position::Static || has_effect(style)
 }
 
 /// Is the box the containing block of absolutely positioned descendants?
 fn is_cb(style: &ComputedStyle) -> bool {
-    !matches!(style.boxs.position, Position::Static | Position::Sticky) || has_transform(style)
+    style.boxs.position != Position::Static || has_transform(style)
 }
 
 /// Boxes with a position of their own in `LayoutResult::boxes`.
@@ -50,7 +62,10 @@ fn has_box_out(kind: BoxKind) -> bool {
 /// Build the display list of a layout. `doc` is read for the `checked` and `loading` attributes; the
 /// platform shapes the labels of placeholder boxes.
 pub fn build_display_list(doc: &Document, res: &LayoutResult, platform: &dyn Platform) -> DisplayList {
-    let mut b = Builder { doc, res, platform, list: DisplayList::empty(), clip: NO_CLIP, fixed: false, canvas_from: res.canvas.map_or(NO_BOX, |c| c.from), floats: Vec::new(), outlines: Vec::new(), sinks: Vec::new(), inline_fx: res.tree.boxes.iter().any(|b| b.kind == BoxKind::Inline && b.style.misc.fx.as_deref().is_some_and(|x| x.opacity < 255)) };
+    let mut b = Builder { doc, res, platform, list: DisplayList::empty(), clip: NO_CLIP, fixed: false, canvas_from: res.canvas.map_or(NO_BOX, |c| c.from), floats: Vec::new(), outlines: Vec::new(), sinks: Vec::new(), inline_fx: res.tree.boxes.iter().any(|b| b.kind == BoxKind::Inline && b.style.misc.fx.as_deref().is_some_and(|x| x.opacity < 255)), frame: NO_SCOPE, frames: Vec::new(), own: FxHashMap::default(), own_sticky: FxHashMap::default(), pane_clip: Vec::new(), ext: Vec::new(), page_right: LU::ZERO };
+    b.list.vp = (res.viewport.0.to_f32(), res.viewport.1.to_f32());
+    b.list.hide_x = res.tree.viewport_overflow.0 == Overflow::Hidden;
+    b.find_scopes();
     b.list.canvas = res.canvas.map(|c| c.color);
     b.list.partial = res.partial;
     b.list.axis = ScrollAxis::of(res.tree.get(res.tree.root).style.text.writing_mode);
@@ -73,13 +88,24 @@ struct Builder<'a> {
     fixed: bool,
     canvas_from: BoxId,
     /// Floats met on the way, waiting for the end of their stacking context: (box, page position, clip, fixed).
-    floats: Vec<(BoxId, LU, LU, u32, bool)>,
+    floats: Vec<(BoxId, LU, LU, u32, bool, u32)>,
     /// Outlines met on the way, waiting for the end of their stacking context: (outline, clip, fixed).
     outlines: Vec<(BorderDraw, u32, bool)>,
     /// Open groups: the items of each so far and the clip outside it.
     sinks: Vec<(Vec<Item>, u32)>,
     /// Some inline box has an `opacity` below 1 (the lines are checked for groups only then).
     inline_fx: bool,
+    /// The innermost scope the items being added are in (`NO_SCOPE`: the page), and the ones it was opened inside.
+    frame: u32,
+    frames: Vec<u32>,
+    /// The scope each box opened (a scroll container, a sticky box).
+    own: FxHashMap<BoxId, u32>,
+    own_sticky: FxHashMap<BoxId, u32>,
+    /// Per scope: the clip outside its pane, and the right and bottom edge of what it holds.
+    pane_clip: Vec<u32>,
+    ext: Vec<(LU, LU)>,
+    /// The right edge of what the page holds (its scrollable overflow).
+    page_right: LU,
 }
 
 impl Builder<'_> {
@@ -171,16 +197,15 @@ impl Builder<'_> {
         Rect::new(r.x + b(3), r.y + b(0), (r.w - b(1) - b(3)).max0(), (r.h - b(0) - b(2)).max0())
     }
 
-    /// The clip a positioned box inherits from its ancestors. An overflow clip of an ancestor applies
-    /// when the ancestor is, or contains, the box's containing block; for `absolute` that means the
-    /// containing block (the nearest positioned ancestor) and everything above it. `fixed` boxes are not clipped.
-    fn ancestor_clip(&self, id: BoxId, pos: Position) -> Option<Rect> {
+    /// The clips a positioned box inherits from its ancestors, each with the box whose padding box it is. An overflow clip of an
+    /// ancestor applies when the ancestor is, or contains, the box's containing block; for `absolute` that means the containing
+    /// block (the nearest positioned ancestor) and everything above it. `fixed` boxes are not clipped.
+    fn ancestor_walk(&self, id: BoxId, pos: Position, mut f: impl FnMut(BoxId, Rect)) {
         if pos == Position::Fixed {
-            return None;
+            return;
         }
         let res = self.res;
         let tree = &res.tree;
-        let mut acc: Option<Rect> = None;
         let mut counting = pos != Position::Absolute;
         let mut cur = tree.get(id).parent;
         for _ in 0..MAX_WALK {
@@ -195,8 +220,7 @@ impl Builder<'_> {
                 let o = res.box_out(cur);
                 if o.clip {
                     let (x, y) = res.page_pos(cur);
-                    let r = self.padding_box(cur, Rect::new(x, y, o.w, o.h));
-                    acc = Some(acc.map_or(r, |a| a.intersect(&r)));
+                    f(cur, self.clip_area(cur, Rect::new(x, y, o.w, o.h)));
                 }
             }
             if b.style.boxs.position == Position::Fixed {
@@ -204,7 +228,29 @@ impl Builder<'_> {
             }
             cur = b.parent;
         }
-        if counting { acc } else { None }
+    }
+
+    fn ancestor_clip(&self, id: BoxId, pos: Position) -> Option<Rect> {
+        let mut acc: Option<Rect> = None;
+        self.ancestor_walk(id, pos, |_, r| acc = Some(acc.map_or(r, |a| a.intersect(&r))));
+        acc
+    }
+
+    /// [`Self::ancestor_clip`] by scope: the clip rectangles in the content coordinates of each scope they are in.
+    fn ancestor_levels(&self, id: BoxId, pos: Position) -> Vec<(u32, Rect)> {
+        let mut levels: Vec<(u32, Rect)> = Vec::new();
+        self.ancestor_walk(id, pos, |a, r| {
+            // A scroll container's padding box clips from outside it; any other box's from inside the scope it is in.
+            let lvl = match self.own.get(&a).and_then(|&s| self.list.scopes.get(s as usize)).filter(|s| matches!(s.kind, ScopeKind::Scroll(_))) {
+                Some(s) => s.parent,
+                None => self.list.scope_of.get(a as usize).copied().unwrap_or(NO_SCOPE),
+            };
+            match levels.iter_mut().find(|l| l.0 == lvl) {
+                Some(l) => l.1 = l.1.intersect(&r),
+                None => levels.push((lvl, r)),
+            }
+        });
+        levels
     }
 
     // ---- positioned boxes ----------------------------------------------------------------------------
@@ -234,12 +280,256 @@ impl Builder<'_> {
         let (x, y) = res.page_pos(id);
         self.fixed = self.in_fixed(id);
         self.clip = NO_CLIP;
-        if let Some(r) = self.ancestor_clip(id, p.position) {
+        if self.list.scopes.is_empty() {
+            if let Some(r) = self.ancestor_clip(id, p.position) {
+                self.push_clip(r);
+            }
+            self.paint_box(id, x, y);
+        } else {
+            self.positioned_in_scopes(id, p.position, x, y);
+        }
+        (self.fixed, self.clip) = saved;
+    }
+
+    /// A positioned box on a page with scopes: it is painted inside the panes of the scopes it is in that the painting so far is
+    /// not in, each clipped by the ancestors' clips of its level.
+    #[inline(never)]
+    fn positioned_in_scopes(&mut self, id: BoxId, pos: Position, x: LU, y: LU) {
+        let levels = self.ancestor_levels(id, pos);
+        // A fixed box is not in what scrolls; it goes to the fixed list, past the panes that are open.
+        let detached = self.fixed.then(|| (std::mem::take(&mut self.sinks), std::mem::take(&mut self.frames), std::mem::replace(&mut self.frame, NO_SCOPE)));
+        let target = if self.fixed {
+            NO_SCOPE
+        } else {
+            match self.own_sticky.get(&id).or_else(|| self.own.get(&id)) {
+                Some(&s) => self.list.scopes.get(s as usize).map_or(NO_SCOPE, |s| s.parent),
+                None => self.list.scope_of.get(id as usize).copied().unwrap_or(NO_SCOPE),
+            }
+        };
+        let path = self.path_to(target);
+        let rect_of = |lvl: u32| levels.iter().find(|l| l.0 == lvl).map(|l| l.1);
+        let mut lvl = self.frame;
+        for &s in &path {
+            self.clip = NO_CLIP;
+            if let Some(r) = rect_of(lvl) {
+                self.push_clip(r);
+            }
+            self.open_scope(s, true);
+            lvl = s;
+        }
+        self.clip = NO_CLIP;
+        if let Some(r) = rect_of(lvl) {
             self.push_clip(r);
         }
         self.paint_box(id, x, y);
-        (self.fixed, self.clip) = saved;
+        for _ in &path {
+            self.close_scope(false);
+        }
+        if let Some((sinks, frames, frame)) = detached {
+            (self.sinks, self.frames, self.frame) = (sinks, frames, frame);
+        }
     }
+
+    /// The scopes between the one being painted and `target` (inside it), outermost first; none when `target` is not inside it.
+    fn path_to(&self, target: u32) -> Vec<u32> {
+        let mut path = Vec::new();
+        let mut s = target;
+        while s != self.frame && s != NO_SCOPE && path.len() < 64 {
+            path.push(s);
+            s = self.list.scopes.get(s as usize).map_or(NO_SCOPE, |sc| sc.parent);
+        }
+        if s != self.frame {
+            path.clear();
+        }
+        path.reverse();
+        path
+    }
+
+    /// Begin the pane of scope `s`: what is added goes to it until [`Self::close_scope`]. `set`: the clip now is the one the pane
+    /// item will carry (and is remembered for panes opened again later).
+    fn open_scope(&mut self, s: u32, set: bool) {
+        if set && let Some(c) = self.pane_clip.get_mut(s as usize) {
+            *c = self.clip;
+        }
+        self.sinks.push((Vec::new(), self.clip));
+        self.frames.push(self.frame);
+        self.frame = s;
+        self.clip = NO_CLIP;
+    }
+
+    /// End the pane that is open: an item of the scope's rectangle in what was open before it. `bars`: the bars go on top.
+    fn close_scope(&mut self, bars: bool) {
+        let Some((items, outer)) = self.sinks.pop() else { return };
+        let s = self.frame;
+        self.frame = self.frames.pop().unwrap_or(NO_SCOPE);
+        self.clip = outer;
+        let Some(sc) = self.list.scopes.get(s as usize) else { return };
+        if items.is_empty() && !bars {
+            return;
+        }
+        let bounds = match &sc.kind {
+            ScopeKind::Sticky(r) => r.reach,
+            ScopeKind::Scroll(_) => sc.view,
+        };
+        self.list.panes.push(Pane { scope: s, items, bars });
+        let pi = (self.list.panes.len() - 1) as u32;
+        self.push(bounds, ItemKind::Pane(pi));
+    }
+
+    /// Make the scopes of the page: a scroll container for each box with `overflow: scroll | auto`, a sticky one for each
+    /// `position: sticky` box with an inset, unless its nearest scroll container is `overflow: hidden` (that never scrolls).
+    #[inline(never)]
+    fn find_scopes(&mut self) {
+        let res = self.res;
+        let tree = &res.tree;
+        if !tree.boxes.iter().any(|b| scroller(&b.style) || (b.style.boxs.position == Position::Sticky && has_inset(&b.style))) {
+            return;
+        }
+        // The `overflow: hidden` boxes that are the scrollport of a sticky box: they never scroll but the box sticks to them.
+        let mut hosts: FxHashMap<BoxId, ()> = FxHashMap::default();
+        for (i, b) in tree.boxes.iter().enumerate() {
+            if b.style.boxs.position == Position::Sticky && has_inset(&b.style) {
+                let mut c = b.parent;
+                for _ in 0..MAX_WALK {
+                    let Some(a) = (c != NO_BOX).then(|| tree.get(c)) else { break };
+                    if a.style.boxs.overflow_x == Overflow::Hidden || a.style.boxs.overflow_y == Overflow::Hidden || scroller(&a.style) {
+                        if !scroller(&a.style) {
+                            hosts.insert(c, ());
+                        }
+                        break;
+                    }
+                    c = a.parent;
+                }
+            }
+            let _ = i;
+        }
+        // Per box: the scope its content is in, the one its absolutely positioned descendants are in, done.
+        let mut st = vec![(NO_SCOPE, NO_SCOPE, false, false); tree.boxes.len()];
+        let mut chain: Vec<BoxId> = Vec::new();
+        for start in 0..tree.boxes.len() as BoxId {
+            if st.get(start as usize).is_none_or(|s| s.3) {
+                continue;
+            }
+            chain.clear();
+            let mut cur = start;
+            while cur != NO_BOX && chain.len() < 100_000 && st.get(cur as usize).is_some_and(|s| !s.3) {
+                chain.push(cur);
+                cur = tree.get(cur).parent;
+            }
+            let mut up = st.get(cur as usize).copied().unwrap_or((NO_SCOPE, NO_SCOPE, false, true));
+            for &i in chain.iter().rev() {
+                let b = tree.get(i);
+                let bs = &b.style.boxs;
+                let lives = match bs.position {
+                    Position::Fixed => NO_SCOPE,
+                    Position::Absolute => up.1,
+                    _ => up.0,
+                };
+                let mut me = lives;
+                if matches!(b.kind, BoxKind::Block | BoxKind::InlineBlock) {
+                    let sticky = bs.position == Position::Sticky && has_inset(&b.style);
+                    let host = scroller(&b.style) || hosts.contains_key(&i);
+                    // A box that is both (a sticky sidebar that scrolls) has the sticky scope outside the scroll one.
+                    if sticky {
+                        me = self.new_scope(i, lives, true);
+                        self.own_sticky.insert(i, me);
+                    }
+                    if host {
+                        me = self.new_scope(i, me, false);
+                        self.own.insert(i, me);
+                    }
+                }
+                up = (me, if is_cb(&b.style) { me } else { up.1 }, false, true);
+                if let Some(slot) = st.get_mut(i as usize) {
+                    *slot = up;
+                }
+            }
+        }
+        self.list.scope_of = st.iter().map(|s| s.0).collect();
+    }
+
+    fn new_scope(&mut self, i: BoxId, parent: u32, sticky: bool) -> u32 {
+        let res = self.res;
+        let b = res.tree.get(i);
+        let bs = &b.style.boxs;
+        let o = res.box_out(i);
+        let (x, y) = res.page_pos(i);
+        let r = Rect::new(x, y, o.w, o.h);
+        let (kind, view) = if !sticky {
+            let m = |o: Overflow| match o {
+                Overflow::Scroll => 2,
+                Overflow::Auto => 1,
+                _ => 0,
+            };
+            (ScopeKind::Scroll([m(bs.overflow_x), m(bs.overflow_y)]), self.padding_box(i, r))
+        } else {
+            // css-position-3 3.4: the containing block is the content box of the parent; percentages are of the scrollport.
+            let p = res.tree.layout_parent(i);
+            let po = res.box_out(p);
+            let (px, py) = res.page_pos(p);
+            let pb = self.padding_box(p, Rect::new(px, py, po.w, po.h));
+            let pad = |k: usize| res.tree.get(p).pstyle().boxs.padding.get(k).map_or(LU::ZERO, |l| pad_px(l, po.w));
+            let cb = Rect::new(pb.x + pad(3), pb.y + pad(0), (pb.w - pad(3) - pad(1)).max0(), (pb.h - pad(0) - pad(2)).max0());
+            let (pw, ph) = self.list.scopes.get(parent as usize).map_or(self.list.vp, |s| (s.view.w.to_f32(), s.view.h.to_f32()));
+            let base = [ph, pw, ph, pw];
+            let inset: [f32; 4] = std::array::from_fn(|k| match bs.inset.get(k) {
+                Some(Dim::Lp(l)) => l.resolve(base.get(k).copied().unwrap_or(0.0)),
+                _ => f32::NAN,
+            });
+            let (hx, hy) = (!inset[1].is_nan() || !inset[3].is_nan(), !inset[0].is_nan() || !inset[2].is_nan());
+            // In a scroll container, the containing block reaches as far as the container's content: not known yet, so any distance.
+            let cb_scroll = self.own.get(&p).is_some_and(|&s| self.list.scopes.get(s as usize).is_some_and(|s| matches!(s.kind, ScopeKind::Scroll(_))));
+            let far = LU::px(MAX_PAGE_HEIGHT_PX);
+            let (x0, x1) = if hx { (r.x.min(cb.x), if cb_scroll { far } else { r.right().max(cb.right()) }) } else { (r.x, r.right()) };
+            let (y0, y1) = if hy { (r.y.min(cb.y), if cb_scroll { far } else { r.bottom().max(cb.bottom()) }) } else { (r.y, r.bottom()) };
+            (ScopeKind::Sticky(StickyRule { cb, inset, reach: Rect::new(x0, y0, (x1 - x0).max0(), (y1 - y0).max0()), cb_scroll }), r)
+        };
+        self.ext.push((view.x, view.y));
+        self.pane_clip.push(NO_CLIP);
+        self.list.scopes.push(Scope { node: b.node, parent, view, ext: (view.right().to_f32(), view.bottom().to_f32()), kind, off: Cell::new((0.0, 0.0)) });
+        (self.list.scopes.len() - 1) as u32
+    }
+
+    /// Add `r` (a box or a line piece the painting has reached, in the coordinates of the current scope) to the scrollable overflow
+    /// of the scroll container or the page it is in, as far as the clips let it be seen.
+    fn extend(&mut self, r: Rect) {
+        let mut s = self.frame;
+        let mut scroll = NO_SCOPE;
+        for _ in 0..64 {
+            let Some(sc) = self.list.scopes.get(s as usize) else { break };
+            if matches!(sc.kind, ScopeKind::Scroll(_)) {
+                scroll = s;
+                break;
+            }
+            s = sc.parent;
+        }
+        if scroll == NO_SCOPE && self.fixed {
+            return;
+        }
+        let r = self.list.clip_rect(self.clip).map_or(r, |c| r.intersect(&c));
+        if r.is_empty() {
+            return;
+        }
+        match self.ext.get_mut(scroll as usize) {
+            Some(e) => *e = (e.0.max(r.right()), e.1.max(r.bottom())),
+            None => self.page_right = self.page_right.max(r.right()),
+        }
+    }
+
+    /// The extent along the scroll axis of something at `r` in scope `s`, as the page sees it: that of the outermost scope around it
+    /// (a sticky one moves with the viewport: its pictures are always near).
+    fn span_of(&self, mut s: u32, r: &Rect) -> (LU, LU) {
+        let mut v = *r;
+        let mut sticky = false;
+        for _ in 0..64 {
+            let Some(sc) = self.list.scopes.get(s as usize) else { break };
+            sticky = matches!(sc.kind, ScopeKind::Sticky(_));
+            (v, s) = (sc.view, sc.parent);
+        }
+        if sticky { (LU::MIN, LU::MAX) } else { self.along(&v) }
+    }
+
+
 
     // ---- boxes ----------------------------------------------------------------------------------------
 
@@ -251,10 +541,17 @@ impl Builder<'_> {
     /// each one as a context of its own), then the in-flow inline content, text included (step 7). Two walks of the
     /// block tree make that order without a buffer: one for the blocks, one for the lines.
     fn paint_box(&mut self, id: BoxId, ax: LU, ay: LU) {
+        let sticky = if self.own_sticky.is_empty() { None } else { self.own_sticky.get(&id).copied() };
+        if let Some(s) = sticky {
+            self.open_scope(s, true);
+        }
         let grouped = self.open_group(id);
         self.paint_box_inner(id, ax, ay);
         if grouped {
             self.close_group(id, ax, ay);
+        }
+        if sticky.is_some() {
+            self.close_scope(false);
         }
     }
 
@@ -301,6 +598,7 @@ impl Builder<'_> {
         let bounds = Rect::new(LU::from_f32(x0), LU::from_f32(y0), LU::from_f32(x1 - x0), LU::from_f32(y1 - y0));
         self.list.groups.push(Group { items, opacity, xf, local });
         let gi = (self.list.groups.len() - 1) as u32;
+        self.extend(bounds);
         self.push(bounds, ItemKind::Group(gi));
     }
 
@@ -309,11 +607,19 @@ impl Builder<'_> {
         let first_outline = self.outlines.len();
         self.walk(id, ax, ay, false);
         let mut i = first;
-        while let Some(&(c, x, y, clip, fixed)) = self.floats.get(i) {
+        while let Some(&(c, x, y, clip, fixed, fr)) = self.floats.get(i) {
             i += 1;
             let saved = (self.clip, self.fixed);
+            let path = self.path_to(fr);
+            for &s in &path {
+                self.clip = self.pane_clip.get(s as usize).copied().unwrap_or(NO_CLIP);
+                self.open_scope(s, false);
+            }
             (self.clip, self.fixed) = (clip, fixed);
             self.paint_box(c, x, y);
+            for _ in &path {
+                self.close_scope(false);
+            }
             (self.clip, self.fixed) = saved;
         }
         self.floats.truncate(first);
@@ -336,8 +642,12 @@ impl Builder<'_> {
         }
         let rect = Rect::new(ax, ay, o.w, o.h);
         if !inline {
+            self.extend(rect);
             if !o.hide {
                 self.box_decor(id, rect);
+                if bx.control() == Control::Select && bx.style.misc.appearance == crate::css::types::Appearance::Auto && Self::visible_style(&bx.style) {
+                    self.select_arrow(rect);
+                }
             }
             if bx.replaced().is_some() {
                 self.replaced(id, rect);
@@ -350,6 +660,10 @@ impl Builder<'_> {
             }
         }
         let prev = o.clip.then(|| self.clip_box(id, rect));
+        let pane = if self.own.is_empty() { None } else { self.own.get(&id).copied().filter(|&s| self.list.scopes.get(s as usize).is_some_and(|s| matches!(s.kind, ScopeKind::Scroll(_)))) };
+        if let Some(s) = pane {
+            self.open_scope(s, true);
+        }
         if inline
             && o.marker > 0
             && let Some(m) = res.markers.get(o.marker as usize - 1)
@@ -367,7 +681,7 @@ impl Builder<'_> {
                         continue;
                     }
                     let co = res.box_out(c);
-                    self.floats.push((c, ax + co.x, ay + co.y, self.clip, self.fixed));
+                    self.floats.push((c, ax + co.x, ay + co.y, self.clip, self.fixed, self.frame));
                 }
             }
         } else {
@@ -400,6 +714,9 @@ impl Builder<'_> {
                     self.rect(Rect::new(ax + s.0, ay + s.1, s.2, s.3), s.4);
                 }
             }
+        }
+        if pane.is_some() {
+            self.close_scope(inline);
         }
         if let Some(p) = prev {
             self.restore(p);
@@ -622,7 +939,8 @@ impl Builder<'_> {
                 self.list.grads.push(gp);
             } else {
                 let tile = Rect::new(LU::ZERO, LU::ZERO, LU::from_f32(tw), LU::from_f32(th));
-                self.list.images.push(ImagePlace { node, rect: tile, span: self.along(&clip_rect), fixed: self.fixed });
+                let span = self.span_of(self.frame, &clip_rect);
+                self.list.images.push(ImagePlace { node, rect: tile, span, area: clip_rect, fixed: self.fixed, scope: self.frame });
             }
             let bi = self.list.bgs.len() as u32;
             self.list.bgs.push(draw);
@@ -711,9 +1029,24 @@ impl Builder<'_> {
         (self.clip, self.fixed) = saved;
     }
 
+    /// What box `id` clips to: its padding box, on the axes where `overflow` is not `visible` (`clip` on one axis only leaves the
+    /// other unclipped, css-overflow-3 3).
+    fn clip_area(&self, id: BoxId, rect: Rect) -> Rect {
+        let mut pb = self.padding_box(id, rect);
+        let bs = &self.res.tree.get(id).pstyle().boxs;
+        let far = LU::px(MAX_PAGE_HEIGHT_PX);
+        if bs.overflow_x == Overflow::Visible {
+            (pb.x, pb.w) = (-far, far + far);
+        }
+        if bs.overflow_y == Overflow::Visible {
+            (pb.y, pb.h) = (-far, far + far);
+        }
+        pb
+    }
+
     /// Clip to the padding box of box `id`, rounded by the inner border edge where the box has a radius (css-backgrounds-3 5.3).
     fn clip_box(&mut self, id: BoxId, rect: Rect) -> u32 {
-        let pb = self.padding_box(id, rect);
+        let pb = self.clip_area(id, rect);
         let style = &self.res.tree.get(id).pstyle();
         let radii = resolve_radii(style.misc.radius.as_deref(), rect.w.to_f32(), rect.h.to_f32());
         let bd = &style.border;
@@ -779,6 +1112,7 @@ impl Builder<'_> {
         let res = self.res;
         match f.kind {
             FragKind::Text { glyphs, decor, asc, v, fs, .. } => {
+                self.extend(Rect::new(ax + f.x, ay + f.y, f.w, f.h));
                 self.text(f, ax, ay, glyphs, asc, v, fs);
                 let style = res.tree.get(f.box_id).pstyle().clone();
                 if Self::visible_style(&style) {
@@ -906,7 +1240,8 @@ impl Builder<'_> {
                     let inner = inset_radii(radii, [t.to_f32(), rt.to_f32(), bt.to_f32(), l.to_f32()]);
                     let prev = inner.iter().any(|(a, b)| *a > 0.0 && *b > 0.0).then(|| self.push_round(content, inner));
                     self.push(content, ItemKind::Image { node: bx.node });
-                    self.list.images.push(ImagePlace { node: bx.node, rect: content, span: self.along(&content), fixed: self.fixed });
+                    let span = self.span_of(self.frame, &content);
+                    self.list.images.push(ImagePlace { node: bx.node, rect: content, span, area: content, fixed: self.fixed, scope: self.frame });
                     if let Some(p) = prev {
                         self.restore(p);
                     }
@@ -934,22 +1269,14 @@ impl Builder<'_> {
                 }
                 self.label(id, content, name);
             }
-            Some(ReplacedKind::Check) => {
-                self.rect(content, GREY_LINE);
-                let one = LU::px(1);
-                let inner = Rect::new(content.x + one, content.y + one, (content.w - one - one).max0(), (content.h - one - one).max0());
-                self.rect(inner, Color::WHITE);
-                let checked = self.doc.atoms.lookup("checked").is_some_and(|a| self.doc.attr(bx.node, a).is_some());
-                if checked {
-                    let three = LU::px(3);
-                    self.rect(Rect::new(content.x + three, content.y + three, (content.w - three - three).max0(), (content.h - three - three).max0()), Color::rgb(0x33, 0x33, 0x33));
-                }
-            }
-            Some(ReplacedKind::Fixed(..)) => {
+            Some(ReplacedKind::Check) => self.check(bx.node, content, &style),
+            // A control that has no look of its own (): a grey frame.
+            Some(ReplacedKind::Fixed(_, _, kind)) if !self.gauge(bx.node, content, kind, &style) => {
                 self.rect(content, GREY_LINE);
                 let one = LU::px(1);
                 self.rect(Rect::new(content.x + one, content.y + one, (content.w - one - one).max0(), (content.h - one - one).max0()), GREY_FILL);
             }
+            Some(ReplacedKind::Fixed(..)) => {}
             None => {}
         }
     }
@@ -1000,7 +1327,11 @@ impl Builder<'_> {
             }
         }
         self.list.height = height;
+        if !vertical {
+            x_max = self.page_right.min(cap);
+        }
         (self.list.x_min, self.list.x_max) = (x_min, x_max);
+        self.finish_scopes();
         self.list.spots = self.spots();
         // The arrays grew by doubling; the list lives as long as the page.
         let l = &mut self.list;
@@ -1011,6 +1342,22 @@ impl Builder<'_> {
         l.images.shrink_to_fit();
         self.list.build_index();
         self.list
+    }
+
+    /// The scrollable overflow of each scroll container: its padding box and what its content reached, with the end padding when
+    /// the content goes past the content box (css-overflow-3 2.2, as browsers do).
+    fn finish_scopes(&mut self) {
+        for (&b, &s) in &self.own {
+            let (Some(sc), Some(e)) = (self.list.scopes.get_mut(s as usize), self.ext.get(s as usize)) else { continue };
+            if matches!(sc.kind, ScopeKind::Scroll(_)) {
+                let (pad, w) = (&self.res.tree.get(b).pstyle().boxs.padding, self.res.box_out(b).w);
+                let p = |k: usize| pad.get(k).map_or(0.0, |l| pad_px(l, w).to_f32());
+                let (vr, vb) = (sc.view.right().to_f32(), sc.view.bottom().to_f32());
+                let (cr, cb) = (e.0.to_f32(), e.1.to_f32());
+                sc.ext = (if cr > vr - p(1) { cr + p(1) } else { vr }.max(vr), if cb > vb - p(2) { cb + p(2) } else { vb }.max(vb));
+            }
+        }
+        self.list.panes.shrink_to_fit();
     }
 
     /// The extent of `r` along the scroll axis (fixed items are never measured: they are always near).
@@ -1060,7 +1407,8 @@ impl Builder<'_> {
                     return ImageSpot { top: LU::MAX, bottom: LU::MAX, lazy };
                 }
                 let (x, y) = res.page_pos(owner);
-                let (top, bottom) = self.along(&Rect::new(x, y, o.w, o.h));
+                let sc = self.list.scope_of.get(owner as usize).copied().unwrap_or(NO_SCOPE);
+                let (top, bottom) = self.span_of(sc, &Rect::new(x, y, o.w, o.h));
                 ImageSpot { top, bottom, lazy }
             })
             .collect()
