@@ -87,6 +87,7 @@
 - WPT 子集：`css/css-fonts`（`@font-face` 部分）、`css/css-writing-modes`、`css/css-ruby` 里不依赖还没做的特性的部分；这一步起 WPT 可以真正加载 Ahem 字体。
 
 ## 2e SVG、内部滚动、sticky、表单外观
+为了省用量，2e 分两小步：**2e-1** SVG（体积 +80 KB）；**2e-2** 内部滚动、`position: sticky`、表单控件外观，顺带横向滚动条和 Shift+滚轮（+40 KB）。2e 之后是第 2 层收尾（内存、体积、遗留问题）和第三次审查。
 
 - **SVG**（自己写，复用 2c 的光栅器）：`<img src=*.svg>`、CSS 背景里的 SVG、网页里直接写的 `<svg>`（图标大量这样用）。支持 `svg`/`g`/`use`/`defs`/`symbol`、`path`（全部命令含圆弧）、基本图形、填充和描边、`fill-rule`、`opacity`、`transform`、`viewBox` 和 `preserveAspectRatio`、`currentColor`、线性和径向渐变、简单的 `clipPath`、简单的 `<text>`；样式用我们自己的 CSS 引擎算。不做：滤镜、蒙版、动画、`foreignObject`。SVG 文件同样是不可信输入（元素数、`use` 展开、嵌套深度都有上限）。
 - **内部滚动区域**：`overflow: auto/scroll` 有滚动条，滚轮和键盘滚动鼠标所在的区域；`overflow: hidden` 的区域用户滚不动。
