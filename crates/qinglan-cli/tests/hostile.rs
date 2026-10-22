@@ -805,3 +805,59 @@ fn sticky_boxes_10000() {
     let one = "<div style='height:30px'><div style='position:sticky;top:0;bottom:0;left:0;height:10px;background:#0f0'>s</div></div>";
     run(page("10000 sticky boxes", format!("<!doctype html><body>{}", one.repeat(n(10_000)))), "sticky10000");
 }
+
+// ---- review fixes after 2e + 2f ----------------------------------------------------------------------------------------
+
+#[test]
+fn svg_namespace_declarations_255_deep_by_250() {
+    // 255 open elements, each declaring 250 prefixes: 64k bindings in scope at once. Every lookup used to walk them all
+    // (about 110 s of CPU for this file); now the file is refused once 1024 are in scope.
+    let decls: String = (0..250).fold(String::new(), |mut s, k| {
+        write!(s, " xmlns:p{k}='u{k}'").unwrap();
+        s
+    });
+    let depth = 255;
+    let body = format!("{}<rect width='50' height='50' fill='#f00' p0:a='1'/>{}", format!("<g{decls} p1:b='1'>").repeat(depth), "</g>".repeat(depth));
+    run(svg_image_case("svg 255 x 250 namespace declarations", svg_file(&body)), "svgnsflood");
+}
+
+#[test]
+fn svg_many_prefixed_attributes_under_1024_live_namespace_declarations() {
+    // Just under the limit (1024): 60 levels of 16 prefixes, then 20000 elements with prefixed attributes at the bottom.
+    let decls = |lv: usize| (0..16).fold(String::new(), |mut s, k| {
+        write!(s, " xmlns:p{lv}_{k}='u'").unwrap();
+        s
+    });
+    let mut body = String::new();
+    for lv in 0..60 {
+        write!(body, "<g{}>", decls(lv)).unwrap();
+    }
+    body.push_str(&"<rect width='1' height='1' p0_0:a='1' p30_5:b='2' p59_15:c='3' p3_3:d='4'/>".repeat(n(20_000)));
+    body.push_str(&"</g>".repeat(60));
+    run(svg_image_case("svg 960 live namespace declarations, 80k prefixed attributes", svg_file(&body)), "svgnslookups");
+}
+
+fn svg_texts(count: usize, chars: usize) -> String {
+    let mut seed = 7u64;
+    let mut s = String::new();
+    for i in 0..count {
+        write!(s, "<text x='0' y='{}' font-size='10'>", 10 + i * 10).unwrap();
+        for _ in 0..chars {
+            let c = lcg(&mut seed) % 27;
+            s.push(if c == 26 { ' ' } else { (b'a' + c) as char });
+        }
+        s.push_str("</text>");
+    }
+    s
+}
+
+#[test]
+fn svg_40_texts_of_100k_characters_image() {
+    // 4 MB of text: shaping and drawing every glyph took 6.6 s, on the UI thread. 200k glyphs are drawn, the rest is not.
+    run(svg_image_case("svg 40 x 100k characters of text (image)", svg_file(&svg_texts(40, n(100_000)))), "svgtextimage");
+}
+
+#[test]
+fn svg_40_texts_of_100k_characters_inline() {
+    run(page("svg 40 x 100k characters of text (inline)", format!("<!doctype html><svg width='300' height='300' viewBox='0 0 100 100'>{}</svg>", svg_texts(40, n(100_000)))), "svgtextinline");
+}

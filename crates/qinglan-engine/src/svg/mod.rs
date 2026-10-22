@@ -297,30 +297,54 @@ pub fn rasterize(bytes: &[u8], width: u32, height: u32) -> Result<DecodedImage, 
 
 /// The bitmaps of inline SVGs drawn lately, kept so that a scroll repaints a page of icons without rendering each again.
 const CACHE_BYTES: usize = 3 << 19;
+/// One bigger bitmap is kept besides (a 1200 x 1200 chart is 5.8 MB): rendering it again for every scroll frame took 100 ms.
+/// It has its own room, 8 MB at most (2 Mpx), and goes when a page is left ([`clear_cache`]) or another big one is drawn.
+const BIG_BYTES: usize = 8 << 20;
 
 type CacheEntry = (u64, u32, u32, std::sync::Arc<DecodedImage>);
 
 thread_local! {
     static CACHE: std::cell::RefCell<Vec<CacheEntry>> = const { std::cell::RefCell::new(Vec::new()) };
+    static BIG: std::cell::RefCell<Option<CacheEntry>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Drop every cached bitmap of inline SVGs (a new page).
+pub fn clear_cache() {
+    CACHE.with(|c| c.borrow_mut().clear());
+    BIG.with(|b| *b.borrow_mut() = None);
+}
+
+/// Bytes the cached bitmaps hold, for the tests.
+pub fn cache_bytes() -> usize {
+    CACHE.with(|c| c.borrow().iter().map(|e| e.3.bgra.len()).sum::<usize>()) + BIG.with(|b| b.borrow().as_ref().map_or(0, |e| e.3.bgra.len()))
 }
 
 /// The rendering of `sc` at `w` x `h` device pixels (`dpr` device pixels per px of its user space when it has no viewBox),
-/// from the cache or made now (and kept, oldest dropped, up to 1.5 MB). `None` when it is too big or empty.
+/// from the cache or made now (and kept: up to 1.5 MB of them, oldest dropped, and one bigger than that, up to 8 MB). `None` when
+/// it is too big or empty.
 pub fn cached_bitmap(sc: &Scene, w: u32, h: u32, platform: &dyn crate::platform::Platform, dpr: f32) -> Option<std::sync::Arc<DecodedImage>> {
-    if let Some(hit) = CACHE.with(|c| c.borrow().iter().find(|e| e.0 == sc.id && e.1 == w && e.2 == h).map(|e| e.3.clone())) {
+    let same = |e: &CacheEntry| e.0 == sc.id && e.1 == w && e.2 == h;
+    if let Some(hit) = CACHE.with(|c| c.borrow().iter().find(|e| same(e)).map(|e| e.3.clone())) {
+        return Some(hit);
+    }
+    if let Some(hit) = BIG.with(|b| b.borrow().as_ref().filter(|e| same(e)).map(|e| e.3.clone())) {
         return Some(hit);
     }
     let canvas = render::render(sc, w, h, Some(platform), Some(dpr))?;
     let img = std::sync::Arc::new(DecodedImage { width: canvas.w, height: canvas.h, natural_width: w, natural_height: h, bgra: canvas.data, text: None });
+    if img.bgra.len() > CACHE_BYTES {
+        if img.bgra.len() <= BIG_BYTES {
+            BIG.with(|b| *b.borrow_mut() = Some((sc.id, w, h, img.clone())));
+        }
+        return Some(img);
+    }
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
         let cost = |e: &CacheEntry| e.3.bgra.len();
         while !c.is_empty() && c.iter().map(cost).sum::<usize>() + img.bgra.len() > CACHE_BYTES {
             c.remove(0);
         }
-        if img.bgra.len() <= CACHE_BYTES {
-            c.push((sc.id, w, h, img.clone()));
-        }
+        c.push((sc.id, w, h, img.clone()));
     });
     Some(img)
 }

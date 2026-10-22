@@ -150,11 +150,13 @@
 | 注音对（`ruby_pairs`，每对约 4 个盒子） | 和生成的盒子共用同一个额度（`gen_cap`） | 后面的底字和 `rt` 当普通行内，页面标记“不完整” |
 | 盒阴影的遮罩（`paint/fx.rs`，切掉中间不变的行列之后的像素数 `MAX_MASK_PX`；保留 `MAX_KEPT_PX` 每条、`MAX_KEPT_BYTES` 合计） | 4 Mpx；保留 1 Mpx / 6 MB | 这个阴影不画（遮罩的大小只和圆角、模糊半径有关，盒子再大也不会超；超的只有 `blur` 大到上千像素的） |
 | SVG 的 XML 文件：节点数 / 嵌套深度 / 每个元素的属性（`svg/xml.rs`） | 15 万 / 256 / 256 | 解析失败，坏图 |
+| SVG 的 XML 文件：同时在作用域里的命名空间声明（`MAX_NS_DECLS`，所有打开的元素合计；前缀按 256 个桶分链，查找走一条短链） | 1024 | 解析失败（`TooLarge`），坏图 |
 | SVG 场景：元素访问（含 `use` 展开）/ 操作数 / 每条路径的段数 / 全场景路径段数（`svg/build.rs`） | 12 万 / 4 万 / 25 万 / 60 万 | 场景截断，已有的照画 |
 | SVG：元素嵌套加 `use` 展开深度 / 同时展开的 `use` 目标 / 渐变色标 / 渐变数 / 剪切路径数 | 96 / 24 / 256 / 4096 / 4096 | 更深的、环、多的不画 |
 | 一页所有内联 `<svg>` 的场景工作量（`MAX_SVG_WORK`） | 300 万 | 之后的 `<svg>` 是空盒子 |
 | SVG 渲染：画布 / 像素访问 / 同时存在的层 / 剪切平面（`svg/render.rs`） | 1600 万像素 / 2.4 亿 / 5 / 6 | 太大不画；工作量用完不再画；层满了直接画 |
-| 内联 SVG 的位图缓存（`svg::CACHE_BYTES`） | 1.5 MB | 最老的丢掉 |
+| SVG 渲染：一次渲染的文字字符数（`MAX_GLYPHS`，所有文字块合计；每个字形另按 128 单位计入像素访问） | 20 万 | 放不下的那个文字块和它后面的文字都不画 |
+| 内联 SVG 的位图缓存（`svg::CACHE_BYTES` / `BIG_BYTES`） | 1.5 MB；另有一个大位图的位置，最多 8 MB | 最老的丢掉；大位图被下一张大的顶掉，换页时（`ImageStore::clear`）全清；超过 8 MB 的不缓存 |
 
 ### 1a 审查后的补充（2026-10-15）
 
@@ -1792,3 +1794,23 @@ gh-rust    private-bytes-after-scroll | old: med    23.3 max    24.9 [23.6 23.2 
 - 内存 ≤ 46.0 MB 没到（见第 3 节）：该减活的数据，不是分配器。显示列表只建视口附近的带（4.0 MB）、盒子和碎片树（8.5 MB）是最大的两项。
 - 图片 SVG 的文字：`textLength`、文字的渐变填充、文字盖在后画的形状上的顺序。
 - `bar_press` 不检查外层滚动容器的视口是否含这个点；`shift_of` 不计 sticky 位移。
+
+## 第 2 层 · 2e+2f 审查修复（2026-10-22，起点 `8af611f`；提交 `Fix 2e/2f review findings`）
+
+审查 2e + 2f 之后的一小轮修复，六条意见，每条一个测试。限制表里加了两行（命名空间声明、文字字符数）、改了一行（内联 SVG 位图缓存）。
+
+- **R1 命名空间查找是 O(作用域数)（应改）**：`svg/xml.rs` 每次查前缀都从最里面往外扫所有打开的 `xmlns`，256 层 × 每层 256 个声明 = 6.5 万条，`scope.svg`（1.8 MB）当 `<img>` 要约 110 秒 CPU。现在：声明放进 `decls`（栈，元素关闭时弹出自己的），另有 256 个桶的 `heads` 表，每个桶一条链（`Decl.prev` 指向同桶更老的声明），查找只走一条链；弹栈时最新的声明正好是桶头，直接还原。同时作用域里的声明总数封顶 `MAX_NS_DECLS` = 1024（超了 `TooLarge`，坏图；真实文件最多几十个）。最坏情况是攻击者让所有前缀落进同一个桶，查一次 ≤ 1024 步（按每步几纳秒估算，80k 次查找约 0.1–0.3 秒，没有为它单写测试）。**没有用 `HashMap`**：第一版用 `HashMap<String, String>` 加撤销栈，`qinglan.exe` 涨到 2,719,232（上限 2,717,000 超 2,232），换成自己的分桶链后 2,716,672。数字：`scope.svg` 当 `<img>` 约 110 秒 → 0.34 秒（`qinglan-cli render`）；hostile `svg_namespace_declarations_255_deep_by_250`（255 层 × 250 个声明）52 ms / 9 MB，`svg_many_prefixed_attributes_under_1024_live_namespace_declarations`（60 层 × 16 个声明，2 万个元素 × 4 个带前缀的属性）341 ms / 22 MB。测试：`xml.rs` 的 `prefixes_follow_the_open_elements`（里层改绑前缀，关闭后外层的绑定回来；关闭后的前缀未绑定是错误）、`namespace_declarations_are_bounded_and_lookups_stay_cheap`。
+- **R2 文字不计入工作量（应改）**：`svg/render.rs` 的 `text`/`overlay_text` 整形和贴字形不计工作量，`t_big.svg`（4 MB，40 段 × 10 万字）要 6.6 秒，在窗口里是在 UI 线程的 `ImageSource::finish` 里跑。现在：① 每次渲染最多 `MAX_GLYPHS` = 20 万个字符（所有文字块合计）；一个文字块放不下剩下的额度就**整块不画**，后面的文字也不画（截一半的话 `text-anchor: end/middle` 会把剩下的放错地方）；② 每个整形出来的字形另按 128 单位计入像素访问（`GLYPH_WORK`），贴字形的循环里工作量超了就停。额度按一次渲染算：内联 SVG 每次重画都重新算，图片 SVG 的 `add_text` 是另一次。可见变化：一个 SVG 里文字超过 20 万字符时，超出的文字块不画（真实图表远小于此）。数字：`t_big.svg` 6.6 秒 → 0.6 秒（`render` 整个进程）；hostile `svg_40_texts_of_100k_characters_image`/`_inline` 438 / 463 ms，34 / 33 MB。测试：`tests/svg.rs::text_beyond_the_glyph_budget_is_not_drawn`（3 段 9 万字：前两段画了，第三段那一行是空的；8 段共 8000 字都画）。
+- **R3 大内联 SVG 位图不缓存（改）**：超过 `CACHE_BYTES`（1.5 MB）的位图每帧重新渲染，1200×1200 带文字的内联 SVG 滚动帧中位数约 100 ms。选了最便宜的做法：小缓存不变，另加**一个**大位图的位置 `BIG`（最多 `BIG_BYTES` = 8 MB，即 200 万像素），下一张大的顶掉它；换页时 `ImageStore::clear` 调 `svg::clear_cache()` 全清（小缓存原来换页不清，现在也清）。没有计入图片缓存的 12 MB 预算（那个缓存在 `paint/images.rs`，内联 SVG 的位图一直是 `svg` 模块自己的线程局部缓存）；最坏多占 8 MB，只在页面有大内联 SVG 时。超过 8 MB 的（>200 万像素）仍然每帧重画。数字（`qinglan-cli render --scroll-bench`，1280×800，1200×1200 带 50 行字、渐变和 40 个圆的内联 SVG）：滚动帧中位数 98.8 / 101.1 ms → **1.9 / 2.1 ms**（首次 / 热），p95 123 / 171 → 2.7 / 2.5 ms。测试：`a_big_inline_svg_bitmap_is_kept_for_the_next_frame`（1000×1000 缓存了 400 万字节；清掉后为 0；1500×1500 画了但不缓存）。
+- **R4 滚轮的 NaN/无穷增量（改）**：`DisplayList::wheel` 里非有限的增量会把偏移变成 NaN 并一直留着（`fclamp` 让 NaN 通过），无穷增量会把无穷的余量还给页面。现在非有限的增量当 0。另外 `fmath::Fclamp::fclamp` 的 NaN 现在给下限（原来原样通过，和 `clamp` 一样）：写成 `!(v >= min)`，整数和有限值的结果不变；83 处调用没有逐个看，靠真实页面对比确认没有变化（见下）。测试：`tests/scopes.rs::a_wheel_delta_that_is_not_a_number_moves_nothing_and_leaves_the_offset_alone`，`fmath::tests::fclamp_is_clamp`（NaN 给下限）。
+- **R5 DOCTYPE 内部子集里注释的引号（改）**：`<!DOCTYPE svg [<!-- don't -->]><svg …/>` 因为引号追踪把整个文档吞了。现在内部子集里（`[` 之内、不在引号里）遇到 `<!--` 跳到 `-->`、遇到 `<?` 跳到 `?>`；没结束的注释是错误，不会吞掉后面的文档。测试：`doctype_comments_and_instructions_may_hold_quotes`。
+- **R6 `VarCache` 的键（加固）**：键是（声明号，自定义属性表的地址），没拿着表本身；表被丢掉后新表可能分到同一个地址，命中旧条目。现在条目的值里带一个 `Rc<CustomProps>`，条目活着表就活着，地址不会重用。测试：`css::cascade::tests::a_var_cache_entry_keeps_its_custom_property_map_alive`（只验证“条目拿着表、地址不被新分配占用”，没有构造出真正的陈旧命中）。
+
+### 数字和检查（提交前，在最终代码上重跑）
+- `qinglan.exe` 2,713,600 → **2,716,672**（+3,072；上限 2,717,000，余 328）。第一版（`HashMap`）是 2,719,232，超了 2,232，才改成自己的分桶链。
+- zhwiki-rec 滚到底 Private Bytes（`qinglan.exe --bench`，1920×1080，插电，3 次新进程）：49.83（冷启动第一次）/ 46.69 / 48.15 MB，≤ 50 MB；峰值 55.2–56.8 MB。
+- 真实页面（52 页，旧 `8af611f` 对新，`qinglan-cli render` 回放 1280×2400，容差同 `corpus_run.py twice`）：26 页逐字节相同，24 页只差几个像素（≤ 672 个像素，每通道 ≤ 20），2 页超容差（`rustusers-topic` 114 个像素、最大差 43；`yihui` 592 个像素、最大差 33）；这两页**旧对旧**（同一个旧 exe 渲染两次）再比：`rustusers-topic` 同样是 114 / 43（旧程序自己的抖动），`yihui` 逐字节相同、新对旧重跑也相同——都是 DirectWrite 字形遮罩的抖动，不是这轮改动。语料库里没有页面的 SVG 文字超过 20 万字符。
+- `cargo clippy --workspace --all-targets`：无警告。
+- `qinglan-cli wpt --check`：`wpt: 3313 of 3313 listed tests pass`。
+- `cargo test --workspace --no-fail-fast`：42 个测试程序全部 `ok`，0 个失败（第一次跑时 `fonts` 的 `brotli_setup_work_is_limited_by_the_input` 在同时编译对照版本的负载下用了 2.27 s，超了 debug 版的 2 s；单独重跑 10 个全过，最后一次完整重跑也过）。
+- `cargo test --release -p qinglan-cli --test hostile`（单独跑）：51 个全过；`bad_utf8` 3590 ms / 110 MB（另一次在同时跑 debug 全套测试时是 4573 ms，也没超 5 s）。

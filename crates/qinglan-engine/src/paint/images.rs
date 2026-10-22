@@ -407,6 +407,7 @@ impl ImageStore {
 
     /// Forget everything (a new page).
     pub fn clear(&mut self) {
+        crate::svg::clear_cache();
         *self = ImageStore::new();
     }
 

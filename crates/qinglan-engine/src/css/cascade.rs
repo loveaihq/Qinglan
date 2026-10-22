@@ -583,8 +583,9 @@ impl StyleTree {
 
 type ShareKey = (usize, u64);
 
-/// Parsed results of `var()` declarations, by (declaration id, custom property map).
-type VarCache = FxHashMap<(u32, usize), Option<Rc<Vec<(PropId, Specified)>>>>;
+/// Parsed results of `var()` declarations, by (declaration id, custom property map address). The entry holds the map itself:
+/// as long as the entry lives the address cannot be given to another map, so a hit is always for the very same map.
+type VarCache = FxHashMap<(u32, usize), (Rc<CustomProps>, Option<Rc<Vec<(PropId, Specified)>>>)>;
 
 struct ShareEntry {
     parent: usize,
@@ -1118,7 +1119,8 @@ fn style_for(
         let vd = vd.clone();
         let resolved = var_cache
             .entry((vd.id, custom_ptr))
-            .or_insert_with(|| resolve_var_decl(doc, &vd, &custom))
+            .or_insert_with(|| (custom.clone(), resolve_var_decl(doc, &vd, &custom)))
+            .1
             .clone();
         let found = resolved.and_then(|list| list.iter().find(|(q, _)| *q == p).map(|(_, s)| s.clone()));
         // Invalid at computed-value time: behaves as `unset`.
@@ -1440,3 +1442,24 @@ fn resolve_one(
     result
 }
 
+
+#[cfg(test)]
+#[allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    /// The `var()` cache is keyed by the address of a custom property map: the entry has to keep that map alive, or a map dropped
+    /// and a new one allocated in its place would hit the old entry.
+    #[test]
+    fn a_var_cache_entry_keeps_its_custom_property_map_alive() {
+        let mut cache: VarCache = FxHashMap::default();
+        let map: Rc<CustomProps> = Rc::new(FxHashMap::default());
+        let at = Rc::as_ptr(&map) as usize;
+        cache.insert((7, at), (map.clone(), None));
+        drop(map);
+        assert_eq!(Rc::strong_count(&cache[&(7, at)].0), 1);
+        // Maps of the same size allocated now cannot land on `at`.
+        let fresh: Vec<Rc<CustomProps>> = (0..2000).map(|_| Rc::new(FxHashMap::default())).collect();
+        assert!(fresh.iter().all(|m| Rc::as_ptr(m) as usize != at));
+    }
+}

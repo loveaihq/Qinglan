@@ -22,6 +22,11 @@ const MAX_WORK: u64 = 240_000_000;
 /// Opacity groups open at once (each is a canvas).
 const MAX_LAYERS: usize = 5;
 const MAX_MASKS: usize = 6;
+/// Characters shaped and drawn per render, all texts of the scene together (a text chunk that would go over is not drawn, nor
+/// are the ones after it). Shaping and blitting a glyph cost a few microseconds each: 200k of them are about a third of a second.
+const MAX_GLYPHS: usize = 200_000;
+/// What a glyph adds to the pixel visits (`work`), on top of the pixels of its mask: the shaping and the cache lookups.
+const GLYPH_WORK: u64 = 128;
 const LUT: usize = 512;
 /// Flattening tolerance in device pixels.
 const TOL: f32 = 0.05;
@@ -81,6 +86,8 @@ struct R<'a> {
     luts: Vec<Option<Rc<Vec<[u8; 4]>>>>,
     /// The opacity (0..=255) the text drawn now gets from the groups it is in, when only the text is drawn ([`overlay_text`]).
     gain: u32,
+    /// Glyphs shaped so far, against [`MAX_GLYPHS`].
+    glyphs: usize,
 }
 
 /// The transform from the user space of the outermost svg to a `w` x `h` canvas: the viewBox mapping; without a viewBox a user
@@ -115,6 +122,7 @@ pub fn render(sc: &Scene, w: u32, h: u32, platform: Option<&dyn Platform>, scale
         masks: Vec::new(),
         luts: vec![None; sc.grads.len()],
         gain: 255,
+        glyphs: 0,
     };
     if root.a.is_finite() && root.d.is_finite() && root.e.is_finite() && root.f.is_finite() && root.b.is_finite() && root.c.is_finite() {
         for op in &sc.ops {
@@ -140,7 +148,7 @@ pub fn render(sc: &Scene, w: u32, h: u32, platform: Option<&dyn Platform>, scale
 pub fn overlay_text(sc: &Scene, canvas: Canvas, platform: &dyn Platform) -> Canvas {
     let (w, h) = (canvas.w, canvas.h);
     let root = root_transform(sc, w as f32, h as f32, None);
-    let mut r = R { sc, platform: Some(platform), w, h, root, layers: vec![Layer { canvas, alpha: 255 }], skipped: 0, work: 0, masks: Vec::new(), luts: Vec::new(), gain: 255 };
+    let mut r = R { sc, platform: Some(platform), w, h, root, layers: vec![Layer { canvas, alpha: 255 }], skipped: 0, work: 0, masks: Vec::new(), luts: Vec::new(), gain: 255, glyphs: 0 };
     if [root.a, root.b, root.c, root.d, root.e, root.f].iter().all(|v| v.is_finite()) {
         let mut groups: Vec<u32> = Vec::new();
         for op in &sc.ops {
@@ -331,6 +339,16 @@ impl R<'_> {
         if !(k.is_finite() && k > 1.0e-6) {
             return;
         }
+        // A chunk that does not fit in what is left of the glyph budget is not drawn at all (cut short, `text-anchor` would put
+        // the rest in the wrong place), and neither is any later text: the budget is spent.
+        if self.glyphs >= MAX_GLYPHS {
+            return;
+        }
+        let chars: usize = t.runs.iter().map(|r| r.text.chars().count()).sum();
+        if chars > MAX_GLYPHS - self.glyphs {
+            self.glyphs = MAX_GLYPHS;
+            return;
+        }
         let clip = if t.clip != 0 { self.clip_mask(t.clip) } else { None };
         // (font, glyph, x from the chunk start, y from the baseline, run) in device pixels.
         let mut glyphs = Vec::new();
@@ -340,7 +358,10 @@ impl R<'_> {
             dy += run.dy * k;
             let families: Vec<FontFamily> = run.families.iter().map(Family::font).collect();
             let q = FontQuery { families: &families, weight: run.weight, slant: run.slant, lang: None };
-            for g in pl.shape(&run.text, &q, run.size * k) {
+            let shaped = pl.shape(&run.text, &q, run.size * k);
+            self.glyphs += shaped.len();
+            self.work += shaped.len() as u64 * GLYPH_WORK;
+            for g in shaped {
                 glyphs.push((g.font, g.glyph, pen + g.offset_x, dy + g.offset_y, ri));
                 pen += g.advance;
             }
@@ -364,6 +385,9 @@ impl R<'_> {
         let wu = self.w as usize;
         let Some(layer) = self.layers.last_mut() else { return };
         for (font, glyph, gx, gy, ri) in glyphs {
+            if self.work > MAX_WORK {
+                break;
+            }
             let Some(run) = t.runs.get(ri) else { continue };
             let px = o.x + shift + gx;
             let (ix, by) = (px.floor(), (o.y + drop + gy).round());

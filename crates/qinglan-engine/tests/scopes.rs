@@ -107,6 +107,17 @@ fn hidden_is_clipped_but_not_a_scroll_container() {
 }
 
 #[test]
+fn a_wheel_delta_that_is_not_a_number_moves_nothing_and_leaves_the_offset_alone() {
+    let l = lay("<body style='margin:0'><div style='width:100px;height:100px;overflow:auto'><div style='height:300px;background:#f00'></div></div></body>");
+    assert_eq!(l.list.wheel((10.0, 10.0), (10.0, 10.0), f32::NAN, f32::NAN), (0.0, 0.0));
+    assert_eq!(l.list.wheel((10.0, 10.0), (10.0, 10.0), f32::INFINITY, f32::NEG_INFINITY), (0.0, 0.0));
+    assert_eq!(l.list.scopes[0].off.get(), (0.0, 0.0));
+    // A real delta after the bad ones still works: the offset was not poisoned.
+    assert_eq!(l.list.wheel((10.0, 10.0), (10.0, 10.0), f32::NAN, 40.0), (0.0, 0.0));
+    assert_eq!(l.list.scopes[0].off.get(), (0.0, 40.0));
+}
+
+#[test]
 fn the_wheel_goes_to_the_innermost_container_that_can_move_then_to_the_one_around_it() {
     let l = lay("<body style='margin:0'><div style='width:200px;height:100px;overflow:auto'>\
         <div style='width:200px;height:100px;overflow:auto'><div style='height:300px;background:#f00'></div></div>\

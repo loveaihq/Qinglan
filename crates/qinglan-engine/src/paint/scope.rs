@@ -185,6 +185,13 @@ impl DisplayList {
     /// Scroll the containers under the point by (`dx`, `dy`) CSS px, the innermost that still can first and then those around
     /// it; what none of them could take is returned (for the page).
     pub fn wheel(&self, pt: (f32, f32), at: (f32, f32), mut dx: f32, mut dy: f32) -> (f32, f32) {
+        // A NaN or infinite delta would put NaN in an offset for good (and hand an infinite rest to the page): it is no scroll.
+        if !dx.is_finite() {
+            dx = 0.0;
+        }
+        if !dy.is_finite() {
+            dy = 0.0;
+        }
         let mut i = self.scope_at(pt, at);
         for _ in 0..MAX_CHAIN {
             let Some(s) = self.scopes.get(i as usize) else { break };

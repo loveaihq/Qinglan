@@ -21,6 +21,23 @@ pub const MAX_NODES: usize = 150_000;
 pub const MAX_DEPTH: usize = 256;
 /// Attributes per element.
 const MAX_ATTRS: usize = 256;
+/// Namespace declarations in scope at once (those of all the open elements together); more is an error. It bounds the memory
+/// of the bindings (256 open elements x 256 attributes would be 65k) and the worst lookup (see [`P::lookup`]).
+const MAX_NS_DECLS: usize = 1024;
+/// Buckets of the prefix table, and the end of a bucket's chain.
+const BUCKETS: usize = 256;
+const NIL: u32 = u32::MAX;
+
+/// A namespace declaration in scope; `prev` is the next older one whose prefix is in the same bucket.
+struct Decl {
+    prefix: String,
+    uri: String,
+    prev: u32,
+}
+
+fn bucket(prefix: &str) -> usize {
+    prefix.bytes().fold(0usize, |h, b| h.wrapping_mul(31).wrapping_add(usize::from(b))) % BUCKETS
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum XmlError {
@@ -36,8 +53,11 @@ struct P<'a> {
     s: &'a str,
     i: usize,
     doc: Document,
-    /// (prefix, namespace) declarations in scope, innermost last.
-    scopes: Vec<(String, String)>,
+    /// The declarations in scope, innermost last (the empty prefix is the default namespace). Closing an element pops its own.
+    decls: Vec<Decl>,
+    /// The newest declaration of each bucket of prefixes (an index into `decls`), `NIL` for none: a lookup walks one short chain
+    /// instead of every scope.
+    heads: [u32; BUCKETS],
     loose: bool,
 }
 
@@ -74,8 +94,36 @@ impl P<'_> {
         }
         Ok(n)
     }
+    /// What `prefix` is bound to: the newest declaration with that prefix, found along its bucket's chain (a few entries; at most
+    /// `MAX_NS_DECLS` if every prefix of the file lands in one bucket).
     fn lookup(&self, prefix: &str) -> Option<&str> {
-        self.scopes.iter().rev().find(|(p, _)| p == prefix).map(|(_, u)| u.as_str())
+        let mut i = self.heads.get(bucket(prefix)).copied()?;
+        while let Some(d) = self.decls.get(i as usize) {
+            if d.prefix == prefix {
+                return Some(&d.uri);
+            }
+            i = d.prev;
+        }
+        None
+    }
+    /// Bind `prefix` to `uri` until the element being opened is closed.
+    fn declare(&mut self, prefix: &str, uri: &str) -> Result<(), XmlError> {
+        if self.decls.len() >= MAX_NS_DECLS {
+            return Err(XmlError::TooLarge);
+        }
+        let head = self.heads.get_mut(bucket(prefix)).ok_or(XmlError::Syntax)?;
+        self.decls.push(Decl { prefix: prefix.to_string(), uri: uri.to_string(), prev: *head });
+        *head = (self.decls.len() - 1) as u32;
+        Ok(())
+    }
+    /// Close the scopes opened after the first `len` declarations: the newest declaration of a bucket is the head of its chain.
+    fn undeclare_to(&mut self, len: usize) {
+        while self.decls.len() > len {
+            let Some(d) = self.decls.pop() else { break };
+            if let Some(h) = self.heads.get_mut(bucket(&d.prefix)) {
+                *h = d.prev;
+            }
+        }
     }
 }
 
@@ -127,7 +175,7 @@ fn decode(raw: &str, attr: bool, loose: bool) -> Result<String, XmlError> {
 pub fn parse(bytes: &[u8]) -> Result<Document, XmlError> {
     let text = std::str::from_utf8(bytes).map_err(|_| XmlError::Syntax)?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let mut p = P { s: text, i: 0, doc: Document::new(Interner::new()), scopes: Vec::new(), loose: false };
+    let mut p = P { s: text, i: 0, doc: Document::new(Interner::new()), decls: Vec::new(), heads: [NIL; BUCKETS], loose: false };
     let mut stack: Vec<(NodeId, usize)> = Vec::new();
     let mut root = NONE;
     let mut pending = String::new();
@@ -167,6 +215,15 @@ pub fn parse(bytes: &[u8]) -> Result<Document, XmlError> {
             let (mut depth, mut quote) = (0i32, 0u8);
             let start = p.i;
             while p.i < p.s.len() {
+                // Comments and processing instructions of the internal subset: their quotes are text, not strings (XML 1.0 2.8).
+                if quote == 0 && depth > 0 && p.starts("<!--") {
+                    p.skip_past("-->")?;
+                    continue;
+                }
+                if quote == 0 && depth > 0 && p.starts("<?") {
+                    p.skip_past("?>")?;
+                    continue;
+                }
                 let c = p.at();
                 p.i += 1;
                 match (quote, c) {
@@ -207,7 +264,7 @@ pub fn parse(bytes: &[u8]) -> Result<Document, XmlError> {
             if local != open {
                 return Err(XmlError::Syntax);
             }
-            p.scopes.truncate(scope_len);
+            p.undeclare_to(scope_len);
             continue;
         }
         p.i += 1;
@@ -260,12 +317,12 @@ pub fn parse(bytes: &[u8]) -> Result<Document, XmlError> {
             }
             raw.push((an, value));
         }
-        let scope_len = p.scopes.len();
+        let scope_len = p.decls.len();
         for (n, v) in &raw {
             if n == "xmlns" {
-                p.scopes.push((String::new(), v.clone()));
+                p.declare("", v)?;
             } else if let Some(px) = n.strip_prefix("xmlns:") {
-                p.scopes.push((px.to_string(), v.clone()));
+                p.declare(px, v)?;
             }
         }
         let (prefix, local) = qname.split_once(':').unwrap_or(("", &qname));
@@ -310,7 +367,7 @@ pub fn parse(bytes: &[u8]) -> Result<Document, XmlError> {
             root = id;
         }
         if empty {
-            p.scopes.truncate(scope_len);
+            p.undeclare_to(scope_len);
         } else {
             if stack.len() >= MAX_DEPTH {
                 return Err(XmlError::TooLarge);
@@ -364,6 +421,60 @@ mod tests {
         let d = ok("<!DOCTYPE svg [ <!ENTITY e 'x<y'> ]><svg xmlns='&ns;'>&e;t</svg>");
         assert_eq!(d.text_content(d.document_element()), "t");
         assert!(parse(b"<!DOCTYPE svg><svg>&e;</svg>").is_err());
+    }
+
+    #[test]
+    fn doctype_comments_and_instructions_may_hold_quotes() {
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"/>";
+        for subset in ["<!-- don't -->", "<!-- \" ] > -->", "<?pi it's ?>", "<!ENTITY a \"<!-- x\"><!-- ' -->", "<!-- a --><!-- b'c -->"] {
+            let d = parse(format!("<!DOCTYPE svg [{subset}]>{svg}").as_bytes()).unwrap();
+            assert_eq!(d.local_name(d.document_element()), "svg", "{subset}");
+        }
+        // A comment that never ends is an error, not a swallowed document.
+        assert!(parse(format!("<!DOCTYPE svg [<!-- x ]>{svg}").as_bytes()).is_err());
+    }
+
+    #[test]
+    fn prefixes_follow_the_open_elements() {
+        // The inner element rebinds `p`; after it closes the outer binding is back (XML Names 6.1).
+        let svg = "<svg xmlns='http://www.w3.org/2000/svg' xmlns:p='http://www.w3.org/1999/xlink'>\
+                   <g xmlns:p='urn:other' p:href='1'/><g p:href='2'><g xmlns:p='urn:x'><rect p:href='3'/></g><use p:href='4'/></g>\
+                   <g xmlns='urn:none'><x/></g><rect/></svg>";
+        let d = ok(svg);
+        let mut seen = Vec::new();
+        let mut stack = vec![d.document_element()];
+        while let Some(n) = stack.pop() {
+            for a in d.element(n).unwrap().attrs.iter() {
+                seen.push((d.value(a).to_string(), a.ns));
+            }
+            let mut c = d.first_child(n);
+            let mut kids = Vec::new();
+            while c != NONE {
+                if d.element(c).is_some() {
+                    kids.push(c);
+                }
+                c = d.next_sibling(c);
+            }
+            stack.extend(kids.into_iter().rev());
+        }
+        let want = vec![("1".to_string(), Namespace::None), ("2".to_string(), Namespace::XLink), ("3".to_string(), Namespace::None), ("4".to_string(), Namespace::XLink)];
+        assert_eq!(seen, want);
+        // A prefix is unbound again after its element closes.
+        assert_eq!(parse(b"<svg xmlns='http://www.w3.org/2000/svg'><q:r xmlns:q='urn:q'/><q:r/></svg>").err(), Some(XmlError::Syntax));
+    }
+
+    #[test]
+    fn namespace_declarations_are_bounded_and_lookups_stay_cheap() {
+        // 256 open elements x 256 declarations used to make every lookup walk 65k bindings.
+        let decls: String = (0..250).map(|k| format!(" xmlns:p{k}='u{k}'")).collect();
+        let deep = format!("<svg xmlns='http://www.w3.org/2000/svg'>{}{}</svg>", format!("<g{decls} p0:a='1'>").repeat(255), "</g>".repeat(255));
+        let t = std::time::Instant::now();
+        assert_eq!(parse(deep.as_bytes()).err(), Some(XmlError::TooLarge));
+        // Under the limit, lots of lookups: 60 levels x 16 declarations, each element using three prefixes.
+        let few: String = (0..16).map(|k| format!(" xmlns:p{k}='u{k}'")).collect();
+        let ok_deep = format!("<svg xmlns='http://www.w3.org/2000/svg'>{}{}</svg>", format!("<g{few} p0:a='1' p15:b='2' p7:c='3'>").repeat(60), "</g>".repeat(60));
+        assert!(parse(ok_deep.as_bytes()).is_ok());
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
     }
 
     #[test]

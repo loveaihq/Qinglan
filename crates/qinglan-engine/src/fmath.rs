@@ -88,7 +88,8 @@ pub fn atan2(y: f32, x: f32) -> f32 {
 
 /// `clamp` without the panic message. `f32::clamp` and `f64::clamp` assert `min <= max` with a message that prints both
 /// bounds with `{:?}`, which pulls the whole float-to-text code (about 20 KB) into every program that clamps a float.
-/// The result is what `clamp` returns whenever `min <= max`; a reversed pair gives `max`.
+/// The result is what `clamp` returns whenever `min <= max`, except that a NaN gives `min` (`clamp` passes it through); a
+/// reversed pair gives `max`.
 pub trait Fclamp: Copy + PartialOrd {
     fn fclamp(self, min: Self, max: Self) -> Self;
 }
@@ -97,10 +98,11 @@ macro_rules! fclamp_impl {
     ($($t:ty),*) => {$(
         impl Fclamp for $t {
             #[inline]
-            #[allow(clippy::manual_clamp)]
+            #[allow(clippy::manual_clamp, clippy::neg_cmp_op_on_partial_ord)]
             fn fclamp(self, min: $t, max: $t) -> $t {
                 let mut v = self;
-                if v < min {
+                // `!(v >= min)`, not `v < min`: a NaN becomes `min` instead of going on to poison an offset or a size.
+                if !(v >= min) {
                     v = min;
                 }
                 if v > max {
@@ -210,9 +212,12 @@ mod tests {
 
     #[test]
     fn fclamp_is_clamp() {
-        for (v, lo, hi) in [(5.0f32, 0.0, 3.0), (-1.0, 0.0, 3.0), (2.0, 0.0, 3.0), (f32::NAN, 0.0, 1.0), (0.0, -0.0, 0.0)] {
+        for (v, lo, hi) in [(5.0f32, 0.0, 3.0), (-1.0, 0.0, 3.0), (2.0, 0.0, 3.0), (0.0, -0.0, 0.0)] {
             assert_eq!(v.fclamp(lo, hi).to_bits(), v.clamp(lo, hi).to_bits());
         }
+        // The one difference: a NaN is the lower bound.
+        assert_eq!(f32::NAN.fclamp(2.0, 3.0), 2.0);
+        assert_eq!(f64::NAN.fclamp(-1.0, 1.0), -1.0);
         assert_eq!(7i32.fclamp(1, 3), 3);
         assert_eq!(0usize.fclamp(1, 3), 1);
         assert_eq!(5.0f64.fclamp(2.0, 1.0), 1.0);

@@ -213,3 +213,37 @@ fn links_inside_an_inline_svg_are_found_by_their_box() {
     // The rect covers x 10..20 (scale 10) of the 40 x 20 box; the second svg (x 40..50) sits inside an HTML `a`.
     assert_eq!((href(15.0, 5.0), href(5.0, 5.0), href(30.0, 5.0), href(45.0, 15.0)), (Some("/x".to_string()), None, None, Some("/y".to_string())));
 }
+
+#[test]
+fn text_beyond_the_glyph_budget_is_not_drawn() {
+    // Three chunks of 90k characters in rows 0..10, 10..20, 20..30: the budget (200k) takes two and refuses the third whole, so
+    // its row is empty. Without a budget the 270k glyphs of the file took seconds.
+    let line = |y: u32, n: usize| format!("<text x='0' y='{y}' font-size='4'>{}</text>", "M".repeat(n));
+    let body = format!("width='100' height='36'>{}{}{}", line(8, 90_000), line(18, 90_000), line(28, 90_000));
+    let img = raster(&body, 100, 36);
+    assert!(img.text.is_some());
+    let done = svg::add_text(&img, &TestPlatform).unwrap();
+    let band = |y0: u32, y1: u32| (y0..y1).map(|y| (0..100).map(|x| u32::from(px(&done, x, y)[3])).sum::<u32>()).sum::<u32>();
+    assert!(band(0, 10) > 0 && band(10, 20) > 0, "{} {}", band(0, 10), band(10, 20));
+    assert_eq!(band(20, 36), 0);
+    // Two chunks of 90k fit, and so do many small ones that add up to less.
+    let small: String = (0..8).map(|i| line(4 + i * 4, 1000)).collect();
+    let img = raster(&format!("width='100' height='36'>{small}"), 100, 36);
+    let done = svg::add_text(&img, &TestPlatform).unwrap();
+    assert!((0..36).any(|y| px(&done, 3, y)[3] > 0));
+}
+
+#[test]
+fn a_big_inline_svg_bitmap_is_kept_for_the_next_frame() {
+    svg::clear_cache();
+    // 1000 x 1000 is 4 MB: over the small cache's 1.5 MB, inside the 8 MB slot of one big bitmap.
+    let f = page("<body style='margin:0'><svg width='1000' height='1000' style='display:block'><rect width='1000' height='1000' fill='#f00'/></svg>", 1000, 1000);
+    assert_eq!(f.pixel(500, 500), Some(RED));
+    assert_eq!(svg::cache_bytes(), 4_000_000);
+    svg::clear_cache();
+    assert_eq!(svg::cache_bytes(), 0);
+    // 1500 x 1500 is 9 MB: drawn, not kept.
+    let f = page("<body style='margin:0'><svg width='1500' height='1500' style='display:block'><rect width='1500' height='1500' fill='#f00'/></svg>", 1500, 1500);
+    assert_eq!(f.pixel(700, 700), Some(RED));
+    assert_eq!(svg::cache_bytes(), 0);
+}
